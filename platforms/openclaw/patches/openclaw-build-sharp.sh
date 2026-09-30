@@ -33,6 +33,14 @@ if [ ! -d "$OPENCLAW_DIR" ]; then
     exit 0
 fi
 
+# OpenClaw 2026.7+ does not depend on sharp (images go through photon). Running
+# `npm install` inside the global package would pull its devDependencies and
+# rewrite its package.json, so only continue when OpenClaw declares sharp.
+if ! node -e "const p=require('$OPENCLAW_DIR/package.json');process.exit({...p.dependencies,...p.optionalDependencies}.sharp?0:1)" 2>/dev/null; then
+    echo -e "${GREEN}[SKIP]${NC} OpenClaw does not use sharp — nothing to build"
+    exit 0
+fi
+
 # Skip rebuild if sharp is already working (e.g. WASM installed on prior run)
 if [ -d "$OPENCLAW_DIR/node_modules/sharp" ]; then
     if node -e "require('$OPENCLAW_DIR/node_modules/sharp')" 2>/dev/null; then

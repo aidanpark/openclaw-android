@@ -41,7 +41,8 @@ if [ -n "$STAGED_SH" ]; then
                 android/app/build/*) continue ;;
             esac
             if [ -f "$ROOT_DIR/$file" ]; then
-                if ! shellcheck "$ROOT_DIR/$file"; then
+                # severity=warning — verify 스킬·CI·PostToolUse 훅과 같은 기준(info/style 제외)
+                if ! shellcheck -S warning "$ROOT_DIR/$file"; then
                     FAILED=1
                 fi
             fi
@@ -92,23 +93,92 @@ if [ -n "$STAGED_TS" ]; then
     fi
 fi
 
-# --- Script sync check (post-setup.sh) ---
+# --- Script ↔ app asset sync check (pairs must be byte-identical) ---
 
-ROOT_POST_SETUP="$ROOT_DIR/post-setup.sh"
-APP_POST_SETUP="$ROOT_DIR/android/app/src/main/assets/post-setup.sh"
+STAGED_ALL=$(git diff --cached --name-only)
 
-STAGED_SYNC=$(git diff --cached --name-only | grep -E '(^post-setup\.sh$|android/app/src/main/assets/post-setup\.sh)' || true)
-
-if [ -n "$STAGED_SYNC" ]; then
-    if [ -f "$ROOT_POST_SETUP" ] && [ -f "$APP_POST_SETUP" ]; then
-        if ! diff -q "$ROOT_POST_SETUP" "$APP_POST_SETUP" >/dev/null 2>&1; then
+for pair in \
+    "post-setup.sh:android/app/src/main/assets/post-setup.sh" \
+    "patches/glibc-compat.js:android/app/src/main/assets/glibc-compat.js"; do
+    SRC="${pair%%:*}"
+    DST="${pair##*:}"
+    if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$SRC" -e "$DST"; then
+        # 스테이징된 내용(index blob)끼리 비교한다 — 부분 스테이징도 잡는다
+        SRC_BLOB=$(git rev-parse -q --verify ":$SRC" 2>/dev/null || true)
+        DST_BLOB=$(git rev-parse -q --verify ":$DST" 2>/dev/null || true)
+        if [ -n "$SRC_BLOB" ] && [ -n "$DST_BLOB" ] && [ "$SRC_BLOB" != "$DST_BLOB" ]; then
             echo ""
-            echo "ERROR: post-setup.sh sync mismatch!"
-            echo "  Root:  post-setup.sh"
-            echo "  App:   android/app/src/main/assets/post-setup.sh"
+            echo "ERROR: sync mismatch!"
+            echo "  Source: $SRC"
+            echo "  App:    $DST"
             echo ""
             echo "Both files must have identical content."
             echo "Copy one to the other and stage both before committing."
+            exit 1
+        fi
+    fi
+done
+
+# --- OA_VERSION sync check (4 files) ---
+
+VERSION_FILES="scripts/lib.sh install-tools.sh update-core.sh oa.sh"
+if printf '%s\n' "$STAGED_ALL" | grep -qxE 'scripts/lib\.sh|install-tools\.sh|update-core\.sh|oa\.sh'; then
+    FIRST_VER=""
+    for f in $VERSION_FILES; do
+        VER=$(git show ":$f" 2>/dev/null | grep -m1 'OA_VERSION="[^"]*"' | sed -E 's/.*OA_VERSION="([^"]*)".*/\1/')
+        [ -n "$VER" ] || continue
+        if [ -z "$FIRST_VER" ]; then
+            FIRST_VER="$VER"
+        elif [ "$VER" != "$FIRST_VER" ]; then
+            echo ""
+            echo "ERROR: OA_VERSION mismatch ($f: $VER vs $FIRST_VER)."
+            echo "  Sync OA_VERSION in: $VERSION_FILES"
+            exit 1
+        fi
+    done
+fi
+
+# --- Version pin pair: config.env (SSOT) == post-setup.sh embedded pins ---
+# post-setup.sh does not read the remote config.env, so its embedded pins must match.
+
+PIN_SSOT="platforms/openclaw/config.env"
+PIN_COPY="post-setup.sh"
+if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$PIN_SSOT" -e "$PIN_COPY"; then
+    for key in PLATFORM_NODE_VERSION PLATFORM_NPM_PACKAGE_VERSION; do
+        # Skip while the SSOT has no pin block yet (pin pair introduced in M0).
+        git show ":$PIN_SSOT" 2>/dev/null | grep -q "^$key=" || continue
+        SSOT_VAL=$(git show ":$PIN_SSOT" 2>/dev/null | grep -m1 "^$key=" | cut -d'"' -f2)
+        COPY_VAL=$(git show ":$PIN_COPY" 2>/dev/null | grep -m1 "^$key=" | cut -d'"' -f2)
+        if ! printf '%s' "$SSOT_VAL" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || [ "$SSOT_VAL" != "$COPY_VAL" ]; then
+            echo ""
+            echo "ERROR: version pin mismatch for $key"
+            echo "  $PIN_SSOT: ${SSOT_VAL:-<missing>}"
+            echo "  $PIN_COPY: ${COPY_VAL:-<missing>}"
+            echo "  Both must be the same literal X.Y.Z (line-start, double quotes)."
+            exit 1
+        fi
+    done
+fi
+
+# --- openclaw update guard: shim generator == copy embedded in post-setup.sh ---
+
+SHIM_SRC="platforms/openclaw/openclaw-shim.sh"
+if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$SHIM_SRC" -e "$PIN_COPY"; then
+    EMBEDDED=$(git show ":$PIN_COPY" 2>/dev/null \
+        | awk "/<< 'OPENCLAW_SHIM_SH'/{f=1;next} /^OPENCLAW_SHIM_SH\$/{f=0} f")
+    if [ -n "$EMBEDDED" ] && ! git cat-file -e ":$SHIM_SRC" 2>/dev/null; then
+        # install.sh / update.sh run the generator under set -e — missing file = broken update
+        echo ""
+        echo "ERROR: $PIN_COPY embeds the openclaw guard but $SHIM_SRC is not in the commit."
+        echo "  git add $SHIM_SRC (mode 100755)"
+        exit 1
+    fi
+    if git cat-file -e ":$SHIM_SRC" 2>/dev/null; then
+        if [ "$EMBEDDED" != "$(git show ":$SHIM_SRC" 2>/dev/null)" ]; then
+            echo ""
+            echo "ERROR: openclaw guard mismatch"
+            echo "  $SHIM_SRC and the OPENCLAW_SHIM_SH heredoc in $PIN_COPY must be identical."
             exit 1
         fi
     fi

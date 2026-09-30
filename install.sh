@@ -59,7 +59,7 @@ bash "$SCRIPT_DIR/scripts/setup-paths.sh"
 
 step 5 "Platform Runtime Dependencies (L2)"
 if [ "${PLATFORM_NEEDS_GLIBC:-false}" = true ]; then bash "$SCRIPT_DIR/scripts/install-glibc.sh"; fi
-if [ "${PLATFORM_NEEDS_NODEJS:-false}" = true ]; then bash "$SCRIPT_DIR/scripts/install-nodejs.sh"; fi
+if [ "${PLATFORM_NEEDS_NODEJS:-false}" = true ]; then bash "$SCRIPT_DIR/scripts/install-nodejs.sh" "${PLATFORM_NODE_VERSION:-}"; fi
 if [ "${PLATFORM_NEEDS_BUILD_TOOLS:-false}" = true ]; then bash "$SCRIPT_DIR/scripts/install-build-tools.sh"; fi
 if [ "${PLATFORM_NEEDS_PROOT:-false}" = true ]; then pkg install -y proot; fi
 
@@ -109,29 +109,61 @@ rm -rf "$PROJECT_DIR/platforms/$SELECTED_PLATFORM"
 cp -R "$SCRIPT_DIR/platforms/$SELECTED_PLATFORM" "$PROJECT_DIR/platforms/$SELECTED_PLATFORM"
 
 step 7 "Install Optional Tools (L3)"
-if [ "$INSTALL_TMUX" = true ]; then pkg install -y tmux; fi
-if [ "$INSTALL_TTYD" = true ]; then pkg install -y ttyd; fi
-if [ "$INSTALL_DUFS" = true ]; then pkg install -y dufs; fi
-if [ "$INSTALL_ANDROID_TOOLS" = true ]; then pkg install -y android-tools; fi
+# Optional tools: a failure is reported and skipped, never aborts the install.
+for _tool in tmux ttyd dufs android-tools; do
+    _var="INSTALL_$(echo "$_tool" | tr 'a-z-' 'A-Z_')"
+    if [ "${!_var:-false}" = true ]; then
+        pkg install -y "$_tool" || echo -e "${YELLOW}[WARN]${NC} $_tool installation failed (non-critical) — skipped"
+    fi
+done
 
-if [ "$INSTALL_CHROMIUM" = true ]; then bash "$SCRIPT_DIR/scripts/install-chromium.sh" install; fi
+if [ "$INSTALL_CHROMIUM" = true ]; then
+    bash "$SCRIPT_DIR/scripts/install-chromium.sh" install || echo -e "${YELLOW}[WARN]${NC} Chromium installation failed (non-critical) — skipped"
+fi
 
-if [ "$INSTALL_CODE_SERVER" = true ]; then mkdir -p "$PROJECT_DIR/patches" && cp "$SCRIPT_DIR/patches/argon2-stub.js" "$PROJECT_DIR/patches/argon2-stub.js" && bash "$SCRIPT_DIR/scripts/install-code-server.sh" install; fi
+if [ "$INSTALL_CODE_SERVER" = true ]; then
+    { mkdir -p "$PROJECT_DIR/patches" && cp "$SCRIPT_DIR/patches/argon2-stub.js" "$PROJECT_DIR/patches/argon2-stub.js" && bash "$SCRIPT_DIR/scripts/install-code-server.sh" install; } \
+        || echo -e "${YELLOW}[WARN]${NC} code-server installation failed (non-critical) — skipped"
+fi
 
-if [ "$INSTALL_OPENCODE" = true ]; then bash "$SCRIPT_DIR/scripts/install-opencode.sh" install; fi
+if [ "$INSTALL_OPENCODE" = true ]; then
+    bash "$SCRIPT_DIR/scripts/install-opencode.sh" install || echo -e "${YELLOW}[WARN]${NC} OpenCode installation failed (non-critical) — skipped"
+fi
 
-if [ "$INSTALL_CLAUDE_CODE" = true ]; then npm install -g @anthropic-ai/claude-code; fi
-if [ "$INSTALL_GEMINI_CLI" = true ]; then npm install -g @google/gemini-cli; fi
+# Optional npm tools: a failure is reported and skipped, never aborts the install.
+if [ "$INSTALL_CLAUDE_CODE" = true ]; then
+    if npm install -g @anthropic-ai/claude-code; then
+        if timeout 30 claude --version >/dev/null 2>&1; then
+            echo -e "${GREEN}[OK]${NC}   Claude Code installed"
+        else
+            echo -e "${YELLOW}[WARN]${NC} Claude Code installed, but its native binary does not run on this setup yet (support is planned)"
+        fi
+    else
+        echo -e "${YELLOW}[WARN]${NC} Claude Code installation failed (non-critical) — skipped"
+    fi
+fi
+if [ "$INSTALL_GEMINI_CLI" = true ]; then
+    if npm install -g @google/gemini-cli; then
+        echo -e "${GREEN}[OK]${NC}   Gemini CLI installed"
+    else
+        echo -e "${YELLOW}[WARN]${NC} Gemini CLI installation failed (non-critical) — skipped"
+    fi
+fi
 if [ "$INSTALL_CODEX_CLI" = true ]; then
-    npm install -g @mmmbuto/codex-cli-termux
-    # Create codex CLI wrapper (DioNanos fork launcher fix)
-    _codex_bin="$PREFIX/bin/codex"
-    _codex_pkg="$PREFIX/lib/node_modules/@mmmbuto/codex-cli-termux/bin"
-    if [ -f "$_codex_pkg/codex.bin" ]; then
-        [ -L "$_codex_bin" ] && rm -f "$_codex_bin"
-        printf '#!%s/bin/bash\nPKG_BIN="%s"\nexport LD_LIBRARY_PATH="$PKG_BIN:${LD_LIBRARY_PATH:-}"\nexec "$PKG_BIN/codex.bin" "$@"\n' \
-            "$PREFIX" "$_codex_pkg" > "$_codex_bin"
-        chmod +x "$_codex_bin"
+    if npm install -g @mmmbuto/codex-cli-termux; then
+        # Create codex CLI wrapper (DioNanos fork launcher fix)
+        _codex_bin="$PREFIX/bin/codex"
+        _codex_pkg="$PREFIX/lib/node_modules/@mmmbuto/codex-cli-termux/bin"
+        if [ -f "$_codex_pkg/codex.bin" ]; then
+            [ -L "$_codex_bin" ] && rm -f "$_codex_bin"
+            printf '#!%s/bin/bash\nPKG_BIN="%s"\nexport LD_LIBRARY_PATH="$PKG_BIN:${LD_LIBRARY_PATH:-}"\nexec "$PKG_BIN/codex.bin" "$@"\n' \
+                "$PREFIX" "$_codex_pkg" > "$_codex_bin"
+            chmod +x "$_codex_bin"
+        fi
+        echo -e "${GREEN}[OK]${NC}   Codex CLI (Termux) installed"
+    else
+        echo -e "${YELLOW}[WARN]${NC} Codex CLI (Termux) installation failed (non-critical) — skipped"
+        echo "       The package targets Termux's Android Node.js; support for this setup is planned."
     fi
 fi
 

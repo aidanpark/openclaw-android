@@ -9,6 +9,15 @@ echo ""
 
 export CPATH="$PREFIX/include/glib-2.0:$PREFIX/lib/glib-2.0/include"
 
+# Version pin (SSOT: config.env). This script runs as a child process, so it
+# loads the pin itself instead of relying on the parent installer's variables.
+load_platform_config openclaw "$SCRIPT_DIR/../.."
+if ! [[ "${PLATFORM_NPM_PACKAGE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo -e "${RED}[FAIL]${NC} Invalid OpenClaw version pin in config.env: '${PLATFORM_NPM_PACKAGE_VERSION:-}'"
+    exit 1
+fi
+OC_PIN="$PLATFORM_NPM_PACKAGE@$PLATFORM_NPM_PACKAGE_VERSION"
+
 python -c "import yaml" 2>/dev/null || pip install pyyaml -q || true
 
 mkdir -p "$PROJECT_DIR/patches"
@@ -28,23 +37,32 @@ if npm list -g openclaw &>/dev/null 2>&1 || [ -d "$PREFIX/lib/node_modules/openc
     echo -e "${GREEN}[OK]${NC}   Previous installation cleaned"
 fi
 
-echo "Running: npm install -g openclaw@latest --ignore-scripts"
+# A leftover version guard (a plain file, not an npm link) makes npm fail with EEXIST
+if [ -e "$PREFIX/bin/openclaw" ] && [ ! -L "$PREFIX/bin/openclaw" ]; then
+    rm -f "$PREFIX/bin/openclaw"
+fi
+
+echo "Running: npm install -g $OC_PIN --ignore-scripts"
 echo "This may take several minutes..."
 echo ""
-npm install -g openclaw@latest --ignore-scripts
+npm install -g "$OC_PIN" --ignore-scripts
 
 echo ""
 echo -e "${GREEN}[OK]${NC}   OpenClaw installed"
 
-# Restore optional/channel deps that --ignore-scripts skips.
-# Uses npm_config_ignore_scripts=true so sharp's native build doesn't block.
+# Run the package postinstall that --ignore-scripts skipped (prunes stale dist
+# files, applies bundled hotfixes). npm_config_ignore_scripts=true keeps any
+# nested npm call from running native builds that fail on Termux.
 OPENCLAW_DIR="$(npm root -g)/openclaw"
 if [ -d "$OPENCLAW_DIR" ]; then
-    echo "Restoring optional dependencies..."
+    echo "Running OpenClaw postinstall..."
     (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
 fi
 
 bash "$SCRIPT_DIR/patches/openclaw-apply-patches.sh"
+
+# Block `openclaw update` so the pin holds (npm just rewrote $PREFIX/bin/openclaw)
+bash "$SCRIPT_DIR/openclaw-shim.sh"
 
 echo ""
 echo "Installing clawdhub (skill manager)..."
@@ -65,9 +83,3 @@ else
 fi
 
 mkdir -p "$HOME/.openclaw"
-
-echo ""
-echo "Running: openclaw update"
-echo "  (This includes building native modules and may take 5-10 minutes)"
-echo ""
-openclaw update || true

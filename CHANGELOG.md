@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.1.0] - 2026-09-30
+
+### Fixed
+
+- Fix OpenClaw failing to start after a fresh install or `oa --update` since July 2026 — the installer always installed `openclaw@latest`, but OpenClaw 2026.7.1+ needs a newer Node.js than the one we installed (22.22.0), and 2026.9.x needs Node.js 24, so the gateway exited at startup. Installs and updates now use a verified version pair (OpenClaw 2026.7.35 + Node.js 22.23.3). If a newer OpenClaw was installed, `oa --update` moves it back to the pinned version; your settings and conversations are kept.
+- Fix App Install failing at the glibc step with a 404 — the pacman package file name (`glibc-2.42-0`) was hard-coded and has been removed from the repository. The installer now reads the current file names from the repository database, verifies sha256, and falls back across mirrors ([#143](https://github.com/AidanPark/openclaw-android/issues/143), [#121](https://github.com/AidanPark/openclaw-android/issues/121), [#132](https://github.com/AidanPark/openclaw-android/issues/132))
+- Fix README Step 3 breaking curl on a fresh Termux — installing curl without a full upgrade pulled a libcurl that needs a newer OpenSSL. Step 3 now runs `pkg upgrade` first; Troubleshooting covers recovery.
+- Fix the installer aborting when an optional tool fails to install (e.g. Codex CLI `EBADPLATFORM`) — the tool is now skipped with a warning and installation continues.
+- Fix code-server failing to start on glibc installs (it linked to a Node.js path that does not exist), and pin code-server to 4.117.0 (newer versions require Node.js 24).
+- Fix App Install stopping right before `openclaw onboard` when sourcing `~/.bashrc` returned a non-zero status.
+- Fix `oa --update` re-running "Restoring optional dependencies" on every update (stale dependency check).
+- Fix install verification reporting success for an OpenClaw that cannot start — it now checks the pinned OpenClaw and Node.js versions.
+
+### Changed
+
+- OpenClaw and Node.js versions are pinned as a pair in `platforms/openclaw/config.env`; all install paths use it.
+- Node.js install/upgrade now verifies sha256 against the same source's `SHASUMS256.txt` and swaps the installation atomically, restoring the previous version on failure. `oa --update` stops before touching OpenClaw if Node.js is not at the pinned version.
+- `openclaw update` is blocked (use `oa --update`); `openclaw update status` still works. The gateway auto-updater is disabled (`OPENCLAW_NO_AUTO_UPDATE=1`).
+- The installer no longer runs `openclaw update` after installing, and updates no longer install libvips or rebuild sharp (not needed for OpenClaw 2026.7.35).
+- `oa --update` now always shows where the log was saved and cleans up its temporary files, also when the update fails.
+- Updates keep code-server at the pinned 4.117.0 — a newer version installed earlier is moved back.
+
+### Known limitations
+
+- `oa --backup` does not include conversation history yet — a fix is planned.
+- Claude Code installs but may not run on this setup yet. Codex CLI is tried and skipped with a warning if it cannot be installed.
+
 ## [Script v1.0.27] - 2026-04-13
 
 ### Fixed

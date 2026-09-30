@@ -26,11 +26,25 @@ check_warn() {
 echo "=== OpenClaw on Android - Installation Verification ==="
 echo ""
 
+PLATFORM=$(detect_platform) || true
+
+# Pinned Node.js version from the platform config.env (SSOT)
+PIN_NODE_VER=""
+if [ -n "$PLATFORM" ] && load_platform_config "$PLATFORM" "$SCRIPT_DIR/.." >/dev/null 2>&1; then
+    PIN_NODE_VER="${PLATFORM_NODE_VERSION:-}"
+fi
+
 if command -v node &>/dev/null; then
     NODE_VER=$(node -v)
     NODE_MAJOR="${NODE_VER%%.*}"
     NODE_MAJOR="${NODE_MAJOR#v}"
-    if [ "$NODE_MAJOR" -ge 22 ] 2>/dev/null; then
+    if [ -n "$PIN_NODE_VER" ]; then
+        if [ "$NODE_VER" = "v$PIN_NODE_VER" ]; then
+            check_pass "Node.js $NODE_VER (pinned)"
+        else
+            check_fail "Node.js $NODE_VER (pinned: v$PIN_NODE_VER)"
+        fi
+    elif [ "$NODE_MAJOR" -ge 22 ] 2>/dev/null; then
         check_pass "Node.js $NODE_VER (>= 22)"
     else
         check_fail "Node.js $NODE_VER (need >= 22)"
@@ -116,7 +130,6 @@ else
     check_fail ".bashrc missing environment block"
 fi
 
-PLATFORM=$(detect_platform) || true
 PLATFORM_VERIFY="$PROJECT_DIR/platforms/$PLATFORM/verify.sh"
 if [ -n "$PLATFORM" ] && [ -f "$PLATFORM_VERIFY" ]; then
     if bash "$PLATFORM_VERIFY"; then

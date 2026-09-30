@@ -11,7 +11,7 @@ if [ -f "$HOME/.openclaw-android/scripts/lib.sh" ]; then
         source "$HOME/.openclaw-android/scripts/backup.sh"
     fi
 else
-    OA_VERSION="1.0.27"
+    OA_VERSION="1.1.0"
     RED='\033[0;31m'
     GREEN='\033[0;32m'
     YELLOW='\033[1;33m'
@@ -101,12 +101,15 @@ cmd_update() {
         exit 1
     fi
 
-    bash "$TMPFILE" 2>&1 | tee "$LOGFILE"
+    # Keep the updater's exit code (pipefail) so callers see a failed update,
+    # and still clean up and show where the log is.
+    local rc=0
+    bash "$TMPFILE" 2>&1 | tee "$LOGFILE" || rc=$?
     rm -f "$TMPFILE"
 
     echo ""
     echo -e "${YELLOW}Log saved to $LOGFILE${NC}"
-    exit 0
+    exit "$rc"
 }
 
 cmd_uninstall() {

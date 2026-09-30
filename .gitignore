@@ -48,3 +48,6 @@ Thumbs.db
 *.env
 *.keystore
 *.jks
+
+# Local-only agent files — never commit
+.agent/local/

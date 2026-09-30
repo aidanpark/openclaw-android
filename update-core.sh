@@ -9,7 +9,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.0.27"
+OA_VERSION="1.1.0"
 
 echo ""
 echo -e "${BOLD}========================================${NC}"
@@ -118,8 +118,10 @@ fi
 REQUIRED_FILES=(
     "scripts/lib.sh"
     "scripts/setup-env.sh"
+    "scripts/install-nodejs.sh"
     "platforms/$PLATFORM/config.env"
     "platforms/$PLATFORM/update.sh"
+    "platforms/$PLATFORM/openclaw-shim.sh"
 )
 for f in "${REQUIRED_FILES[@]}"; do
     if [ ! -f "$RELEASE_TMP/$f" ]; then
@@ -131,6 +133,16 @@ done
 echo -e "${GREEN}[OK]${NC}   All required files verified"
 
 source "$RELEASE_TMP/scripts/lib.sh"
+
+# Version pin (PLATFORM_NODE_VERSION etc.) comes from the downloaded config.env
+if ! load_platform_config "$PLATFORM" "$RELEASE_TMP"; then
+    exit 1
+fi
+if [ -z "${PLATFORM_NODE_VERSION:-}" ]; then
+    echo -e "${RED}[FAIL]${NC} Version pin missing in platforms/$PLATFORM/config.env"
+    echo "       The downloaded release may be incomplete. Run 'oa --update' again."
+    exit 1
+fi
 
 step 3 "Update Core Infrastructure"
 
@@ -186,7 +198,7 @@ if [ "$IS_GLIBC" = false ]; then
     echo ""
     echo -e "${BOLD}[MIGRATE] Bionic -> glibc Architecture${NC}"
     echo "----------------------------------------"
-    if bash "$RELEASE_TMP/scripts/install-glibc.sh" && bash "$RELEASE_TMP/scripts/install-nodejs.sh"; then
+    if bash "$RELEASE_TMP/scripts/install-glibc.sh" && bash "$RELEASE_TMP/scripts/install-nodejs.sh" "$PLATFORM_NODE_VERSION"; then
         IS_GLIBC=true
         echo -e "${GREEN}[OK]${NC}   glibc migration complete"
     else
@@ -194,9 +206,9 @@ if [ "$IS_GLIBC" = false ]; then
     fi
 fi
 
-# Update Node.js if a newer version is available
+# Converge Node.js to the pinned version (checked by the Node gate before step 4)
 if [ "$IS_GLIBC" = true ]; then
-    bash "$RELEASE_TMP/scripts/install-nodejs.sh" || true
+    bash "$RELEASE_TMP/scripts/install-nodejs.sh" "$PLATFORM_NODE_VERSION" || true
 fi
 
 bash "$RELEASE_TMP/scripts/setup-env.sh"
@@ -208,7 +220,7 @@ if [ "$IS_GLIBC" = true ]; then
     if [ ! -d "$GLIBC_BIN_DIR" ] || [ ! -x "$GLIBC_BIN_DIR/node" ]; then
         echo ""
         echo -e "${BOLD}[MIGRATE] Moving wrappers to $GLIBC_BIN_DIR${NC}"
-        bash "$RELEASE_TMP/scripts/install-nodejs.sh" || true
+        bash "$RELEASE_TMP/scripts/install-nodejs.sh" "$PLATFORM_NODE_VERSION" || true
         echo -e "${GREEN}[OK]${NC}   Wrapper migration complete"
     fi
     export PATH="$GLIBC_BIN_DIR:$GLIBC_NODE_DIR/bin:$HOME/.local/bin:$PATH"
@@ -222,6 +234,24 @@ PLATFORM_ENV_SCRIPT="$RELEASE_TMP/platforms/$PLATFORM/env.sh"
 if [ -f "$PLATFORM_ENV_SCRIPT" ]; then
     eval "$(bash "$PLATFORM_ENV_SCRIPT")"
 fi
+
+# Node gate: the pinned platform version is only verified with the pinned
+# Node.js. If Node.js did not converge, stop here and leave the platform as is
+# (installing the pinned platform on another Node.js could break a working setup).
+CURRENT_NODE_VER=$(node --version 2>/dev/null || echo "")
+if [ "$CURRENT_NODE_VER" != "v$PLATFORM_NODE_VERSION" ]; then
+    echo ""
+    echo -e "${RED}[FAIL]${NC} Node.js v${PLATFORM_NODE_VERSION} is required (found: ${CURRENT_NODE_VER:-none}) — update stopped before $PLATFORM."
+    echo "       $PLATFORM itself was not changed."
+    if [ "$IS_GLIBC" = false ]; then
+        echo "       The glibc migration did not complete — see the messages above."
+    else
+        echo "       See the Node.js messages above for the cause (network, checksum, disk space)."
+    fi
+    echo "       Then run 'oa --update' again."
+    exit 1
+fi
+echo -e "${GREEN}[OK]${NC}   Node.js $CURRENT_NODE_VER (pinned)"
 
 step 4 "Update Platform"
 

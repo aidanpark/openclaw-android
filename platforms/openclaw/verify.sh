@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib.sh"
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$BASE_DIR/scripts/lib.sh"
 
 PASS=0
 FAIL=0
@@ -34,6 +35,31 @@ if command -v openclaw &>/dev/null; then
     fi
 else
     check_fail "openclaw command not found"
+fi
+
+# `openclaw --version` alone is not enough: an unsupported release can still
+# print its version and then fail to start the gateway. Compare against the pin.
+PIN_VER=""
+if load_platform_config openclaw "$BASE_DIR" >/dev/null; then
+    PIN_VER="${PLATFORM_NPM_PACKAGE_VERSION:-}"
+fi
+INSTALLED_VER=""
+OPENCLAW_PKG="$(npm root -g 2>/dev/null)/openclaw/package.json"
+if [ -f "$OPENCLAW_PKG" ]; then
+    INSTALLED_VER=$(node -p "require('$OPENCLAW_PKG').version" 2>/dev/null || echo "")
+fi
+if [ -z "$PIN_VER" ]; then
+    check_warn "OpenClaw version pin not found in config.env — skipping pin check"
+elif [ "$INSTALLED_VER" = "$PIN_VER" ]; then
+    check_pass "openclaw package $INSTALLED_VER matches the pinned version"
+else
+    check_fail "openclaw package ${INSTALLED_VER:-not found} does not match the pinned version $PIN_VER (run: oa --update)"
+fi
+
+if grep -q "version-pin guard" "$PREFIX/bin/openclaw" 2>/dev/null; then
+    check_pass "openclaw update guard installed"
+else
+    check_warn "openclaw update guard missing — 'openclaw update' can leave the pinned version (run: oa --update)"
 fi
 
 if [ "${CONTAINER:-}" = "1" ]; then

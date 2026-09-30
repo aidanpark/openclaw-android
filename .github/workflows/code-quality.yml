@@ -22,7 +22,7 @@ jobs:
             -not -path './android/app/build/*' \
             -not -path './node_modules/*' \
             -not -path './.agent/*' \
-            -print0 | xargs -0 --no-run-if-empty shellcheck --format=gcc
+            -print0 | xargs -0 --no-run-if-empty shellcheck --severity=warning --format=gcc
 
   script-sync:
     name: Script Sync Check

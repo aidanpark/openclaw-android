@@ -9,54 +9,81 @@ export CPATH="$PREFIX/include/glib-2.0:$PREFIX/lib/glib-2.0/include"
 echo "=== Updating OpenClaw Platform ==="
 echo ""
 
-pkg install -y libvips binutils 2>/dev/null || true
+pkg install -y binutils 2>/dev/null || true
 if [ ! -e "$PREFIX/bin/ar" ] && [ -x "$PREFIX/bin/llvm-ar" ]; then
     ln -s "$PREFIX/bin/llvm-ar" "$PREFIX/bin/ar"
 fi
 
-CURRENT_VER=$(npm list -g openclaw 2>/dev/null | grep 'openclaw@' | sed 's/.*openclaw@//' | tr -d '[:space:]')
-LATEST_VER=$(npm view openclaw version 2>/dev/null || echo "")
+# Version pin (SSOT: config.env). This script runs as a child process of
+# update-core.sh, so it loads the pin itself.
+load_platform_config openclaw "$SCRIPT_DIR/../.."
+if ! [[ "${PLATFORM_NPM_PACKAGE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo -e "${RED}[FAIL]${NC} Invalid OpenClaw version pin in config.env: '${PLATFORM_NPM_PACKAGE_VERSION:-}'"
+    exit 1
+fi
+PIN_VER="$PLATFORM_NPM_PACKAGE_VERSION"
+
+# Node gate (defense in depth): update-core.sh stops before this step when Node
+# is not pinned, but a cached older update-core.sh without that gate can run
+# this newer script. Never install the pinned OpenClaw on the wrong Node.
+NODE_FOUND="$(node --version 2>/dev/null || echo none)"
+if [ "$NODE_FOUND" != "v${PLATFORM_NODE_VERSION:-}" ]; then
+    echo -e "${RED}[FAIL]${NC} Node.js v${PLATFORM_NODE_VERSION:-?} is required (found: $NODE_FOUND) — OpenClaw was not changed"
+    echo "       Run 'oa --update' again."
+    exit 1
+fi
+OPENCLAW_DIR="$(npm root -g)/openclaw"
+
+# Converge to the pinned version: install it whenever the installed version
+# differs, in either direction. Read package.json rather than running
+# `openclaw --version`, which exits early when the installed release needs a
+# newer Node.js than ours.
+CURRENT_VER=""
+if [ -f "$OPENCLAW_DIR/package.json" ]; then
+    CURRENT_VER=$(node -p "require('$OPENCLAW_DIR/package.json').version" 2>/dev/null || echo "")
+fi
 OPENCLAW_UPDATED=false
 
-if [ -n "$CURRENT_VER" ] && [ -n "$LATEST_VER" ] && [ "$CURRENT_VER" = "$LATEST_VER" ]; then
-    echo -e "${GREEN}[OK]${NC}   openclaw $CURRENT_VER is already the latest"
+if [ "$CURRENT_VER" = "$PIN_VER" ]; then
+    echo -e "${GREEN}[OK]${NC}   openclaw $CURRENT_VER matches the pinned version"
 else
-    echo "Updating openclaw npm package... ($CURRENT_VER → $LATEST_VER)"
+    echo "Installing pinned openclaw... (${CURRENT_VER:-none} → $PIN_VER)"
     echo "  (This may take several minutes depending on network speed)"
-    if npm install -g openclaw@latest --no-fund --no-audit --ignore-scripts; then
-        echo -e "${GREEN}[OK]${NC}   openclaw $LATEST_VER updated"
+    # A leftover version guard with no package behind it (a plain file, not an
+    # npm link) makes npm fail with EEXIST. When the package exists npm replaces
+    # the bin itself, so leave the guard alone.
+    if [ ! -f "$OPENCLAW_DIR/package.json" ] && [ -e "$PREFIX/bin/openclaw" ] && [ ! -L "$PREFIX/bin/openclaw" ]; then
+        rm -f "$PREFIX/bin/openclaw"
+    fi
+    if npm install -g "$PLATFORM_NPM_PACKAGE@$PIN_VER" --no-fund --no-audit --ignore-scripts; then
+        echo -e "${GREEN}[OK]${NC}   openclaw $PIN_VER installed"
         OPENCLAW_UPDATED=true
     else
-        echo -e "${YELLOW}[WARN]${NC} Package update failed (non-critical)"
-        echo "       Retry manually: npm install -g openclaw@latest"
+        # Keep the existing install usable and guarded if npm left it in place
+        bash "$SCRIPT_DIR/openclaw-shim.sh" || true
+        echo -e "${RED}[FAIL]${NC} Could not install openclaw $PIN_VER"
+        echo "       Check your network and run: oa --update"
+        exit 1
     fi
 fi
 
-# Reinstall dependencies without --ignore-scripts to restore optional/channel
-# deps (e.g. @buape/carbon, grammy) that were skipped above.
-# Native build failures (sharp, node-gyp) are non-fatal here (|| true).
-# Restore optional/channel deps that --ignore-scripts skips.
-# Uses npm_config_ignore_scripts=true so that the internal npm install
-# doesn't trigger sharp's native build (which fails on Termux).
-# The postinstall-bundled-plugins.mjs installs pure JS channel deps only.
-OPENCLAW_DIR="$(npm root -g)/openclaw"
-if [ -d "$OPENCLAW_DIR" ]; then
-    if ! node -e "require('$OPENCLAW_DIR/node_modules/@buape/carbon')" 2>/dev/null; then
-        echo "Restoring optional dependencies..."
-        (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
-    fi
+# Run the package postinstall that --ignore-scripts skipped (prunes stale dist
+# files, applies bundled hotfixes) — only needed after a fresh package install.
+# npm_config_ignore_scripts=true keeps any nested npm call from running native
+# builds that fail on Termux.
+if [ "$OPENCLAW_UPDATED" = true ] && [ -d "$OPENCLAW_DIR" ]; then
+    echo "Running OpenClaw postinstall..."
+    (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
 fi
 
 bash "$SCRIPT_DIR/patches/openclaw-apply-patches.sh"
 
-if [ "$OPENCLAW_UPDATED" = true ]; then
-    bash "$SCRIPT_DIR/patches/openclaw-build-sharp.sh" || true
-else
-    echo -e "${GREEN}[SKIP]${NC} openclaw $CURRENT_VER unchanged \u2014 sharp rebuild not needed"
-fi
+# Always re-check the `openclaw update` guard — a manual `npm install -g openclaw`
+# or the app's platform installer replaces $PREFIX/bin/openclaw.
+bash "$SCRIPT_DIR/openclaw-shim.sh"
 
 if command -v clawdhub &>/dev/null; then
-    CLAWDHUB_CURRENT_VER=$(npm list -g clawdhub 2>/dev/null | grep 'clawdhub@' | sed 's/.*clawdhub@//' | tr -d '[:space:]')
+    CLAWDHUB_CURRENT_VER=$(npm list -g clawdhub 2>/dev/null | grep 'clawdhub@' | sed 's/.*clawdhub@//' | tr -d '[:space:]' || true)
     CLAWDHUB_LATEST_VER=$(npm view clawdhub version 2>/dev/null || echo "")
     if [ -n "$CLAWDHUB_CURRENT_VER" ] && [ -n "$CLAWDHUB_LATEST_VER" ] && [ "$CLAWDHUB_CURRENT_VER" = "$CLAWDHUB_LATEST_VER" ]; then
         echo -e "${GREEN}[OK]${NC}   clawdhub $CLAWDHUB_CURRENT_VER is already the latest"

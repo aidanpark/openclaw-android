@@ -2,6 +2,24 @@
 
 Termux에서 OpenClaw 사용 중 발생할 수 있는 문제와 해결 방법을 정리합니다.
 
+## 3단계 뒤 curl 이 깨짐 (CANNOT LINK EXECUTABLE)
+
+```
+CANNOT LINK EXECUTABLE "curl": cannot locate symbol "SSL_set_quic_tls_early_data_enabled" referenced by ".../usr/lib/libcurl.so"
+```
+
+### 원인
+
+새로 설치한 Termux 에서 전체 업그레이드 없이 `pkg install curl` 만 하면, Termux 앱에 들어 있던 옛 OpenSSL 위에 새 libcurl 이 설치됩니다. 그러면 curl 이 실행되지 않아 4단계 설치 명령이 아무 일도 하지 않고 끝나고, pkg 도 curl 을 쓰기 때문에 `pkg upgrade` 까지 실패합니다.
+
+### 해결 방법
+
+```bash
+apt update && apt full-upgrade -y
+```
+
+설정 파일에 대한 질문(`(Y/I/N/O/D/Z) [default=N] ?`)이 나오면 **Enter** 를 눌러 기본값으로 진행하세요. 끝나면 `curl --version` 이 동작합니다 — 4단계부터 이어서 진행하세요.
+
 ## 게이트웨이가 시작되지 않음: "gateway already running" 또는 "Port is already in use"
 
 ```
@@ -144,6 +162,8 @@ sed -i 's/\.openclaw-lite/\.openclaw-android/g' ~/.bashrc && source ~/.bashrc
 
 ## 업데이트 중 "systemctl --user unavailable: spawn systemctl ENOENT" 에러
 
+_v1.1.0 이전 설치에 해당합니다 — 이제 `openclaw update` 는 막혀 있으니 `oa --update` 를 쓰세요._
+
 ```
 Gateway service check failed: Error: systemctl --user unavailable: spawn systemctl ENOENT
 ```
@@ -166,7 +186,30 @@ openclaw gateway
 
 업데이트 전에 게이트웨이가 실행 중이었다면 기존 프로세스를 먼저 종료해야 할 수 있습니다. 위의 [게이트웨이가 시작되지 않음](#게이트웨이가-시작되지-않음-gateway-already-running-또는-port-is-already-in-use) 섹션을 참고하세요.
 
+## `openclaw update`가 차단되었다고 나옴
+
+```
+[BLOCKED] OpenClaw is pinned to the version verified by OpenClaw on Android.
+          Run 'oa --update' to update safely. ('openclaw update status' is allowed.)
+```
+
+### 원인
+
+이 프로젝트는 검증되고 테스트된 OpenClaw + Node.js 버전 조합을 고정(pin)합니다(`platforms/openclaw/config.env` 참고). `openclaw update`(및 `openclaw --update`)는 최신 npm 릴리스를 설치하는데, 이는 고정된 버전보다 더 최신 Node.js를 필요로 하여 실행이 안 될 수 있습니다 — 그래서 `$PREFIX/bin/openclaw`에 설치된 가드가 두 명령을 모두 차단합니다. 게이트웨이 자체의 자동 업데이트 기능도 비활성화되어 있지만(`OPENCLAW_NO_AUTO_UPDATE=1`), `update available … Run: openclaw update` 같은 메시지는 계속 출력될 수 있습니다 — 바로 그 명령이 차단 대상입니다.
+
+### 해결 방법
+
+대신 `oa --update`를 사용하세요 — Node.js와 OpenClaw을 함께 검증된 고정 버전으로 업데이트합니다:
+
+```bash
+oa --update && source ~/.bashrc
+```
+
+읽기 전용인 `openclaw update status`는 차단되지 않고 계속 동작합니다.
+
 ## `openclaw update` 중 sharp 빌드 실패
+
+_v1.1.0 이전 설치에 해당합니다 — 이제 `openclaw update` 는 막혀 있으니 `oa --update` 를 쓰세요._
 
 ```
 npm error gyp ERR! not ok
@@ -176,23 +219,15 @@ Reason: global update
 
 ### 원인
 
-**v1.0.0+(glibc)**: `sharp` 모듈은 프리빌트 바이너리(`@img/sharp-linux-arm64`)를 사용하며 glibc 환경에서 네이티브로 로딩됩니다. 이 에러는 드문 — 주로 프리빌트 바이너리가 누락되거나 손상된 경우입니다.
-
-**v1.0.0 이전(Bionic)**: `openclaw update`가 npm을 서브프로세스로 실행할 때, Termux 전용 빌드 환경변수(`CXXFLAGS`, `GYP_DEFINES`)가 서브프로세스 환경에서 사용 불가하여 네이티브 모듈 컴파일이 실패합니다.
+이 프로젝트가 고정한 OpenClaw 버전은 `sharp`에 의존하지 않습니다 — 이미지 처리는 대신 `photon`을 거치므로, 정상적인 설치/업데이트 흐름에서는 이 빌드 자체가 실행되지 않아야 합니다. 그래도 이 에러가 보인다면, `npm install`/`npm rebuild sharp`를 직접 실행했거나, 여전히 `sharp`에 의존하는 예전의 고정되지 않은 OpenClaw 버전을 사용 중일 가능성이 높습니다.
 
 ### 영향
 
-**이 에러는 무해합니다.** OpenClaw 자체는 정상적으로 업데이트되었으며, `sharp` 모듈(이미지 처리용)만 리빌드에 실패한 것입니다. OpenClaw는 sharp 없이도 정상적으로 작동합니다.
+**이 에러는 무해합니다.** OpenClaw 자체는 `sharp` 없이도 정상적으로 작동합니다 — 문제가 있다면 수동으로 실행한 리빌드 과정만 실패한 것입니다.
 
 ### 해결 방법
 
-업데이트 후 아래 스크립트로 sharp를 수동 빌드하세요:
-
-```bash
-bash ~/.openclaw-android/scripts/build-sharp.sh
-```
-
-또는 `openclaw update` 대신 `oa --update`를 사용하면 sharp를 자동으로 처리합니다:
+`oa --update`는 더 이상 `libvips`를 설치하거나 `sharp`를 리빌드하지 않습니다 — Node.js와 OpenClaw을 검증된 고정 버전으로만 유지하며, 고정된 OpenClaw은 `sharp`가 필요하지 않습니다:
 
 ```bash
 oa --update && source ~/.bashrc
@@ -255,6 +290,8 @@ oa --update && source ~/.bashrc
 ```
 
 ## `openclaw update` 시 node-llama-cpp 빌드 에러
+
+_v1.1.0 이전 설치에 해당합니다 — 이제 `openclaw update` 는 막혀 있으니 `oa --update` 를 쓰세요._
 
 ```
 [node-llama-cpp] Cloning ggml-org/llama.cpp (local bundle)

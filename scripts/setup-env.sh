@@ -13,9 +13,12 @@ export OA_GLIBC=1"
 # npm registry re-injection — reads cache file written by resolve_npm_registry.
 # Literal \$HOME, \${NPM_CONFIG_REGISTRY:-}, and \$(cat ...) are preserved for
 # runtime expansion in each new shell. -z guard lets users override manually.
+# if/fi (not a trailing `&&` chain) so the block returns 0 when the guard is
+# false — sourcing .bashrc under `set -e` must not stop (same as post-setup.sh).
 NPM_REGISTRY_INJECT="# npm registry (auto-detected by OpenClaw Android, safe to override manually)
-[ -z \"\${NPM_CONFIG_REGISTRY:-}\" ] && [ -s \"\$HOME/.openclaw-android/.npm-registry\" ] && \\
-    export NPM_CONFIG_REGISTRY=\"\$(cat \"\$HOME/.openclaw-android/.npm-registry\")\""
+if [ -z \"\${NPM_CONFIG_REGISTRY:-}\" ] && [ -s \"\$HOME/.openclaw-android/.npm-registry\" ]; then
+    export NPM_CONFIG_REGISTRY=\"\$(cat \"\$HOME/.openclaw-android/.npm-registry\")\"
+fi"
 
 PATH_LINE="export PATH=\"\$HOME/.local/bin:\$PATH\""
 if [ -n "$PLATFORM" ]; then

@@ -112,10 +112,14 @@ Android 也配拥有一个 Shell。
 打开 Termux 应用，粘贴以下命令安装 curl（下一步需要用到）。
 
 ```bash
-pkg update -y && pkg install -y curl
+pkg upgrade -y && pkg install -y curl
 ```
 
 > 首次运行时可能会要求你选择镜像源。随便选一个就行，选地理位置较近的会更快。
+>
+> 升级过程中如果出现配置文件相关的提问（`(Y/I/N/O/D/Z) [default=N] ?`），直接按 **Enter** 保留默认值即可。
+>
+> 不要跳过升级：在新安装的 Termux 上只安装 curl 可能导致 curl 无法运行（`CANNOT LINK EXECUTABLE "curl"`）。如果已经出现这种情况，请参阅[故障排除](docs/troubleshooting.md#curl-is-broken-after-step-3-cannot-link-executable)。
 
 ### 步骤四：安装 OpenClaw
 
@@ -205,13 +209,15 @@ oa --update && source ~/.bashrc
 
 一条命令更新所有已安装组件：
 
-- **OpenClaw** — 核心包（`openclaw@latest`）
+- **OpenClaw** — 保持在锁定（pinned）的已验证版本（当前为 2026.7.35 — 不一定是最新版本）
 - **code-server** — 浏览器 IDE
 - **OpenCode** — AI 编程助手
 - **AI CLI 工具** — Claude Code、Gemini CLI、Codex CLI (Termux)
 - **Android 补丁** — 本项目的兼容性补丁
 
 已是最新的组件会被跳过。未安装的组件不会被触及——只更新设备上已有的内容。可以多次安全运行。
+
+**注意**：`openclaw update`（以及 `openclaw --update`）被有意阻止——本项目安装了一个守卫，将 OpenClaw 锁定在已验证的版本上。网关可能仍会打印类似 `update available … Run: openclaw update` 的提示，但该命令会被阻止。请改用 `oa --update`。只读的 `openclaw update status` 仍然可用。
 
 > 如果 `oa` 命令不可用（旧版安装），请使用 curl 运行：
 > ```bash
@@ -259,7 +265,7 @@ OpenClaw 通过 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp) �
 
 如需体验，可以在手机上运行 TinyLlama 1.1B（Q4，约 670MB）等小型模型。生产环境建议使用云端 LLM 服务。
 
-> **为什么使用 `--ignore-scripts`？** 安装程序使用 `npm install -g openclaw@latest --ignore-scripts`，因为 node-llama-cpp 的 postinstall 脚本会尝试通过 cmake 从源码编译 llama.cpp——在手机上需要 30 分钟以上且会因工具链不兼容而失败。预构建的二进制文件无需此编译步骤即可工作，因此可以安全跳过 postinstall。
+> **为什么使用 `--ignore-scripts`？** 安装程序使用 `npm install -g openclaw@2026.7.35 --ignore-scripts`（锁定的版本），因为 node-llama-cpp 的 postinstall 脚本会尝试通过 cmake 从源码编译 llama.cpp——在手机上需要 30 分钟以上且会因工具链不兼容而失败。预构建的二进制文件无需此编译步骤即可工作，因此可以安全跳过 postinstall。
 
 <details>
 <summary>面向开发者的技术文档</summary>
@@ -282,7 +288,7 @@ OpenClaw 通过 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp) �
 |-----------|------|----------------|
 | [pacman](https://wiki.archlinux.org/title/Pacman) | glibc 包的包管理器 | `pkg install` |
 | [glibc-runner](https://github.com/termux-pacman/glibc-packages) | glibc 动态链接器 — 使标准 Linux 二进制文件能在 Android 上运行 | `pacman -Sy` |
-| [Node.js](https://nodejs.org/) v22 LTS (linux-arm64) | OpenClaw 的 JavaScript 运行时 | 从 nodejs.org 直接下载 |
+| [Node.js](https://nodejs.org/) 22.23.3 (linux-arm64) | OpenClaw 的 JavaScript 运行时，锁定版本并通过 sha256 校验 | 从 nodejs.org 直接下载 |
 | python | 原生 C/C++ 扩展的构建脚本 (node-gyp) | `pkg install` |
 | make | 原生模块的 Makefile 执行 | `pkg install` |
 | cmake | 基于 CMake 的原生模块构建 | `pkg install` |
@@ -293,14 +299,13 @@ OpenClaw 通过 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp) �
 
 | 组件 | 作用 | 安装方式 |
 |-----------|------|----------------|
-| [OpenClaw](https://github.com/openclaw/openclaw) | AI Agent 平台（核心） | `npm install -g` |
+| [OpenClaw](https://github.com/openclaw/openclaw) | AI Agent 平台（核心），锁定为已验证版本（2026.7.35） | `npm install -g` |
 | [clawdhub](https://github.com/AidanPark/clawdhub) | OpenClaw 的技能管理器 | `npm install -g` |
 | [PyYAML](https://pyyaml.org/) | `.skill` 打包的 YAML 解析器 | `pip install` |
-| libvips | sharp 构建所需的图像处理头文件 | `pkg install`（更新时） |
 
 ### 可选工具（安装时提示）
 
-每个工具都会通过单独的 Y/n 提示。你可以选择安装哪些。
+每个工具都会通过单独的 Y/n 提示。你可以选择安装哪些。可选工具安装失败时只会提示警告并跳过，不会中止后续安装。
 
 | 组件 | 作用 | 安装方式 |
 |-----------|------|----------------|
@@ -308,11 +313,11 @@ OpenClaw 通过 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp) �
 | [ttyd](https://github.com/tsl0922/ttyd) | Web 终端 — 从浏览器访问 Termux | `pkg install` |
 | [dufs](https://github.com/sigoden/dufs) | HTTP/WebDAV 文件服务器，用于浏览器文件传输 | `pkg install` |
 | [android-tools](https://developer.android.com/tools/adb) | ADB，用于禁用 Phantom Process Killer | `pkg install` |
-| [code-server](https://github.com/coder/code-server) | 基于浏览器的 VS Code IDE | 从 GitHub 直接下载 |
+| [code-server](https://github.com/coder/code-server) | 基于浏览器的 VS Code IDE，锁定为 4.117.0（更新版本需要 Node.js 24） | 从 GitHub 直接下载 |
 | [OpenCode](https://opencode.ai/) | AI 编程助手 (TUI)。自动安装 [Bun](https://bun.sh/) 和 [proot](https://proot-me.github.io/) 作为依赖 | `bun install -g` |
 | [Chromium](https://www.chromium.org/) | OpenClaw 的浏览器自动化支持（约 400MB） | 自定义安装脚本 |
 | [Playwright](https://playwright.dev/) | 浏览器自动化库（需要 Chromium）。自动配置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` | 自定义安装脚本 |
-| [Claude Code](https://github.com/anthropics/claude-code) (Anthropic) | AI CLI 工具 | `npm install -g` |
+| [Claude Code](https://github.com/anthropics/claude-code) (Anthropic) | AI CLI 工具（可以安装，但在此环境下原生二进制文件可能尚无法运行 — 支持计划中） | `npm install -g` |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) (Google) | AI CLI 工具 | `npm install -g` |
 | [Codex CLI](https://github.com/DioNanos/codex-termux)（OpenAI Codex 的 Termux 分支） | AI CLI 工具 | `npm install -g` |
 
@@ -356,6 +361,7 @@ openclaw-android/
 │   │   ├── env.sh              # 平台特定环境变量
 │   │   ├── install.sh          # 平台包安装（npm、补丁、clawdhub）
 │   │   ├── update.sh           # 平台包更新
+│   │   ├── openclaw-shim.sh    # 生成 `openclaw update` 版本锁定守卫
 │   │   ├── uninstall.sh        # 平台包卸载
 │   │   ├── status.sh           # 平台状态显示
 │   │   ├── verify.sh           # 平台验证检查
@@ -466,7 +472,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 | 标志 | 脚本 | 安装内容 |
 |------|--------|-----------------|
 | `PLATFORM_NEEDS_GLIBC=true` | `scripts/install-glibc.sh` | pacman、glibc-runner（提供 `ld-linux-aarch64.so.1`） |
-| `PLATFORM_NEEDS_NODEJS=true` | `scripts/install-nodejs.sh` | Node.js v22 LTS linux-arm64、grun 风格的包装脚本 |
+| `PLATFORM_NEEDS_NODEJS=true` | `scripts/install-nodejs.sh` | Node.js 22.23.3 linux-arm64（sha256 校验）、grun 风格的包装脚本 |
 | `PLATFORM_NEEDS_BUILD_TOOLS=true` | `scripts/install-build-tools.sh` | python、make、cmake、clang、binutils |
 
 每个脚本都是自包含的，具有预检查和幂等行为（如果已安装则跳过）。
@@ -479,10 +485,11 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 2. 通过 pip 安装 PyYAML（`.skill` 打包所需）
 3. 将 `glibc-compat.js` 复制到 `~/.openclaw-android/patches/`
 4. 安装 `systemctl` 桩到 `$PREFIX/bin/`
-5. 运行 `npm install -g openclaw@latest --ignore-scripts`
-6. 通过 `openclaw-apply-patches.sh` 应用平台特定补丁
-7. 安装 `clawdhub`（技能管理器）以及 `undici` 依赖（如需要）
-8. 运行 `openclaw update`（包括构建 sharp 等原生模块）
+5. 运行 `npm install -g openclaw@2026.7.35 --ignore-scripts`（`config.env` 中锁定的版本）
+6. 运行 OpenClaw 自身的 postinstall 脚本（`postinstall-bundled-plugins.mjs`），该脚本被 `--ignore-scripts` 跳过
+7. 通过 `openclaw-apply-patches.sh` 应用平台特定补丁
+8. 安装 `openclaw update` 守卫（`openclaw-shim.sh`），使锁定版本得以保持
+9. 安装 `clawdhub`（技能管理器）以及 `undici` 依赖（如需要）
 
 **[6.5] 环境变量 + CLI + 标记文件：**
 
@@ -502,7 +509,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - **OpenCode**：AI 编程助手，使用 proot + ld.so 拼接方式运行 Bun 独立二进制文件
 - **Chromium**：OpenClaw 的浏览器自动化支持（约 400MB）
 - **Playwright**：浏览器自动化库（通过 npm 安装 `playwright-core`）。自动设置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 和 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` 环境变量。如果未安装 Chromium 则自动安装
-- **AI CLI 工具**：Claude Code、Gemini CLI、Codex CLI (Termux) — 通过 `npm install -g` 安装
+- **AI CLI 工具**：Claude Code、Gemini CLI、Codex CLI (Termux) — 通过 `npm install -g` 安装；安装失败时只会提示警告并跳过，不会中止整个安装（Claude Code 可能已安装但在此环境下尚无法运行 — 支持计划中）
 
 ### [8/8] 验证 — `tests/verify-install.sh`
 
@@ -512,7 +519,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 
 | 检查项 | 通过条件 |
 |------------|---------------|
-| Node.js 版本 | `node -v` >= 22 |
+| Node.js 版本 | `node -v` 与锁定版本一致（`platforms/openclaw/config.env`） |
 | npm | `npm` 命令存在 |
 | TMPDIR | 环境变量已设置 |
 | OA_GLIBC | 设为 `1` |
@@ -535,6 +542,8 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 | 检查项 | 通过条件 |
 |------------|---------------|
 | openclaw | `openclaw --version` 成功 |
+| openclaw 包版本 | 与 `config.env` 中的锁定版本一致 |
+| openclaw update 守卫 | 已安装到 `$PREFIX/bin/openclaw` |
 | CONTAINER | 设为 `1` |
 | clawdhub | 命令可用 |
 | ~/.openclaw | 目录存在 |
@@ -575,16 +584,19 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - 更新 `$PREFIX/bin/` 中的 `oa` CLI 和 `oaupdate` 包装器
 - 更新 `~/.openclaw-android/` 中的 `uninstall.sh`
 - 如果检测到 Bionic 架构，执行自动 glibc 迁移
+- 将 Node.js 收敛到锁定版本（sha256 校验下载，原子替换——失败时恢复之前的安装）
 - 运行 `setup-env.sh` 刷新 `.bashrc` 环境变量块
+- **Node 门控**：如果此时 Node.js 仍未达到锁定版本，更新到此为止——不会触及 OpenClaw（[4/5]）。请重新运行 `oa --update`
 
 ### [4/5] 更新平台
 
 委托给 `platforms/<platform>/update.sh`。对于 OpenClaw，此步骤：
 
-- 安装构建依赖（`libvips`、`binutils`）
-- 将 `openclaw` npm 包更新到最新版本
+- 安装 `binutils`（用于原生模块构建）
+- 再次检查 Node.js 锁定版本作为安全网（纵深防御——[3/5] 已经做过门控）
+- 将 `openclaw` 收敛到锁定版本——只要已安装版本不同（无论更新还是更旧）就会安装锁定版本（更新的版本也会被回退到锁定版本）
 - 重新应用平台特定补丁
-- 如果 openclaw 已更新，重新构建 sharp 原生模块
+- 刷新 `openclaw update` 守卫（`openclaw-shim.sh`），保持 `openclaw update`/`--update` 持续被阻止
 - 更新/安装 `clawdhub`（技能管理器）
 - 如需要，为 clawdhub 安装 `undici`（Node.js v24+）
 - 如需要，将技能从 `~/skills/` 迁移到 `~/.openclaw/workspace/skills/`
@@ -594,7 +606,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 
 更新已安装的工具：
 
-- **code-server**：以更新模式运行 `install-code-server.sh`。未安装则跳过
+- **code-server**：以更新模式运行 `install-code-server.sh`——保持在固定版本 4.117.0（之前安装的更新版本会被改回）。未安装则跳过
 - **OpenCode**：已安装则更新；未安装则提供安装选项。需要 glibc 架构
 - **Chromium**：已安装则更新。未安装则跳过
 - **AI CLI 工具**（Claude Code、Gemini CLI、Codex CLI (Termux)）：比较已安装版本与最新 npm 版本，需要时更新。未安装的工具不会提供安装选项

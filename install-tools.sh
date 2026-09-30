@@ -15,7 +15,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.0.27"
+OA_VERSION="1.1.0"
 REPO_TARBALL="https://github.com/AidanPark/openclaw-android/archive/refs/heads/main.tar.gz"
 
 echo ""
@@ -225,8 +225,26 @@ if [ "$INSTALL_PLAYWRIGHT" = true ]; then
     fi
 fi
 
-if [ "$INSTALL_CLAUDE_CODE" = true ]; then echo "Installing Claude Code..."; if npm install -g @anthropic-ai/claude-code; then echo -e "${GREEN}[OK]${NC}   Claude Code installed"; fi; fi
-if [ "$INSTALL_GEMINI_CLI" = true ]; then echo "Installing Gemini CLI..."; if npm install -g @google/gemini-cli; then echo -e "${GREEN}[OK]${NC}   Gemini CLI installed"; fi; fi
+if [ "$INSTALL_CLAUDE_CODE" = true ]; then
+    echo "Installing Claude Code..."
+    if npm install -g @anthropic-ai/claude-code; then
+        if timeout 30 claude --version >/dev/null 2>&1; then
+            echo -e "${GREEN}[OK]${NC}   Claude Code installed"
+        else
+            echo -e "${YELLOW}[WARN]${NC} Claude Code installed, but its native binary does not run on this setup yet (support is planned)"
+        fi
+    else
+        echo -e "${YELLOW}[WARN]${NC} Claude Code installation failed (non-critical) — skipped"
+    fi
+fi
+if [ "$INSTALL_GEMINI_CLI" = true ]; then
+    echo "Installing Gemini CLI..."
+    if npm install -g @google/gemini-cli; then
+        echo -e "${GREEN}[OK]${NC}   Gemini CLI installed"
+    else
+        echo -e "${YELLOW}[WARN]${NC} Gemini CLI installation failed (non-critical) — skipped"
+    fi
+fi
 if [ "$INSTALL_CODEX_CLI" = true ]; then
     npm uninstall -g @openai/codex 2>/dev/null || true
     echo "Installing Codex CLI (Termux)..."
@@ -241,6 +259,9 @@ if [ "$INSTALL_CODEX_CLI" = true ]; then
             chmod +x "$_codex_bin"
         fi
         echo -e "${GREEN}[OK]${NC}   Codex CLI (Termux) installed"
+    else
+        echo -e "${YELLOW}[WARN]${NC} Codex CLI (Termux) installation failed (non-critical) — skipped"
+        echo "       The package targets Termux's Android Node.js; support for this setup is planned."
     fi
 fi
 

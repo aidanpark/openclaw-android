@@ -3,7 +3,7 @@
 # Usage: bash install-code-server.sh [install|update]
 #
 # Workarounds applied:
-#   1. Replace bundled glibc node with Termux node
+#   1. Replace bundled glibc node with our node (glibc wrapper)
 #   2. Patch argon2 native module with JS stub (--auth none makes it unused)
 #   3. Ignore tar hard link errors (Android restriction) and recover .node files
 #
@@ -50,33 +50,22 @@ if [ -x "$BIN_DIR/code-server" ]; then
 fi
 
 # ── Determine target version ──────────────────
+# Pinned: v4.132.0+ require Node.js 24 (engines "24"). 4.117.0 is the last
+# release published to BOTH GitHub and npm with engines "22" — post-setup.sh
+# (App Install) installs the same version from npm. Keep the two in sync.
 
-if [ "$MODE" = "install" ] && [ -n "$CURRENT_VERSION" ]; then
-    echo -e "${GREEN}[SKIP]${NC} code-server already installed ($CURRENT_VERSION)"
+CODE_SERVER_VERSION="4.117.0"
+
+if [ "$CURRENT_VERSION" = "$CODE_SERVER_VERSION" ]; then
+    echo -e "${GREEN}[SKIP]${NC} code-server $CURRENT_VERSION matches the pinned version"
     exit 0
 fi
 
-# Fetch latest version from GitHub API
-echo "Checking latest code-server version..."
-LATEST_VERSION=$(curl -sfL --max-time 10 \
-    "https://api.github.com/repos/coder/code-server/releases/latest" \
-    | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/') || true
-
-if [ -z "$LATEST_VERSION" ]; then
-    fail_warn "Failed to fetch latest code-server version from GitHub"
+if [ -n "$CURRENT_VERSION" ]; then
+    echo "  Current: v$CURRENT_VERSION → pinned v$CODE_SERVER_VERSION ($MODE)"
 fi
 
-echo "  Latest: v$LATEST_VERSION"
-
-if [ "$MODE" = "update" ] && [ -n "$CURRENT_VERSION" ]; then
-    if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
-        echo -e "${GREEN}[SKIP]${NC} code-server $CURRENT_VERSION is already the latest"
-        exit 0
-    fi
-    echo "  Current: v$CURRENT_VERSION → updating to v$LATEST_VERSION"
-fi
-
-VERSION="$LATEST_VERSION"
+VERSION="$CODE_SERVER_VERSION"
 
 # ── Download ──────────────────────────────────
 
@@ -131,15 +120,21 @@ echo -e "${GREEN}[OK]${NC}   Installed to $INSTALL_DIR/code-server-${VERSION}"
 
 CS_DIR="$INSTALL_DIR/code-server-${VERSION}"
 
-# ── Replace bundled node with Termux node ─────
-# The standalone release bundles a glibc-linked node binary that cannot
-# run on Termux (Bionic libc). Swap it with the system node.
+# ── Replace bundled node with our node ────────
+# The standalone release bundles a glibc-linked node binary that cannot run
+# directly on Termux (Bionic libc). Point it at our node: the glibc wrapper
+# (runs node through ld.so) when present, otherwise whatever `node` is on PATH.
+# $PREFIX/bin/node does not exist on glibc installs.
 
+NODE_TARGET="$HOME/.openclaw-android/bin/node"
+if [ ! -x "$NODE_TARGET" ]; then
+    NODE_TARGET="$(command -v node)"
+fi
 if [ -f "$CS_DIR/lib/node" ] || [ -L "$CS_DIR/lib/node" ]; then
     rm -f "$CS_DIR/lib/node"
 fi
-ln -s "$PREFIX/bin/node" "$CS_DIR/lib/node"
-echo -e "${GREEN}[OK]${NC}   Replaced bundled node → Termux node"
+ln -s "$NODE_TARGET" "$CS_DIR/lib/node"
+echo -e "${GREEN}[OK]${NC}   Replaced bundled node → $NODE_TARGET"
 
 # ── Patch argon2 native module ────────────────
 # argon2 ships a .node binary compiled against glibc. Since we run

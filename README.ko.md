@@ -109,10 +109,14 @@
 Termux 앱을 열고 아래 명령어를 붙여넣으세요. 다음 단계에 필요한 curl을 설치합니다.
 
 ```bash
-pkg update -y && pkg install -y curl
+pkg upgrade -y && pkg install -y curl
 ```
 
 > 처음 실행하면 저장소 미러를 선택하라는 메시지가 나올 수 있습니다. 아무거나 선택해도 되지만, 지역적으로 가까운 미러를 고르면 더 빠릅니다.
+>
+> 업그레이드 중 설정 파일에 대한 질문(`(Y/I/N/O/D/Z) [default=N] ?`)이 나오면 **Enter** 를 눌러 기본값으로 진행하세요.
+>
+> 업그레이드를 건너뛰지 마세요. 새로 설치한 Termux 에서 curl 만 설치하면 curl 이 깨질 수 있습니다(`CANNOT LINK EXECUTABLE "curl"`). 이미 그렇게 됐다면 [문제 해결](docs/troubleshooting.ko.md)을 보세요.
 
 ### 4단계: OpenClaw 설치
 
@@ -200,13 +204,15 @@ oa --update && source ~/.bashrc
 
 이 명령어 하나로 설치된 모든 컴포넌트를 한번에 업데이트합니다:
 
-- **OpenClaw** — 코어 패키지 (`openclaw@latest`)
+- **OpenClaw** — 고정(pinned)된 검증 버전으로 유지되는 코어 패키지 (현재 2026.7.35 — 항상 최신 릴리스는 아님)
 - **code-server** — 브라우저 IDE
 - **OpenCode** — AI 코딩 어시스턴트
 - **AI CLI 도구** — Claude Code, Gemini CLI, Codex CLI (Termux)
 - **Android 패치** — 이 프로젝트의 호환성 패치
 
 이미 최신인 컴포넌트는 스킵됩니다. 설치하지 않은 컴포넌트는 건드리지 않고 — 기기에 이미 설치된 것만 업데이트합니다. 여러 번 실행해도 안전합니다.
+
+**참고**: `openclaw update`(및 `openclaw --update`)는 의도적으로 차단되어 있습니다 — 이 프로젝트가 검증한 버전에 OpenClaw을 고정하는 가드가 설치되어 있기 때문입니다. 게이트웨이가 `update available … Run: openclaw update` 같은 메시지를 계속 출력할 수 있지만, 해당 명령어는 차단됩니다. 대신 `oa --update`를 사용하세요. `openclaw update status`(읽기 전용)는 계속 동작합니다.
 
 > `oa` 명령어가 없는 경우 (이전 설치 사용자), curl로 실행:
 > ```bash
@@ -252,7 +258,7 @@ OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통
 
 실험 목적이라면 TinyLlama 1.1B (Q4, ~670MB) 같은 소형 모델은 폰에서 실행할 수 있습니다. 실제 사용에는 클라우드 LLM 제공자를 권장합니다.
 
-> **왜 `--ignore-scripts`인가?** 설치 스크립트는 `npm install -g openclaw@latest --ignore-scripts`를 사용합니다. node-llama-cpp의 postinstall 스크립트가 cmake로 llama.cpp 소스를 빌드하려고 시도하는데, 폰에서 30분 이상 소요되며 툴체인 호환성 문제로 실패합니다. 프리빌트 바이너리는 이 빌드 과정 없이 작동하므로, postinstall을 안전하게 건너뜁니다.
+> **왜 `--ignore-scripts`인가?** 설치 스크립트는 `npm install -g openclaw@2026.7.35 --ignore-scripts`(고정된 버전)를 사용합니다. node-llama-cpp의 postinstall 스크립트가 cmake로 llama.cpp 소스를 빌드하려고 시도하는데, 폰에서 30분 이상 소요되며 툴체인 호환성 문제로 실패합니다. 프리빌트 바이너리는 이 빌드 과정 없이 작동하므로, postinstall을 안전하게 건너뜁니다.
 
 <details>
 <summary>개발자용 기술 문서</summary>
@@ -275,7 +281,7 @@ OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통
 |----------|------|-----------|
 | [pacman](https://wiki.archlinux.org/title/Pacman) | glibc 패키지 관리자 | `pkg install` |
 | [glibc-runner](https://github.com/termux-pacman/glibc-packages) | glibc 동적 링커 — 표준 Linux 바이너리를 Android에서 실행 | `pacman -Sy` |
-| [Node.js](https://nodejs.org/) v22 LTS (linux-arm64) | OpenClaw용 JavaScript 런타임 | nodejs.org에서 직접 다운로드 |
+| [Node.js](https://nodejs.org/) 22.23.3 (linux-arm64) | OpenClaw용 JavaScript 런타임, sha256로 검증되는 고정 버전 | nodejs.org에서 직접 다운로드 |
 | python | 네이티브 C/C++ 애드온 빌드 스크립트 (node-gyp) | `pkg install` |
 | make | 네이티브 모듈 Makefile 실행 | `pkg install` |
 | cmake | CMake 기반 네이티브 모듈 빌드 | `pkg install` |
@@ -286,14 +292,13 @@ OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통
 
 | 컴포넌트 | 역할 | 설치 방식 |
 |----------|------|-----------|
-| [OpenClaw](https://github.com/openclaw/openclaw) | AI 에이전트 플랫폼 (핵심) | `npm install -g` |
+| [OpenClaw](https://github.com/openclaw/openclaw) | AI 에이전트 플랫폼 (핵심), 검증된 버전으로 고정 (2026.7.35) | `npm install -g` |
 | [clawdhub](https://github.com/AidanPark/clawdhub) | OpenClaw 스킬 매니저 | `npm install -g` |
 | [PyYAML](https://pyyaml.org/) | `.skill` 패키징용 YAML 파서 | `pip install` |
-| libvips | sharp 빌드용 이미지 처리 헤더 | `pkg install` (업데이트 시) |
 
 ### 선택적 도구 (설치 중 선택)
 
-각 도구는 개별 Y/n 프롬프트로 제공됩니다. 원하는 도구만 선택하여 설치할 수 있습니다.
+각 도구는 개별 Y/n 프롬프트로 제공됩니다. 원하는 도구만 선택하여 설치할 수 있습니다. 선택적 도구 설치가 실패해도 경고만 표시하고 건너뛸 뿐, 나머지 설치 과정을 중단하지 않습니다.
 
 | 컴포넌트 | 역할 | 설치 방식 |
 |----------|------|-----------|
@@ -301,11 +306,11 @@ OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통
 | [ttyd](https://github.com/tsl0922/ttyd) | 웹 터미널 — 브라우저에서 Termux 접속 | `pkg install` |
 | [dufs](https://github.com/sigoden/dufs) | HTTP/WebDAV 파일 서버 | `pkg install` |
 | [android-tools](https://developer.android.com/tools/adb) | Phantom Process Killer 비활성화용 ADB | `pkg install` |
-| [code-server](https://github.com/coder/code-server) | 브라우저 기반 VS Code IDE | GitHub에서 직접 다운로드 |
+| [code-server](https://github.com/coder/code-server) | 브라우저 기반 VS Code IDE, 4.117.0으로 고정 (그 이후 버전은 Node.js 24 필요) | GitHub에서 직접 다운로드 |
 | [OpenCode](https://opencode.ai/) | AI 코딩 어시스턴트 (TUI). [Bun](https://bun.sh/)과 [proot](https://proot-me.github.io/)을 의존성으로 자동 설치 | `bun install -g` |
 | [Chromium](https://www.chromium.org/) | OpenClaw 브라우저 자동화 (~400MB) | 전용 설치 스크립트 |
 | [Playwright](https://playwright.dev/) | 브라우저 자동화 라이브러리 (Chromium 필요). `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 자동 설정 | 전용 설치 스크립트 |
-| [Claude Code](https://github.com/anthropics/claude-code) (Anthropic) | AI CLI 도구 | `npm install -g` |
+| [Claude Code](https://github.com/anthropics/claude-code) (Anthropic) | AI CLI 도구 (설치는 되지만 이 환경에서 네이티브 바이너리가 아직 실행되지 않을 수 있음 — 지원 예정) | `npm install -g` |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) (Google) | AI CLI 도구 | `npm install -g` |
 | [Codex CLI](https://github.com/DioNanos/codex-termux) (OpenAI Codex의 Termux 포크) | AI CLI 도구 | `npm install -g` |
 
@@ -349,6 +354,7 @@ openclaw-android/
 │   │   ├── env.sh              # 플랫폼별 환경변수
 │   │   ├── install.sh          # 플랫폼 패키지 설치 (npm, 패치, clawdhub)
 │   │   ├── update.sh           # 플랫폼 패키지 업데이트
+│   │   ├── openclaw-shim.sh    # `openclaw update` 버전 고정 가드 생성
 │   │   ├── uninstall.sh        # 플랫폼 패키지 제거
 │   │   ├── status.sh           # 플랫폼 상태 표시
 │   │   ├── verify.sh           # 플랫폼 검증 체크
@@ -459,7 +465,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 | 플래그 | 스크립트 | 설치 내용 |
 |--------|----------|----------|
 | `PLATFORM_NEEDS_GLIBC=true` | `scripts/install-glibc.sh` | pacman, glibc-runner (`ld-linux-aarch64.so.1` 제공) |
-| `PLATFORM_NEEDS_NODEJS=true` | `scripts/install-nodejs.sh` | Node.js v22 LTS linux-arm64, grun 스타일 래퍼 스크립트 |
+| `PLATFORM_NEEDS_NODEJS=true` | `scripts/install-nodejs.sh` | Node.js 22.23.3 linux-arm64 (sha256 검증), grun 스타일 래퍼 스크립트 |
 | `PLATFORM_NEEDS_BUILD_TOOLS=true` | `scripts/install-build-tools.sh` | python, make, cmake, clang, binutils |
 
 각 스크립트는 사전 체크와 멱등성(이미 설치된 경우 스킵)을 갖춘 독립 실행형입니다.
@@ -472,10 +478,11 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 2. pip으로 PyYAML 설치 (`.skill` 패키징용)
 3. `glibc-compat.js`를 `~/.openclaw-android/patches/`에 복사
 4. `systemctl` 스텅을 `$PREFIX/bin/`에 설치
-5. `npm install -g openclaw@latest --ignore-scripts` 실행
-6. `openclaw-apply-patches.sh`로 플랫폼별 패치 적용
-7. `clawdhub` (스킬 매니저) 및 필요 시 `undici` 의존성 설치
-8. `openclaw update` 실행 (sharp 등 네이티브 모듈 빌드 포함)
+5. `npm install -g openclaw@2026.7.35 --ignore-scripts` 실행 (`config.env`에 고정된 버전)
+6. `--ignore-scripts`로 건너뛴 OpenClaw 자체 postinstall 스크립트(`postinstall-bundled-plugins.mjs`) 실행
+7. `openclaw-apply-patches.sh`로 플랫폼별 패치 적용
+8. `openclaw update` 가드(`openclaw-shim.sh`) 설치 — 고정 버전이 유지되도록 함
+9. `clawdhub` (스킬 매니저) 및 필요 시 `undici` 의존성 설치
 
 **[6.5] 환경변수 + CLI + 마커:**
 
@@ -495,7 +502,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - **OpenCode**: AI 코딩 어시스턴트. proot + ld.so 결합 방식으로 Bun 독립 실행 바이너리 지원
 - **Chromium**: OpenClaw 브라우저 자동화 지원 (~400MB)
 - **Playwright**: 브라우저 자동화 라이브러리 (`playwright-core` npm 설치). `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 및 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` 환경변수 자동 설정. Chromium 미설치 시 자동 설치
-- **AI CLI 도구**: Claude Code, Gemini CLI, Codex CLI (Termux) — `npm install -g`로 설치
+- **AI CLI 도구**: Claude Code, Gemini CLI, Codex CLI (Termux) — `npm install -g`로 설치. 설치 실패 시 경고만 표시하고 건너뛰며 설치 전체를 중단하지 않음 (Claude Code는 설치는 되지만 이 환경에서 아직 실행되지 않을 수 있음 — 지원 예정)
 
 ### [8/8] 검증 — `tests/verify-install.sh`
 
@@ -505,7 +512,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 
 | 검증 항목 | PASS 조건 |
 |-----------|----------|
-| Node.js 버전 | `node -v` >= 22 |
+| Node.js 버전 | `node -v`가 고정 버전과 일치 (`platforms/openclaw/config.env`) |
 | npm | `npm` 명령어 존재 |
 | TMPDIR | 환경변수 설정됨 |
 | OA_GLIBC | `1`로 설정됨 |
@@ -528,6 +535,8 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 | 검증 항목 | PASS 조건 |
 |-----------|----------|
 | openclaw | `openclaw --version` 성공 |
+| openclaw 패키지 버전 | `config.env`의 고정 버전과 일치 |
+| openclaw update 가드 | `$PREFIX/bin/openclaw`에 설치됨 |
 | CONTAINER | `1`로 설정됨 |
 | clawdhub | 명령어 존재 |
 | ~/.openclaw | 디렉토리 존재 |
@@ -568,16 +577,19 @@ GitHub에서 전체 저장소 tarball을 다운로드하고 임시 디렉토리�
 - `$PREFIX/bin/`의 `oa` CLI와 `oaupdate` 래퍼 갱신
 - `~/.openclaw-android/`의 `uninstall.sh` 갱신
 - Bionic 아키텍처가 감지되면 자동 glibc 마이그레이션 수행
+- Node.js를 고정 버전으로 수렴 (sha256 검증 다운로드, 원자적 교체 — 실패 시 이전 설치 복원)
 - `setup-env.sh`를 실행하여 `.bashrc` 환경변수 블록 갱신
+- **Node 게이트**: 이후에도 Node.js가 고정 버전이 아니면 여기서 업데이트를 중단합니다 — OpenClaw([4/5])는 건드리지 않습니다. `oa --update`를 다시 실행하세요
 
 ### [4/5] 플랫폼 업데이트
 
 `platforms/<platform>/update.sh`에 위임합니다. OpenClaw의 경우:
 
-- 빌드 의존성 설치 (`libvips`, `binutils`)
-- `openclaw` npm 패키지를 최신 버전으로 업데이트
+- `binutils` 설치 (네이티브 모듈 빌드용)
+- 안전장치로 Node.js 고정 버전을 재확인 (방어적 이중 확인 — [3/5]에서 이미 게이트를 거침)
+- `openclaw`을 고정 버전으로 수렴 — 설치된 버전이 다르면 방향에 상관없이 고정 버전을 설치 (더 최신 버전이 설치되어 있어도 고정 버전으로 되돌림)
 - 플랫폼별 패치 재적용
-- openclaw이 업데이트된 경우 sharp 네이티브 모듈 재빌드
+- `openclaw update` 가드(`openclaw-shim.sh`) 갱신 — `openclaw update`/`--update`가 계속 차단되도록 유지
 - `clawdhub` (스킬 매니저) 업데이트/설치
 - 필요 시 clawdhub용 `undici` 설치 (Node.js v24+)
 - 필요 시 `~/skills/`에서 `~/.openclaw/workspace/skills/`로 스킬 마이그레이션
@@ -587,7 +599,7 @@ GitHub에서 전체 저장소 tarball을 다운로드하고 임시 디렉토리�
 
 이미 설치된 도구만 업데이트합니다:
 
-- **code-server**: `install-code-server.sh`를 update 모드로 실행. 미설치 시 스킵
+- **code-server**: `install-code-server.sh`를 update 모드로 실행 — 고정 버전 4.117.0 으로 유지(예전에 더 새 버전이 설치됐으면 되돌림). 미설치 시 스킵
 - **OpenCode**: 설치된 경우 업데이트, 미설치 시 설치 여부 문의. glibc 아키텍처 필요
 - **Chromium**: 설치된 경우 업데이트. 미설치 시 스킵
 - **AI CLI 도구** (Claude Code, Gemini CLI, Codex CLI (Termux)): 설치된 버전과 최신 npm 버전을 비교하여 필요 시 업데이트. 미설치 도구는 설치를 제안하지 않음

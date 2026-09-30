@@ -2,6 +2,24 @@
 
 Common issues and solutions when using OpenClaw on Termux.
 
+## curl is broken after Step 3 (CANNOT LINK EXECUTABLE)
+
+```
+CANNOT LINK EXECUTABLE "curl": cannot locate symbol "SSL_set_quic_tls_early_data_enabled" referenced by ".../usr/lib/libcurl.so"
+```
+
+### Cause
+
+On a freshly installed Termux, running `pkg install curl` without a full upgrade installs a new libcurl on top of the older OpenSSL that came with the Termux app. curl then can't start, so the install command in Step 4 silently does nothing — and `pkg upgrade` fails too, because pkg uses curl.
+
+### Solution
+
+```bash
+apt update && apt full-upgrade -y
+```
+
+If you see questions about configuration files (`(Y/I/N/O/D/Z) [default=N] ?`), press **Enter** to keep the default. When it finishes, `curl --version` should work — continue from Step 4.
+
 ## Gateway won't start: "gateway already running" or "Port is already in use"
 
 ```
@@ -144,6 +162,8 @@ sed -i 's/\.openclaw-lite/\.openclaw-android/g' ~/.bashrc && source ~/.bashrc
 
 ## "systemctl --user unavailable: spawn systemctl ENOENT" during update
 
+_Applies to installs before v1.1.0 — `openclaw update` is now blocked; use `oa --update`._
+
 ```
 Gateway service check failed: Error: systemctl --user unavailable: spawn systemctl ENOENT
 ```
@@ -166,7 +186,30 @@ openclaw gateway
 
 If the gateway was already running before the update, you may need to stop the old process first. See the [Gateway won't start](#gateway-wont-start-gateway-already-running-or-port-is-already-in-use) section above.
 
+## `openclaw update` says it is blocked
+
+```
+[BLOCKED] OpenClaw is pinned to the version verified by OpenClaw on Android.
+          Run 'oa --update' to update safely. ('openclaw update status' is allowed.)
+```
+
+### Cause
+
+This project pins OpenClaw and Node.js to a verified, tested pair (see `platforms/openclaw/config.env`). `openclaw update` (and `openclaw --update`) would install the latest npm release, which can require a newer Node.js than the pinned one and then fail to start — so a guard installed at `$PREFIX/bin/openclaw` blocks both. The gateway's own auto-updater is also disabled (`OPENCLAW_NO_AUTO_UPDATE=1`), but it may still print something like `update available … Run: openclaw update` — that's the command being blocked.
+
+### Solution
+
+Use `oa --update` instead — it updates Node.js and OpenClaw together to the verified, pinned versions:
+
+```bash
+oa --update && source ~/.bashrc
+```
+
+`openclaw update status` (read-only) still works and is not blocked.
+
 ## sharp build fails during `openclaw update`
+
+_Applies to installs before v1.1.0 — `openclaw update` is now blocked; use `oa --update`._
 
 ```
 npm error gyp ERR! not ok
@@ -176,23 +219,15 @@ Reason: global update
 
 ### Cause
 
-**v1.0.0+ (glibc)**: The `sharp` module uses prebuilt binaries (`@img/sharp-linux-arm64`) that load natively under the glibc environment. This error is rare — it typically means the prebuilt binary is missing or corrupted.
-
-**Pre-1.0.0 (Bionic)**: When `openclaw update` ran npm as a subprocess, the Termux-specific build environment variables (`CXXFLAGS`, `GYP_DEFINES`) were not available in the subprocess context, causing the native module compilation to fail.
+The OpenClaw version this project pins does not depend on `sharp` — image handling goes through `photon` instead, so this build should not run at all through the normal install/update flow. If you still see it, you likely ran `npm install`/`npm rebuild sharp` by hand, or you're on an older, unpinned OpenClaw release that still declares `sharp` as a dependency.
 
 ### Impact
 
-**This error is non-critical.** OpenClaw itself has been updated successfully — only the `sharp` module (used for image processing) failed to rebuild. OpenClaw works normally without it.
+**This error is non-critical.** OpenClaw itself works normally without `sharp` — at most, whatever manual step triggered the rebuild failed.
 
 ### Solution
 
-After the update, manually rebuild `sharp` using the provided script:
-
-```bash
-bash ~/.openclaw-android/scripts/build-sharp.sh
-```
-
-Alternatively, use `oa --update` instead of `openclaw update` — it handles sharp automatically:
+`oa --update` no longer installs `libvips` or rebuilds `sharp` — it only keeps Node.js and OpenClaw at the pinned, verified versions, and the pinned OpenClaw doesn't need `sharp`:
 
 ```bash
 oa --update && source ~/.bashrc
@@ -255,6 +290,8 @@ oa --update && source ~/.bashrc
 ```
 
 ## `openclaw update` fails with node-llama-cpp build error
+
+_Applies to installs before v1.1.0 — `openclaw update` is now blocked; use `oa --update`._
 
 ```
 [node-llama-cpp] Cloning ggml-org/llama.cpp (local bundle)

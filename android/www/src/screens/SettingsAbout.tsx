@@ -30,9 +30,9 @@ export function SettingsAbout() {
     }, 0)
 
     // Get runtime versions
-    const nodeV = bridge.callJson<{ stdout: string }>('runCommand', 'node -v 2>/dev/null')
-    const gitV = bridge.callJson<{ stdout: string }>('runCommand', 'git --version 2>/dev/null')
-    const oaV = bridge.callJson<{ stdout: string }>('runCommand', 'oa --version 2>/dev/null | head -1')
+    const nodeV = bridge.callJson<{ stdout: string }>('runCommand', 'nodeVersion')
+    const gitV = bridge.callJson<{ stdout: string }>('runCommand', 'gitVersion')
+    const oaV = bridge.callJson<{ stdout: string }>('runCommand', 'oaVersion')
     setScriptVersion(oaV?.stdout?.trim() || '—')
     setRuntimeInfo({
       'Node.js': nodeV?.stdout?.trim() || '—',

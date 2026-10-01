@@ -21,6 +21,22 @@ class CommandRunnerTest {
     }
 
     @Test
+    fun `runExecutable does not interpret shell metacharacters`() {
+        val marker = File(tempDir, "marker")
+        val result =
+            CommandRunner.runExecutable(
+                "printf",
+                listOf("hello; touch ${marker.absolutePath}"),
+                env,
+                tempDir,
+            )
+
+        assertEquals(0, result.exitCode)
+        assertEquals("hello; touch ${marker.absolutePath}", result.stdout)
+        assertTrue(!marker.exists())
+    }
+
+    @Test
     fun `runSync returns non-zero exit code for failing command`() {
         val result = CommandRunner.runSync("exit 42", env, tempDir)
         assertEquals(42, result.exitCode)

@@ -159,8 +159,11 @@ install_deb() {
     fi
 
     # Relocate: data/data/com.termux/files/usr/* → $PREFIX/
+    # --remove-destination replaces an existing file with a new inode instead of
+    # truncating and rewriting it in place, so a process that has the old file open
+    # or mapped keeps reading the old content (dpkg also gives a replaced file a new inode).
     if [ -d "$EXTRACT_DIR/$TERMUX_INNER" ]; then
-        cp -a "$EXTRACT_DIR/$TERMUX_INNER/"* "$PREFIX/" 2>/dev/null || true
+        cp -a --remove-destination "$EXTRACT_DIR/$TERMUX_INNER/"* "$PREFIX/" 2>/dev/null || true
     fi
     rm -rf "$EXTRACT_DIR"
 }
@@ -249,6 +252,37 @@ get_deb_filename() {
         /^Package: / { found = ($2 == pkg) }
         found && /^Filename:/ { print $2; exit }
     ' "$PACKAGES_FILE"
+}
+
+# Print the packages $1 depends on, one per line (version constraints dropped,
+# first alternative of "a | b")
+get_deb_depends() {
+    local pkg="$1"
+    awk -v pkg="$pkg" '
+        /^Package: / { found = ($2 == pkg) }
+        found && /^Depends:/ {
+            sub(/^Depends: /, "")
+            n = split($0, parts, / *, */)
+            for (i = 1; i <= n; i++) {
+                d = parts[i]
+                sub(/ *\|.*/, "", d)
+                sub(/ *\(.*/, "", d)
+                gsub(/ /, "", d)
+                if (d != "") print d
+            }
+            exit
+        }
+    ' "$PACKAGES_FILE"
+}
+
+# True if the bootstrap's dpkg database lists package $1 as installed
+dpkg_has() {
+    local pkg="$1"
+    awk -v pkg="$pkg" '
+        /^Package: / { found = ($2 == pkg) }
+        found && /^Status: / { if ($0 ~ / installed$/) ok = 1; exit }
+        END { exit !ok }
+    ' "$PREFIX/var/lib/dpkg/status" 2>/dev/null
 }
 
 # Packages to install via dpkg-deb (dependency order, only those missing from bootstrap)
@@ -520,10 +554,11 @@ else
 [ -n "\$LD_PRELOAD" ] && export _OA_ORIG_LD_PRELOAD="\$LD_PRELOAD"
 unset LD_PRELOAD
 export _OA_WRAPPER_PATH="$BIN_DIR/node"
-_OA_COMPAT="\$HOME/.openclaw-android/patches/glibc-compat.js"
+_OA_COMPAT="\$HOME/.openclaw-android/lib/glibc-compat.js"
+[ -s "\$_OA_COMPAT" ] || _OA_COMPAT="\$HOME/.openclaw-android/patches/glibc-compat.js"
 if [ -f "\$_OA_COMPAT" ]; then
     case "\${NODE_OPTIONS:-}" in
-        *"\$_OA_COMPAT"*) ;;
+        *glibc-compat.js*) ;;
         *) export NODE_OPTIONS="\${NODE_OPTIONS:+\$NODE_OPTIONS }-r \$_OA_COMPAT" ;;
     esac
 fi
@@ -828,15 +863,30 @@ command -v python &>/dev/null && { python -c "import yaml" 2>/dev/null || pip in
 # ─── [5/7] Patches ──────────────────────────
 echo -e "▸ ${YELLOW}[5/7]${NC} Applying patches..."
 
-# Copy glibc-compat.js from project (bundled alongside this script)
+# glibc-compat.js — the node wrapper reads lib/glibc-compat.js, a directory the
+# Android app never writes (the app overwrites patches/glibc-compat.js with its
+# bundled copy on every APK upgrade). patches/ keeps a copy for the app and for
+# older wrappers.
+mkdir -p "$OCA_DIR/lib" "$OCA_DIR/patches"
 COMPAT_SRC="$(dirname "$0")/glibc-compat.js"
+COMPAT_TMP="$OCA_DIR/lib/glibc-compat.js.tmp"
 if [ -f "$COMPAT_SRC" ]; then
-    cp "$COMPAT_SRC" "$OCA_DIR/patches/glibc-compat.js"
+    cp "$COMPAT_SRC" "$COMPAT_TMP" || rm -f "$COMPAT_TMP"
 else
     # Fallback: download from repo
     curl -fsSL "$REPO_BASE/patches/glibc-compat.js" \
-        -o "$OCA_DIR/patches/glibc-compat.js" 2>/dev/null || true
+        -o "$COMPAT_TMP" 2>/dev/null || rm -f "$COMPAT_TMP"
 fi
+if [ -s "$COMPAT_TMP" ]; then
+    mv -f "$COMPAT_TMP" "$OCA_DIR/lib/glibc-compat.js"
+    cp "$OCA_DIR/lib/glibc-compat.js" "$OCA_DIR/patches/glibc-compat.js"
+elif [ ! -s "$OCA_DIR/lib/glibc-compat.js" ] && [ -s "$OCA_DIR/patches/glibc-compat.js" ]; then
+    # Download failed and lib/ has none yet: use the copy the app bundled
+    # (what the wrapper used before). An existing lib/ copy is never replaced by it.
+    cp "$OCA_DIR/patches/glibc-compat.js" "$OCA_DIR/lib/glibc-compat.js"
+    echo -e "  ${YELLOW}[WARN]${NC} Could not download glibc-compat.js — using the bundled copy. Run 'oa --update' later."
+fi
+rm -f "$COMPAT_TMP"
 
 # systemctl stub
 printf '#!%s/bin/bash\nexit 0\n' "$PREFIX" > "$PREFIX/bin/systemctl"
@@ -904,30 +954,45 @@ if [ -f "$TOOL_CONF" ]; then
     if $HAS_TOOLS; then
         echo -e "▸ ${YELLOW}[7/7]${NC} Installing optional tools..."
 
-        # Helper: install .deb with direct dependencies
+        # Packages handled so far / that failed, space-delimited (guard against cycles
+        # and repeats; a package that failed stays failed for every later dependent)
+        DEB_SEEN=" "
+        DEB_FAILED=" "
+
+        # Helper: install a .deb after all of its dependencies, recursively.
+        # Packages already listed as installed in the bootstrap's dpkg status are
+        # neither extracted nor followed: the tool runs against the bootstrap's copies
+        # of them, and the closure does not grow into base packages.
+        # Fails if the package or any dependency could not be installed.
         install_with_deps() {
             local pkg="$1"
-            local deps
-            deps=$(awk -v pkg="$pkg" '
-                /^Package: / { found = ($2 == pkg) }
-                found && /^Depends:/ {
-                    gsub(/^Depends: /, "")
-                    gsub(/ *\([^)]*\)/, "")
-                    gsub(/, /, "\n")
-                    print; exit
-                }
-            ' "$PACKAGES_FILE")
-            while IFS= read -r dep; do
-                dep=$(echo "$dep" | tr -d ' ')
-                [ -z "$dep" ] && continue
-                local dep_file
-                dep_file=$(get_deb_filename "$dep")
-                if [ -n "$dep_file" ]; then install_deb "$dep_file" 2>/dev/null || true; fi
-            done <<< "$deps"
+            case "$DEB_FAILED" in *" $pkg "*) return 1 ;; esac
+            case "$DEB_SEEN" in *" $pkg "*) return 0 ;; esac
+            DEB_SEEN="$DEB_SEEN$pkg "
+
             local filename
             filename=$(get_deb_filename "$pkg")
-            [ -n "$filename" ] || return 1
-            install_deb "$filename"
+            if [ -z "$filename" ]; then
+                DEB_FAILED="$DEB_FAILED$pkg "
+                return 1
+            fi
+
+            local deps dep rc=0
+            deps=$(get_deb_depends "$pkg")
+            while IFS= read -r dep; do
+                [ -z "$dep" ] && continue
+                dpkg_has "$dep" && continue
+                # Not in the index = virtual package: nothing to install
+                [ -n "$(get_deb_filename "$dep")" ] || continue
+                if ! install_with_deps "$dep"; then
+                    echo -e "    ${YELLOW}[WARN]${NC} dependency $dep of $pkg could not be installed"
+                    rc=1
+                fi
+            done <<< "$deps"
+
+            install_deb "$filename" || rc=1
+            [ "$rc" -eq 0 ] || DEB_FAILED="$DEB_FAILED$pkg "
+            return $rc
         }
 
         # Termux packages

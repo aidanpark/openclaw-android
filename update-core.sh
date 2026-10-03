@@ -9,7 +9,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.1.0"
+OA_VERSION="1.1.1"
 
 echo ""
 echo -e "${BOLD}========================================${NC}"
@@ -368,3 +368,22 @@ echo ""
 echo -e "${YELLOW}Run this to apply changes to the current session:${NC}"
 echo ""
 echo "  source ~/.bashrc"
+
+# A gateway that was already running keeps the runtime it started with (the old
+# node wrapper's options), so it does not benefit from this update until it is
+# restarted. We never restart it ourselves (it belongs to the user's session or
+# the app). Detection is best-effort: if it fails, only this notice is skipped.
+_gw_running=false
+if command -v pgrep &>/dev/null; then
+    # Trust pgrep when it exists (a port answer could be another install's gateway)
+    if pgrep -f 'openclaw.*gateway' &>/dev/null; then
+        _gw_running=true
+    fi
+elif curl -s --noproxy '*' --max-time 2 -o /dev/null "http://127.0.0.1:18789/" 2>/dev/null; then
+    _gw_running=true
+fi
+if [ "$_gw_running" = true ]; then
+    echo ""
+    echo -e "${YELLOW}The OpenClaw gateway may still be using the previous runtime.${NC}"
+    echo "  Restart the gateway to use the updated runtime: stop it and run 'openclaw gateway' again (or restart the app)."
+fi

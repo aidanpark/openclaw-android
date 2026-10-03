@@ -212,6 +212,8 @@ This single command updates all installed components at once:
 
 Already up-to-date components are skipped. Components you haven't installed are not touched — only what's already on your device gets updated. Safe to run multiple times.
 
+If the gateway was running during the update, restart it afterwards (stop it and run `openclaw gateway` again, or restart the app) so it picks up the updated runtime.
+
 **Note**: `openclaw update` (and `openclaw --update`) is intentionally blocked — a guard keeps OpenClaw pinned to the version verified by this project. The gateway may still print something like `update available … Run: openclaw update`; use `oa --update` instead. `openclaw update status` (read-only) still works.
 
 > If the `oa` command is not available (older installations), run it with curl:
@@ -478,7 +480,7 @@ Delegates to the platform's own install script. For OpenClaw, this:
 
 1. Sets `CPATH` for glib-2.0 headers (needed for native module builds)
 2. Installs PyYAML via pip (for `.skill` packaging)
-3. Copies `glibc-compat.js` to `~/.openclaw-android/patches/`
+3. Copies `glibc-compat.js` to `~/.openclaw-android/patches/` (the Node.js wrapper loads its own copy from `~/.openclaw-android/lib/`, installed with Node.js — the app never overwrites that one)
 4. Installs `systemctl` stub to `$PREFIX/bin/`
 5. Runs `npm install -g openclaw@2026.7.35 --ignore-scripts` (the pinned version in `config.env`)
 6. Runs OpenClaw's own postinstall script (`postinstall-bundled-plugins.mjs`), which `--ignore-scripts` skipped
@@ -518,7 +520,7 @@ Runs a two-tier verification:
 | npm | `npm` command exists |
 | TMPDIR | Environment variable is set |
 | OA_GLIBC | Set to `1` |
-| glibc-compat.js | File exists in `~/.openclaw-android/patches/` |
+| glibc-compat.js | File exists in `~/.openclaw-android/lib/` (the copy the Node.js wrapper loads; falls back to `patches/`) |
 | .glibc-arch | Marker file exists |
 | glibc dynamic linker | `ld-linux-aarch64.so.1` exists |
 | glibc node wrapper | Wrapper script at `~/.openclaw-android/bin/node` |

@@ -184,18 +184,18 @@ fi
 # ─────────────────────────────────────────────────
 echo "--- Axis 8: glibc-compat.js integrity ---"
 
-COMPAT="$HOME/.openclaw-android/patches/glibc-compat.js"
-if [ -f "$COMPAT" ]; then
-    pass "8a: glibc-compat.js exists"
+COMPAT="$HOME/.openclaw-android/lib/glibc-compat.js"
+if [ -s "$COMPAT" ]; then
+    pass "8a: glibc-compat.js exists (lib/)"
 else
-    fail "8a: glibc-compat.js missing"
+    fail "8a: glibc-compat.js missing in lib/ (the wrapper falls back to patches/, which the app overwrites)"
 fi
 
 NODE_OPTS=$(node -e "process.stdout.write(process.env.NODE_OPTIONS||'')" 2>/dev/null)
-if echo "$NODE_OPTS" | grep -q "glibc-compat.js"; then
-    pass "8b: NODE_OPTIONS includes glibc-compat.js"
+if echo "$NODE_OPTS" | grep -qF "$COMPAT"; then
+    pass "8b: NODE_OPTIONS loads lib/glibc-compat.js"
 else
-    fail "8b: glibc-compat.js not in NODE_OPTIONS ($NODE_OPTS)"
+    fail "8b: lib/glibc-compat.js not in NODE_OPTIONS ($NODE_OPTS)"
 fi
 
 # ─────────────────────────────────────────────────

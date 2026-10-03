@@ -71,9 +71,11 @@ else
     check_fail "OA_GLIBC not set"
 fi
 
-COMPAT_FILE="$PROJECT_DIR/patches/glibc-compat.js"
-if [ -f "$COMPAT_FILE" ]; then
-    check_pass "glibc-compat.js exists"
+# The node wrapper reads lib/ first; patches/ is only its fallback (and the
+# Android app overwrites that copy on APK upgrades).
+COMPAT_FILE="$PROJECT_DIR/lib/glibc-compat.js"
+if [ -s "$COMPAT_FILE" ]; then
+    check_pass "glibc-compat.js exists (lib/)"
 else
     check_fail "glibc-compat.js not found at $COMPAT_FILE"
 fi

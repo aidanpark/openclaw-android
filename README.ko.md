@@ -212,6 +212,8 @@ oa --update && source ~/.bashrc
 
 이미 최신인 컴포넌트는 스킵됩니다. 설치하지 않은 컴포넌트는 건드리지 않고 — 기기에 이미 설치된 것만 업데이트합니다. 여러 번 실행해도 안전합니다.
 
+업데이트 중에 게이트웨이가 실행 중이었다면, 업데이트 뒤 다시 시작하세요(멈춘 뒤 `openclaw gateway` 를 다시 실행하거나 앱을 다시 시작) — 그래야 업데이트된 런타임을 사용합니다.
+
 **참고**: `openclaw update`(및 `openclaw --update`)는 의도적으로 차단되어 있습니다 — 이 프로젝트가 검증한 버전에 OpenClaw을 고정하는 가드가 설치되어 있기 때문입니다. 게이트웨이가 `update available … Run: openclaw update` 같은 메시지를 계속 출력할 수 있지만, 해당 명령어는 차단됩니다. 대신 `oa --update`를 사용하세요. `openclaw update status`(읽기 전용)는 계속 동작합니다.
 
 > `oa` 명령어가 없는 경우 (이전 설치 사용자), curl로 실행:
@@ -476,7 +478,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 
 1. `CPATH`를 glib-2.0 헤더용으로 설정 (네이티브 모듈 빌드에 필요)
 2. pip으로 PyYAML 설치 (`.skill` 패키징용)
-3. `glibc-compat.js`를 `~/.openclaw-android/patches/`에 복사
+3. `glibc-compat.js`를 `~/.openclaw-android/patches/`에 복사 (Node.js 래퍼는 Node.js 설치 때 함께 들어가는 `~/.openclaw-android/lib/` 사본을 읽습니다 — 앱이 덮어쓰지 않는 위치)
 4. `systemctl` 스텅을 `$PREFIX/bin/`에 설치
 5. `npm install -g openclaw@2026.7.35 --ignore-scripts` 실행 (`config.env`에 고정된 버전)
 6. `--ignore-scripts`로 건너뛴 OpenClaw 자체 postinstall 스크립트(`postinstall-bundled-plugins.mjs`) 실행
@@ -516,7 +518,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 | npm | `npm` 명령어 존재 |
 | TMPDIR | 환경변수 설정됨 |
 | OA_GLIBC | `1`로 설정됨 |
-| glibc-compat.js | `~/.openclaw-android/patches/`에 파일 존재 |
+| glibc-compat.js | `~/.openclaw-android/lib/`에 파일 존재 (Node.js 래퍼가 읽는 사본 · 없으면 `patches/`) |
 | .glibc-arch | 마커 파일 존재 |
 | glibc 동적 링커 | `ld-linux-aarch64.so.1` 존재 |
 | glibc node 래퍼 | `~/.openclaw-android/bin/node`에 래퍼 스크립트 존재 |

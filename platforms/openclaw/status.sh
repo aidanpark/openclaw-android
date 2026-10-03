@@ -77,8 +77,11 @@ fi
 
 echo ""
 echo -e "${BOLD}glibc Components${NC}"
+# The node wrapper reads lib/glibc-compat.js first; patches/ is the fallback (app, older wrappers)
+COMPAT_JS="$PROJECT_DIR/lib/glibc-compat.js"
+[ -f "$COMPAT_JS" ] || COMPAT_JS="$PROJECT_DIR/patches/glibc-compat.js"
 GLIBC_FILES=(
-    "$PROJECT_DIR/patches/glibc-compat.js"
+    "$COMPAT_JS"
     "$PROJECT_DIR/.glibc-arch"
     "${PREFIX:-}/glibc/lib/ld-linux-aarch64.so.1"
 )

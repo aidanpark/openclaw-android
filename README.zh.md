@@ -217,6 +217,8 @@ oa --update && source ~/.bashrc
 
 已是最新的组件会被跳过。未安装的组件不会被触及——只更新设备上已有的内容。可以多次安全运行。
 
+如果更新时网关正在运行，请在更新后重新启动它（停止后重新运行 `openclaw gateway`，或重启应用），以使用更新后的运行时。
+
 **注意**：`openclaw update`（以及 `openclaw --update`）被有意阻止——本项目安装了一个守卫，将 OpenClaw 锁定在已验证的版本上。网关可能仍会打印类似 `update available … Run: openclaw update` 的提示，但该命令会被阻止。请改用 `oa --update`。只读的 `openclaw update status` 仍然可用。
 
 > 如果 `oa` 命令不可用（旧版安装），请使用 curl 运行：
@@ -483,7 +485,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 
 1. 设置 `CPATH` 以获取 glib-2.0 头文件（原生模块构建所需）
 2. 通过 pip 安装 PyYAML（`.skill` 打包所需）
-3. 将 `glibc-compat.js` 复制到 `~/.openclaw-android/patches/`
+3. 将 `glibc-compat.js` 复制到 `~/.openclaw-android/patches/`（Node.js 包装脚本读取随 Node.js 一起安装在 `~/.openclaw-android/lib/` 的副本——应用不会覆盖该位置）
 4. 安装 `systemctl` 桩到 `$PREFIX/bin/`
 5. 运行 `npm install -g openclaw@2026.7.35 --ignore-scripts`（`config.env` 中锁定的版本）
 6. 运行 OpenClaw 自身的 postinstall 脚本（`postinstall-bundled-plugins.mjs`），该脚本被 `--ignore-scripts` 跳过
@@ -523,7 +525,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 | npm | `npm` 命令存在 |
 | TMPDIR | 环境变量已设置 |
 | OA_GLIBC | 设为 `1` |
-| glibc-compat.js | 文件存在于 `~/.openclaw-android/patches/` |
+| glibc-compat.js | 文件存在于 `~/.openclaw-android/lib/`（Node.js 包装脚本读取的副本；不存在时使用 `patches/`） |
 | .glibc-arch | 标记文件存在 |
 | glibc 动态链接器 | `ld-linux-aarch64.so.1` 存在 |
 | glibc node 包装器 | 包装脚本位于 `~/.openclaw-android/bin/node` |

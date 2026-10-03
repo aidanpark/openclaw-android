@@ -78,15 +78,17 @@ fi
 # glibc-compat.js is auto-loaded to fix Android kernel quirks (os.cpus() returns 0,
 # os.networkInterfaces() throws EACCES) that affect native module builds and runtime.
 write_node_wrapper() {
+    _WRAPPER_CHANGED=true
     cat > "$BIN_DIR/node.tmp" << WRAPPER
 #!${PREFIX}/bin/bash
 [ -n "\$LD_PRELOAD" ] && export _OA_ORIG_LD_PRELOAD="\$LD_PRELOAD"
 unset LD_PRELOAD
 export _OA_WRAPPER_PATH="$BIN_DIR/node"
-_OA_COMPAT="\$HOME/.openclaw-android/patches/glibc-compat.js"
+_OA_COMPAT="\$HOME/.openclaw-android/lib/glibc-compat.js"
+[ -s "\$_OA_COMPAT" ] || _OA_COMPAT="\$HOME/.openclaw-android/patches/glibc-compat.js"
 if [ -f "\$_OA_COMPAT" ]; then
     case "\${NODE_OPTIONS:-}" in
-        *"\$_OA_COMPAT"*) ;;
+        *glibc-compat.js*) ;;
         *) export NODE_OPTIONS="\${NODE_OPTIONS:+\$NODE_OPTIONS }-r \$_OA_COMPAT" ;;
     esac
 fi
@@ -107,7 +109,40 @@ fi
 exec "$GLIBC_LDSO" --library-path "$PREFIX/glibc/lib" "$NODE_DIR/bin/node.real" "\$@"
 WRAPPER
     chmod +x "$BIN_DIR/node.tmp"
+    # --if-changed: leave an identical wrapper alone (sets _WRAPPER_CHANGED=false).
+    # Never signal "unchanged" through the return code: callers must run this as a
+    # plain command (not in if/||/&&), or set -e is off inside it and a failed
+    # write could be moved over the working wrapper.
+    if [ "${1:-}" = "--if-changed" ] && cmp -s "$BIN_DIR/node.tmp" "$BIN_DIR/node"; then
+        rm -f "$BIN_DIR/node.tmp"
+        _WRAPPER_CHANGED=false
+        return 0
+    fi
     mv -f "$BIN_DIR/node.tmp" "$BIN_DIR/node"
+}
+
+# glibc-compat.js lives in its own directory (lib/) that the Android app never
+# writes. The app overwrites patches/glibc-compat.js with its bundled copy on
+# every APK upgrade, so the node wrapper reads lib/ first and only falls back
+# to patches/ when lib/ has no copy. Safe to call repeatedly.
+install_compat_shim() {
+    local src dest
+    src="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/patches/glibc-compat.js"
+    dest="$OPENCLAW_DIR/lib/glibc-compat.js"
+    if [ ! -s "$src" ]; then
+        echo -e "${YELLOW}[WARN]${NC} glibc-compat.js not found next to this script — lib/ left as it is"
+        return 0
+    fi
+    if [ -s "$dest" ] && cmp -s "$src" "$dest"; then
+        return 0
+    fi
+    if mkdir -p "$OPENCLAW_DIR/lib" && cp "$src" "$dest.tmp" && mv -f "$dest.tmp" "$dest"; then
+        echo -e "${GREEN}[OK]${NC}   glibc-compat.js installed to $dest"
+    else
+        rm -f "$dest.tmp"
+        echo -e "${YELLOW}[WARN]${NC} Could not install glibc-compat.js to lib/ — lib/ left as it is"
+    fi
+    return 0
 }
 
 # npm/npx wrappers + corepack shebang. Sets _WROTE_NPM=true if anything was
@@ -186,6 +221,10 @@ NPXWRAP
     fi
 }
 
+# The wrapper (written below) loads this copy. Install it before anything that
+# can exit early (SKIP path, a failed Node.js download).
+install_compat_shim
+
 # ── Recover an unfinished swap ────────────────
 # NODE_OLD exists only until the new install is verified (on success it is
 # renamed to NODE_TRASH before deletion). If it is still here, a previous run
@@ -226,6 +265,13 @@ if [ "$INSTALLED_VER" = "$NODE_VERSION" ]; then
         fi
         if [ -f "$NODE_DIR/bin/node.real" ]; then
             write_node_wrapper
+            _any_fixed=true
+        fi
+    elif [ -f "$NODE_DIR/bin/node.real" ]; then
+        # Wrapper content can change without a Node.js version change
+        # (e.g. it now reads lib/glibc-compat.js) — replace an outdated one.
+        write_node_wrapper --if-changed
+        if [ "$_WRAPPER_CHANGED" = true ]; then
             _any_fixed=true
         fi
     fi

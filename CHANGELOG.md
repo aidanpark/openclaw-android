@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.1.1] - 2026-10-03
+
+### Fixed
+
+- Fix `openclaw` commands failing with `ld-linux-aarch64.so.1: unrecognized option …` after reopening the Claw app — the app replaced `~/.openclaw-android/patches/glibc-compat.js` with an older copy bundled in the APK. The Node.js wrapper now loads its own copy from `~/.openclaw-android/lib/`, which the app never touches, and `oa --update` refreshes an outdated wrapper so existing v1.1.0 installs are covered after one update.
+- Fix ttyd failing to start (`libandroid-spawn.so not found`) when installed from the Claw app — missing transitive dependencies are now resolved (applies to new app installs).
+- Fix the Claw app setup crashing at the end (`Segmentation fault`, onboarding never starts) when optional tools such as tmux were selected — library files were truncated in place while the running shell had them mapped. App Install now replaces files instead of overwriting them in place, and skips packages the app already ships.
+
+### Changed
+
+- `oa --update` reminds you to restart a running gateway so it uses the updated runtime.
+
 ## [Script v1.1.0] - 2026-09-30
 
 ### Fixed

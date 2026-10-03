@@ -1,6 +1,6 @@
 # OpenClaw on Android
 
-[English](README.md) | [中文](README.zh.md)
+[English](README.md) | [中文](README.zh.md) | [日本語](README.ja.md)
 
 <img src="docs/images/openclaw_android.jpg" alt="OpenClaw on Android">
 

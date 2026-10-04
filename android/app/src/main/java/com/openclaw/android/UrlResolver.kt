@@ -26,10 +26,16 @@ class UrlResolver(
         )
     private val gson = Gson()
 
-    suspend fun getBootstrapUrl(): String {
+    suspend fun getBootstrapComponent(): ComponentConfig {
         val config = loadConfig()
-        return config?.bootstrap?.url ?: BuildConfig.BOOTSTRAP_URL
+        return config?.bootstrap ?: ComponentConfig(
+            url = BuildConfig.BOOTSTRAP_URL,
+            version = BuildConfig.BOOTSTRAP_VERSION,
+            sha256 = BuildConfig.BOOTSTRAP_SHA256,
+        )
     }
+
+    suspend fun getBootstrapUrl(): String = getBootstrapComponent().url
 
     suspend fun getWwwUrl(): String {
         val config = loadConfig()

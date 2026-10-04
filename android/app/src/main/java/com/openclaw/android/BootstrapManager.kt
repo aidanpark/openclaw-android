@@ -3,6 +3,7 @@ package com.openclaw.android
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.Closeable
 import java.io.File
 import java.io.InputStream
 import java.net.URL
@@ -77,11 +78,13 @@ class BootstrapManager(
 
             // Step 1: Download or extract bootstrap
             onProgress(PROGRESS_PREPARING, "Preparing bootstrap...")
-            val zipStream = getBootstrapStream(onProgress)
+            val bootstrapArchive = getBootstrapArchive(onProgress)
 
             // Step 2: Extract bootstrap
             onProgress(PROGRESS_EXTRACTING, "Extracting bootstrap...")
-            extractBootstrap(zipStream)
+            bootstrapArchive.use { archive ->
+                extractBootstrap(archive.inputStream)
+            }
 
             // Step 3: Fix paths and configure
             onProgress(PROGRESS_CONFIGURING, "Configuring environment...")
@@ -100,17 +103,39 @@ class BootstrapManager(
 
     // --- Bootstrap source ---
 
-    private suspend fun getBootstrapStream(onProgress: (Float, String) -> Unit): InputStream {
+    private suspend fun getBootstrapArchive(onProgress: (Float, String) -> Unit): BootstrapArchive {
         // Phase 0: Try assets first
         try {
-            return context.assets.open("bootstrap-aarch64.zip")
+            return BootstrapArchive(context.assets.open("bootstrap-aarch64.zip"))
         } catch (_: Exception) {
             // Phase 1: Download from network
         }
 
         onProgress(PROGRESS_DOWNLOADING, "Downloading bootstrap...")
-        val url = UrlResolver(context).getBootstrapUrl()
-        return URL(url).openStream()
+        val component = UrlResolver(context).getBootstrapComponent()
+        val archive = downloadVerifiedBootstrap(component)
+        return BootstrapArchive(archive.inputStream(), archive)
+    }
+
+    private fun downloadVerifiedBootstrap(component: UrlResolver.ComponentConfig): File {
+        val version = BootstrapSecurity.requireVersion(component.version)
+        val expectedSha256 = BootstrapSecurity.requireSha256(component.sha256)
+        val archive = File(context.cacheDir, "bootstrap-aarch64.zip")
+        archive.delete()
+
+        try {
+            URL(component.url).openStream().use { input ->
+                archive.outputStream().use { output -> input.copyTo(output) }
+            }
+            val actualSha256 = BootstrapSecurity.sha256Hex(archive)
+            if (actualSha256 != expectedSha256) {
+                throw SecurityException("Bootstrap SHA-256 mismatch for version $version")
+            }
+            return archive
+        } catch (e: Exception) {
+            archive.delete()
+            throw e
+        }
     }
 
     // --- Extraction ---
@@ -136,7 +161,7 @@ class BootstrapManager(
         if (entry.name == "SYMLINKS.txt") {
             processSymlinks(zip, stagingDir)
         } else if (!entry.isDirectory) {
-            val file = File(stagingDir, entry.name)
+            val file = BootstrapSecurity.resolveInsideDirectory(stagingDir, entry.name)
             file.parentFile?.mkdirs()
             file.outputStream().use { out -> zip.copyTo(out) }
             markExecutableIfNeeded(file, entry.name)
@@ -191,7 +216,7 @@ class BootstrapManager(
             }.forEach { parts ->
                 val symlinkTarget = parts[0].trim().replace("com.termux", ourPackage)
                 val symlinkPath = parts[1].trim()
-                val linkFile = File(targetDir, symlinkPath)
+                val linkFile = BootstrapSecurity.resolveInsideDirectory(targetDir, symlinkPath)
                 linkFile.parentFile?.mkdirs()
                 try {
                     Os.symlink(symlinkTarget, linkFile.absolutePath)
@@ -453,6 +478,16 @@ exit ${d}_rc
             AppLogger.i(TAG, "oa CLI installed at ${oaBin.absolutePath}")
         } catch (e: Exception) {
             AppLogger.w(TAG, "Failed to install oa CLI", e)
+        }
+    }
+
+    private data class BootstrapArchive(
+        val inputStream: InputStream,
+        val temporaryFile: File? = null,
+    ) : Closeable {
+        override fun close() {
+            inputStream.close()
+            temporaryFile?.delete()
         }
     }
 }

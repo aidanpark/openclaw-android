@@ -33,6 +33,16 @@ android {
         )
         buildConfigField(
             "String",
+            "BOOTSTRAP_VERSION",
+            "\"2026.02.12-r1+apt.android-7\"",
+        )
+        buildConfigField(
+            "String",
+            "BOOTSTRAP_SHA256",
+            "\"ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3\"",
+        )
+        buildConfigField(
+            "String",
             "WWW_URL",
             "\"https://github.com/AidanPark/openclaw-android-app/releases/download/v1.0.0/www.zip\"",
         )

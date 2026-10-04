@@ -112,7 +112,7 @@ export const en = {
   // Settings - Updates
   updates_title: 'Updates',
   updates_checking: 'Checking for updates...',
-  updates_up_to_date: 'Everything is up to date.',
+  updates_up_to_date: 'No separate updates. The app itself is updated by new releases — see Settings → About.',
   updates_updating: 'Updating {name}...',
   updates_update: 'Update',
 
@@ -121,4 +121,17 @@ export const en = {
   platforms_installing: 'Installing {name}...',
   platforms_active: 'Active',
   platforms_install: 'Install & Switch',
+
+  // Setup - failure
+  setup_failed_title: 'Setup could not finish',
+  setup_err_network: 'Could not reach the download servers. Check your connection and try again.',
+  setup_err_missing: 'The setup file is no longer available at its download address. Update the app and try again.',
+  setup_err_hash: 'The downloaded file did not match its expected checksum (it may have been tampered with or replaced). Setup was stopped.',
+  setup_err_local: 'The download could not be saved (storage full or unexpectedly large). Free some space and try again.',
+  setup_err_unknown: 'Something went wrong during setup. Try again.',
+  setup_retry: 'Try again',
+
+  // Unexpected UI error
+  error_boundary_title: 'Something went wrong',
+  error_boundary_reload: 'Reload',
 }

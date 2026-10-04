@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withPermit
 
 /**
  * WebView → Kotlin bridge via @JavascriptInterface (§2.6).
@@ -30,8 +31,8 @@ class JsBridge(
 
     companion object {
         private const val TAG = "JsBridge"
+
         private const val SHELL_INIT_DELAY_MS = 500L
-        private const val PLATFORM_LIST_TIMEOUT_MS = 10_000L
         private const val API_TIMEOUT_MS = 5000
         private const val PROGRESS_START = 0f
         private const val PROGRESS_HALF = 0.5f
@@ -137,15 +138,37 @@ class JsBridge(
 
     @JavascriptInterface
     fun startSetup() {
+        // A second tap or a retry racing the first would run two installs over the same prefix
+        if (!SetupGuard.tryStart()) {
+            AppLogger.w(TAG, "startSetup ignored: an install is already running")
+            return
+        }
         launchWithErrorHandling(
             errorEventType = "setup_progress",
-            errorContext = mapOf("progress" to PROGRESS_START),
+            errorContext = mapOf("progress" to PROGRESS_START, "errorKind" to "UNKNOWN"),
         ) {
-            bootstrapManager.startSetup { progress, message ->
+            try {
+                bootstrapManager.startSetup { progress, message ->
+                    eventBridge.emit(
+                        "setup_progress",
+                        mapOf("progress" to progress, "message" to message),
+                    )
+                }
+            } catch (e: BootstrapDownloadException) {
+                // Expected refusals (network, missing file, checksum): the WebView shows a
+                // translated message for errorKind; `usr` was not touched, so retrying is safe
+                AppLogger.w(TAG, "Bootstrap download refused: ${e.kind}", e)
                 eventBridge.emit(
                     "setup_progress",
-                    mapOf("progress" to progress, "message" to message),
+                    mapOf(
+                        "progress" to PROGRESS_START,
+                        "error" to (e.message ?: e.kind.name),
+                        "errorKind" to e.kind.name,
+                        "message" to (e.message ?: e.kind.name),
+                    ),
                 )
+            } finally {
+                SetupGuard.finish()
             }
         }
     }
@@ -185,20 +208,6 @@ class JsBridge(
                 ),
             ),
         )
-    }
-
-    @JavascriptInterface
-    fun getInstalledPlatforms(): String {
-        // Check which platforms are installed via npm/filesystem
-        val env = EnvironmentBuilder.build(activity)
-        val result =
-            CommandRunner.runSync(
-                "npm list -g --depth=0 --json 2>/dev/null",
-                env,
-                bootstrapManager.prefixDir,
-                timeoutMs = PLATFORM_LIST_TIMEOUT_MS,
-            )
-        return result.stdout.ifBlank { "[]" }
     }
 
     /**
@@ -416,56 +425,66 @@ class JsBridge(
     // Commands domain
     // ═══════════════════════════════════════════
 
-    /** Run one of the fixed version probes by ID (see [BridgeGuard.versionCommands]). */
+    /**
+     * Run one of the fixed version probes by ID (see [BridgeGuard.versionCommands]) without
+     * blocking the WebView: the result comes back as one `command_result` event carrying
+     * [callbackId]. A synchronous call here froze the page's JS for the whole run (a hung probe
+     * stalled it for seconds). At most [MAX_CONCURRENT_PROBES] run at once.
+     */
     @JavascriptInterface
-    fun runCommand(commandId: String): String {
-        val command = BridgeGuard.versionCommands[commandId] ?: return blockedCommandResult()
-        val env = probeEnvironment()
-        val result = CommandRunner.runExecutable(command.executable, command.args, env, bootstrapManager.homeDir)
-        val shown =
-            if (command.firstLineOnly) {
-                result.copy(
-                    stdout =
-                        result.stdout
-                            .lineSequence()
-                            .firstOrNull()
-                            .orEmpty(),
-                )
-            } else {
-                result
-            }
-        return gson.toJson(shown)
-    }
-
-    @JavascriptInterface
-    fun runCommandAsync(
+    fun runProbeAsync(
         callbackId: String,
         commandId: String,
     ) {
         val command = BridgeGuard.versionCommands[commandId]
         if (command == null) {
-            eventBridge.emit(
-                "command_output",
-                mapOf("callbackId" to callbackId, "data" to "Command is not allowed", "done" to true),
-            )
+            emitProbeResult(callbackId, commandId, CommandRunner.CommandResult(-1, "", "Command is not allowed"))
             return
         }
         launchWithErrorHandling(
-            errorEventType = "command_output",
-            errorContext = mapOf("callbackId" to callbackId, "done" to true),
+            errorEventType = "command_result",
+            errorContext = mapOf("callbackId" to callbackId, "commandId" to commandId, "exitCode" to -1),
         ) {
-            val env = probeEnvironment()
-            CommandRunner.streamExecutable(command.executable, command.args, env, bootstrapManager.homeDir) { output ->
-                eventBridge.emit(
-                    "command_output",
-                    mapOf("callbackId" to callbackId, "data" to output, "done" to false),
-                )
-            }
-            eventBridge.emit(
-                "command_output",
-                mapOf("callbackId" to callbackId, "data" to "", "done" to true),
-            )
+            val result =
+                ProbeLimiter.semaphore.withPermit {
+                    CommandRunner.runExecutable(
+                        command.executable,
+                        command.args,
+                        probeEnvironment(),
+                        bootstrapManager.homeDir,
+                    )
+                }
+            val shown =
+                if (command.firstLineOnly) {
+                    result.copy(
+                        stdout =
+                            result.stdout
+                                .lineSequence()
+                                .firstOrNull()
+                                .orEmpty(),
+                    )
+                } else {
+                    result
+                }
+            emitProbeResult(callbackId, commandId, shown)
         }
+    }
+
+    private fun emitProbeResult(
+        callbackId: String,
+        commandId: String,
+        result: CommandRunner.CommandResult,
+    ) {
+        eventBridge.emit(
+            "command_result",
+            mapOf(
+                "callbackId" to callbackId,
+                "commandId" to commandId,
+                "exitCode" to result.exitCode,
+                "stdout" to result.stdout,
+                "stderr" to result.stderr,
+            ),
+        )
     }
 
     /**
@@ -477,9 +496,6 @@ class JsBridge(
         val wrappers = "${bootstrapManager.homeDir.absolutePath}/.openclaw-android/bin"
         return env + ("PATH" to "${env["PATH"].orEmpty()}:$wrappers")
     }
-
-    private fun blockedCommandResult(): String =
-        gson.toJson(CommandRunner.CommandResult(exitCode = -1, stdout = "", stderr = "Command is not allowed"))
 
     // ═══════════════════════════════════════════
     // Updates domain
@@ -493,37 +509,45 @@ class JsBridge(
     @JavascriptInterface
     fun checkForUpdates(): String = gson.toJson(emptyList<Map<String, String>>())
 
+    /** Check GitHub for a newer app release without blocking the WebView; answers with an `apk_update_info` event. */
     @JavascriptInterface
-    fun getApkUpdateInfo(): String {
-        return try {
+    fun getApkUpdateInfoAsync(callbackId: String) {
+        launchWithErrorHandling(
+            errorEventType = "apk_update_info",
+            errorContext = mapOf("callbackId" to callbackId),
+        ) {
+            eventBridge.emit("apk_update_info", mapOf("callbackId" to callbackId) + fetchApkUpdateInfo())
+        }
+    }
+
+    private fun fetchApkUpdateInfo(): Map<String, Any?> =
+        try {
             val url = java.net.URL("https://api.github.com/repos/AidanPark/openclaw-android/releases/latest")
             val conn = url.openConnection() as java.net.HttpURLConnection
             conn.connectTimeout = API_TIMEOUT_MS
             conn.readTimeout = API_TIMEOUT_MS
             conn.setRequestProperty("Accept", "application/vnd.github+json")
-            val body = conn.inputStream.bufferedReader().readText()
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
             conn.disconnect()
             val release = gson.fromJson(body, Map::class.java) as? Map<*, *>
-            val tagName =
-                release?.get("tagName") as? String
-                    ?: release?.get("tag_name") as? String
-                    ?: return gson.toJson(mapOf("error" to "no tag"))
-            val latestVersion = tagName.trimStart('v')
-            val currentVersion =
-                activity.packageManager
-                    .getPackageInfo(activity.packageName, 0)
-                    .versionName ?: "0.0.0"
-            gson.toJson(
+            val tagName = release?.get("tagName") as? String ?: release?.get("tag_name") as? String
+            if (tagName == null) {
+                mapOf("error" to "no tag")
+            } else {
+                val latestVersion = tagName.trimStart('v')
+                val currentVersion =
+                    activity.packageManager
+                        .getPackageInfo(activity.packageName, 0)
+                        .versionName ?: "0.0.0"
                 mapOf(
                     "currentVersion" to currentVersion,
                     "latestVersion" to latestVersion,
                     "updateAvailable" to (compareVersions(latestVersion, currentVersion) > 0),
-                ),
-            )
+                )
+            }
         } catch (e: Exception) {
-            gson.toJson(mapOf("error" to e.message))
+            mapOf("error" to e.message)
         }
-    }
 
     @JavascriptInterface
     fun applyUpdate(component: String) {
@@ -595,8 +619,10 @@ class JsBridge(
         }
     }
 
+    /** Copy one of the app's fixed texts (see [BridgeGuard.clipboardTexts]) — the WebView names an ID, not the text. */
     @JavascriptInterface
-    fun copyToClipboard(text: String) {
+    fun copyText(textId: String) {
+        val text = BridgeGuard.clipboardTexts[textId] ?: return
         activity.runOnUiThread {
             val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw", text))
@@ -608,8 +634,8 @@ class JsBridge(
         val filesDir = activity.filesDir
         val totalSpace = filesDir.totalSpace
         val freeSpace = filesDir.freeSpace
-        val bootstrapSize = bootstrapManager.prefixDir.walkTopDown().sumOf { it.length() }
-        val wwwSize = bootstrapManager.wwwDir.walkTopDown().sumOf { it.length() }
+        val bootstrapSize = directorySize(bootstrapManager.prefixDir)
+        val wwwSize = directorySize(bootstrapManager.wwwDir)
 
         return gson.toJson(
             mapOf(
@@ -620,6 +646,30 @@ class JsBridge(
             ),
         )
     }
+
+    /**
+     * Total size of a tree without following directory symlinks (a link loop would never end).
+     * Only directories are checked — a per-file canonical lookup over tens of thousands of files
+     * would stall this synchronous call.
+     */
+    private fun directorySize(root: java.io.File): Long =
+        root
+            .walkTopDown()
+            .onEnter { dir -> dir == root || !isSymlink(dir) }
+            .filter { it.isFile }
+            .sumOf { it.length() }
+
+    /** One lstat call (no path resolution); false when the entry cannot be inspected. */
+    private fun isSymlink(file: java.io.File): Boolean =
+        try {
+            android.system.OsConstants.S_ISLNK(
+                android.system.Os
+                    .lstat(file.path)
+                    .st_mode,
+            )
+        } catch (_: android.system.ErrnoException) {
+            false
+        }
 
     @JavascriptInterface
     fun clearCache() {

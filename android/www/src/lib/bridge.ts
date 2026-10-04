@@ -16,7 +16,6 @@ interface OpenClawBridge {
   startSetup(): void
   saveToolSelections(json: string): void
   getAvailablePlatforms(): string
-  getInstalledPlatforms(): string
   installPlatform(id: string): void
   uninstallPlatform(id: string): void
   switchPlatform(id: string): void
@@ -25,16 +24,15 @@ interface OpenClawBridge {
   installTool(id: string): void
   uninstallTool(id: string): void
   isToolInstalled(id: string): string
-  runCommand(commandId: string): string
-  runCommandAsync(callbackId: string, commandId: string): void
+  runProbeAsync(callbackId: string, commandId: string): void
   checkForUpdates(): string
   applyUpdate(component: string): void
-  getApkUpdateInfo(): string
+  getApkUpdateInfoAsync(callbackId: string): void
   getAppInfo(): string
   getBatteryOptimizationStatus(): string
   requestBatteryOptimizationExclusion(): void
   openSystemSettings(page: string): void
-  copyToClipboard(text: string): void
+  copyText(textId: string): void
   getStorageInfo(): string
   clearCache(): void
   openUrl(url: string): void
@@ -78,4 +76,80 @@ export function callJson<T>(
   }
 }
 
-export const bridge = { isAvailable, call, callJson }
+export interface ProbeResult {
+  exitCode: number
+  stdout: string
+  stderr: string
+}
+
+export interface ApkUpdateInfo {
+  updateAvailable?: boolean
+  currentVersion?: string
+  latestVersion?: string
+  error?: string
+}
+
+// Native answers async requests with one event carrying our callbackId; a request that gets no
+// answer (page reloaded, bridge missing) resolves with `fallback` after `timeoutMs`.
+const pending = new Map<string, (detail: unknown) => void>()
+const listening = new Set<string>()
+let sequence = 0
+// A reloaded page restarts the sequence; a late answer to the previous page's request must not
+// resolve a new one with the same number, so ids carry a per-page random prefix
+const pageNonce = Math.random().toString(36).slice(2, 8)
+
+function request<T>(
+  eventType: string,
+  start: (callbackId: string) => void,
+  fallback: T,
+  timeoutMs: number,
+): Promise<T> {
+  if (!listening.has(eventType)) {
+    listening.add(eventType)
+    window.addEventListener('native:' + eventType, (e: Event) => {
+      const detail = (e as CustomEvent).detail as { callbackId?: string }
+      const resolve = detail?.callbackId ? pending.get(detail.callbackId) : undefined
+      if (resolve) resolve(detail)
+    })
+  }
+  return new Promise<T>(resolve => {
+    const callbackId = `${pageNonce}-${++sequence}`
+    const timer = setTimeout(() => {
+      pending.delete(callbackId)
+      resolve(fallback)
+    }, timeoutMs)
+    pending.set(callbackId, detail => {
+      clearTimeout(timer)
+      pending.delete(callbackId)
+      resolve(detail as T)
+    })
+    start(callbackId)
+  })
+}
+
+// Same probe asked twice at once shares one run (mount + visibility + retry can overlap)
+const probesInFlight = new Map<string, Promise<ProbeResult>>()
+
+export function probe(commandId: string): Promise<ProbeResult> {
+  const running = probesInFlight.get(commandId)
+  if (running) return running
+  const fresh = request<ProbeResult>(
+    'command_result',
+    callbackId => call('runProbeAsync', callbackId, commandId),
+    { exitCode: -1, stdout: '', stderr: 'no answer' },
+    12000,
+  ).finally(() => probesInFlight.delete(commandId))
+  probesInFlight.set(commandId, fresh)
+  return fresh
+}
+
+export function apkUpdateInfo(): Promise<ApkUpdateInfo> {
+  return request<ApkUpdateInfo>(
+    'apk_update_info',
+    callbackId => call('getApkUpdateInfoAsync', callbackId),
+    { error: 'no answer' },
+    15000,
+  )
+}
+
+export const bridge = { isAvailable, call, callJson, probe, apkUpdateInfo }

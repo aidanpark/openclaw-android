@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [App v0.4.2 / Script v1.1.3] - 2026-10-04
+
+### Security
+
+- Verify the signature of the glibc package database before installing glibc, in the Claw app and in Termux. A package list that fails the check is never used; the setup stops with an explanation instead of continuing unsigned. Termux no longer turns off pacman signature checking during the glibc install.
+- Claw app: during setup, the Termux package list is verified against its signature, and each downloaded package against its signed checksum, before it is extracted. (Tools installed later from Settings → Tools still use the app's own package manager and are not covered yet.)
+
+### Fixed
+
+- App: the dashboard fills in the Node.js, git and OpenClaw versions shortly after setup finishes (it no longer stays blank until the app is reopened) and no longer freezes while it reads them.
+- App: a failed setup shows a translated error with a Retry button, and the language buttons in Settings fit on narrow screens.
+- App: storage usage no longer hangs when it meets a circular symbolic link, and a broken screen no longer leaves a blank white page.
+
+### Changed
+
+- Termux: the glibc install now stops if the pacman keyring cannot be initialized (it used to carry on), and re-running it restores a `pacman.conf` that an older installer had relaxed, keeping the previous file as `pacman.conf.oa-relaxed`.
+- Claw app: a downloaded setup script or `oa` that does not start with `#!` (for example a captive-portal page) is rejected.
+- Compatibility note: on a device installed before v1.1.3, `pacman -Q` may print a few signature-related errors. Nothing is affected; run `pacman -Sy` to refresh the package lists and they go away.
+
 ## [App v0.4.1 / Script v1.1.2] - 2026-10-04
 
 ### Security

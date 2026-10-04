@@ -76,7 +76,7 @@ APKは[Releases](https://github.com/AidanPark/openclaw-android/releases)ペー�
 
 インストーラーがTermuxと標準Linuxの差異を自動的に解決します。手動で行う作業は一切なく、以下の処理がすべて1つのコマンドで完結します。
 
-1. **glibc環境の構築** — pacmanのglibc-runner経由でglibc動的リンカーを導入し、標準的なLinuxバイナリを変更なしに動作させます
+1. **glibc環境の構築** — pacmanのglibc-runner経由でglibc動的リンカーを導入し、標準的なLinuxバイナリを変更なしに動作させます。導入前にTermuxの署名鍵でパッケージ一覧を検証します
 2. **Node.js (glibc版)** — 公式のNode.js linux-arm64をダウンロードし、ld.soローダースクリプトでラップします（Androidでセグフォルトを起こすpatchelfは使いません）
 3. **パス変換** — 標準的なLinuxパス（`/tmp`、`/bin/sh`、`/usr/bin/env`）をTermuxのパスに自動変換します
 4. **一時ディレクトリの設定** — Androidからアクセス可能な一時フォルダを設定します

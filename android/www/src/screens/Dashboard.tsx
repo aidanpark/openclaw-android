@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { bridge } from '../lib/bridge'
+import { useRuntimeProbes, type ProbeSpec } from '../lib/useRuntimeProbes'
 import { t } from '../i18n'
 
 interface BootstrapStatus {
@@ -28,10 +29,16 @@ function getManagement() {
   ]
 }
 
+const RUNTIME_PROBES: ProbeSpec[] = [
+  { label: 'Node.js', commandId: 'nodeVersion' },
+  { label: 'git', commandId: 'gitVersion', format: v => v.replace('git version ', '') },
+  { label: 'openclaw', commandId: 'openclawVersion' },
+]
+
 export function Dashboard() {
   const [status, setStatus] = useState<BootstrapStatus | null>(null)
   const [platform, setPlatform] = useState<PlatformInfo | null>(null)
-  const [runtimeInfo, setRuntimeInfo] = useState<Record<string, string>>({})
+  const runtimeInfo = useRuntimeProbes(RUNTIME_PROBES)
 
   function refreshStatus() {
     const bs = bridge.callJson<BootstrapStatus>('getBootstrapStatus')
@@ -39,15 +46,6 @@ export function Dashboard() {
 
     const ap = bridge.callJson<PlatformInfo>('getActivePlatform')
     if (ap) setPlatform(ap)
-
-    const nodeV = bridge.callJson<{ stdout: string }>('runCommand', 'nodeVersion')
-    const gitV = bridge.callJson<{ stdout: string }>('runCommand', 'gitVersion')
-    const ocV = bridge.callJson<{ stdout: string }>('runCommand', 'openclawVersion')
-    setRuntimeInfo({
-      'Node.js': nodeV?.stdout?.trim() || '—',
-      'git': gitV?.stdout?.trim()?.replace('git version ', '') || '—',
-      'openclaw': ocV?.stdout?.trim() || '—',
-    })
   }
 
   useEffect(() => {

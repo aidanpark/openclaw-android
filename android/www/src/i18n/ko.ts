@@ -94,7 +94,7 @@ export const ko = {
 
   updates_title: '업데이트',
   updates_checking: '업데이트 확인 중...',
-  updates_up_to_date: '모두 최신 버전입니다.',
+  updates_up_to_date: '별도로 받을 업데이트가 없습니다. 앱 자체의 새 버전은 설정 → 정보에서 확인하세요.',
   updates_updating: '{name} 업데이트 중...',
   updates_update: '업데이트',
 
@@ -102,4 +102,17 @@ export const ko = {
   platforms_installing: '{name} 설치 중...',
   platforms_active: '활성',
   platforms_install: '설치 및 전환',
+
+  // Setup - failure
+  setup_failed_title: '설치를 완료하지 못했습니다',
+  setup_err_network: '다운로드 서버에 연결할 수 없습니다. 네트워크를 확인하고 다시 시도하세요.',
+  setup_err_missing: '설치 파일을 더 이상 해당 주소에서 받을 수 없습니다. 앱을 업데이트한 뒤 다시 시도하세요.',
+  setup_err_hash: '받은 파일이 예상 체크섬과 다릅니다(변조되었거나 교체되었을 수 있습니다). 설치를 중단했습니다.',
+  setup_err_local: '다운로드를 저장하지 못했습니다(저장 공간 부족 또는 비정상적으로 큰 파일). 공간을 확보한 뒤 다시 시도하세요.',
+  setup_err_unknown: '설치 중 문제가 발생했습니다. 다시 시도하세요.',
+  setup_retry: '다시 시도',
+
+  // Unexpected UI error
+  error_boundary_title: '문제가 발생했습니다',
+  error_boundary_reload: '다시 불러오기',
 }

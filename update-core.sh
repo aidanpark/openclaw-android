@@ -9,7 +9,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.1.2"
+OA_VERSION="1.1.3"
 
 echo ""
 echo -e "${BOLD}========================================${NC}"

@@ -7,7 +7,7 @@ interface Props {
   onComplete: () => void
 }
 
-type SetupPhase = 'platform-select' | 'tool-select' | 'installing' | 'done'
+type SetupPhase = 'platform-select' | 'tool-select' | 'installing' | 'failed' | 'done'
 
 interface Platform {
   id: string
@@ -44,13 +44,15 @@ export function Setup({ onComplete }: Props) {
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set())
   const [progress, setProgress] = useState(0)
   const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
+  const [errorKind, setErrorKind] = useState('')
   const [tipIndex, setTipIndex] = useState(0)
 
   // Load available platforms
   useEffect(() => {
     const data = bridge.callJson<Platform[]>('getAvailablePlatforms')
     if (data) {
+      // Existing debt: one-shot read of native state on mount; restructuring is a behavior risk
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPlatforms(data)
     } else {
       setPlatforms([
@@ -60,7 +62,13 @@ export function Setup({ onComplete }: Props) {
   }, [])
 
   const onProgress = useCallback((data: unknown) => {
-    const d = data as { progress?: number; message?: string }
+    const d = data as { progress?: number; message?: string; error?: string; errorKind?: string }
+    if (d.errorKind || d.error !== undefined) {
+      // Native refused or failed the setup: show a translated reason and let the user retry
+      setErrorKind(d.errorKind || 'UNKNOWN')
+      setPhase('failed')
+      return
+    }
     if (d.progress !== undefined) setProgress(d.progress)
     if (d.message) setMessage(d.message)
     if (d.progress !== undefined && d.progress >= 1) {
@@ -94,17 +102,21 @@ export function Setup({ onComplete }: Props) {
     bridge.call('saveToolSelections', JSON.stringify(selections))
 
     // Start bootstrap setup
+    startInstall()
+  }
+
+  function startInstall() {
     setPhase('installing')
     setProgress(0)
     setMessage(t('setup_preparing'))
-    setError('')
+    setErrorKind('')
     bridge.call('startSetup')
   }
 
   // --- Stepper ---
   const currentStep = phase === 'platform-select' ? 0
     : phase === 'tool-select' ? 1
-    : phase === 'installing' ? 2 : 3
+    : phase === 'installing' || phase === 'failed' ? 2 : 3
 
   const STEPS = [t('step_platform'), t('step_tools'), t('step_setup')]
 
@@ -230,11 +242,28 @@ export function Setup({ onComplete }: Props) {
           </div>
         </div>
 
-        {error && (
-          <div style={{ color: 'var(--error)', fontSize: 14, textAlign: 'center' }}>{error}</div>
-        )}
-
         <div className="tip-card">💡 {getTips()[tipIndex]}</div>
+      </div>
+    )
+  }
+
+  // --- Failed ---
+  if (phase === 'failed') {
+    const messages: Record<string, string> = {
+      NETWORK: t('setup_err_network'),
+      UPSTREAM_MISSING: t('setup_err_missing'),
+      HASH_MISMATCH: t('setup_err_hash'),
+      LOCAL_IO: t('setup_err_local'),
+    }
+    return (
+      <div className="setup-container">
+        {renderStepper()}
+        <div className="setup-logo">⚠️</div>
+        <div className="setup-title">{t('setup_failed_title')}</div>
+        <div className="setup-subtitle">{messages[errorKind] || t('setup_err_unknown')}</div>
+        <button className="btn btn-primary" onClick={startInstall}>
+          {t('setup_retry')}
+        </button>
       </div>
     )
   }

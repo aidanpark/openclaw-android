@@ -27,17 +27,18 @@ export function Settings() {
       <div className="page-title" style={{ marginBottom: 24 }}>{t('settings_title')}</div>
       {/* Language selector */}
       <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-row">
+        <div className="card-row" style={{ flexWrap: 'wrap', rowGap: 8 }}>
           <span className="card-icon">🌐</span>
-          <div className="card-content">
+          <div className="card-content" style={{ flex: '1 1 120px', minWidth: 0 }}>
             <div className="card-label">Language</div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', marginLeft: 'auto', maxWidth: '100%' }}>
             {availableLocales.map(loc => (
               <button
                 key={loc.code}
                 className={`btn ${getLocale() === loc.code ? 'btn-primary' : ''}`}
-                style={{ padding: '4px 12px', fontSize: 13 }}
+                // .btn has min-width:120px, three of them overflow a 360dp screen — compact here, wrap if still too wide
+                style={{ padding: '4px 12px', fontSize: 13, whiteSpace: 'nowrap', minWidth: 0, minHeight: 36 }}
                 onClick={() => { setLocale(loc.code); window.location.reload() }}
               >
                 {loc.label}

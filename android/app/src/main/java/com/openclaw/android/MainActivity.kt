@@ -240,6 +240,9 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             binding.terminalContainer.visibility = View.GONE
             binding.webView.visibility = View.VISIBLE
+            // The WebView was hidden while a terminal ran (e.g. post-setup installing tools):
+            // let the page re-read anything that changed meanwhile
+            eventBridge.emit("webview_shown", emptyMap<String, Any>())
         }
     }
 

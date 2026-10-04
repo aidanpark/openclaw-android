@@ -185,6 +185,97 @@ NPMGUARD
     fi
 }
 
+# ─── gpgv signature helpers ───────────────────
+# For downloads that are checked against a signed index (the glibc package
+# database today). Return codes — the caller picks the message from the code:
+#    0 good signature        1 bad signature
+#    2 no good signature, and signed only by keys the keyring does not have
+#    3 expired signature/key or a wrong clock
+#    4 any other failure to reach a verdict
+#   10 gpgv is missing      11 keyring missing or unreadable
+#   12 gpgv cannot run here (not executable, killed, no usable home directory)
+# The verdict comes from gpgv's machine-readable status lines (--status-fd), never
+# from its free text: that text can carry strings chosen by whoever made the
+# signature. rc 0 alone is not enough either (gpgv also exits 0 for a signature
+# from an expired key): success needs GOODSIG and VALIDSIG and none of the failure
+# lines. Nothing here falls back to an unchecked file; the clearsigned output file
+# is deleted on every non-zero result. $OA_GPGV_ERR holds gpgv's text for debugging
+# (do not print it raw). Callers running under `set -e` must capture the code with
+# `|| rc=$?`.
+OA_GPGV_ERR=""
+# 0 when gpgv and the keyring $1 are usable, else 10/11/12
+oa_gpgv_check_tools() {
+    local gpgv="$PREFIX/bin/gpgv" keyring="$1"
+    if [ ! -e "$gpgv" ]; then OA_GPGV_ERR="gpgv not found at $gpgv"; return 10; fi
+    if [ ! -x "$gpgv" ] || [ -d "$gpgv" ]; then OA_GPGV_ERR="gpgv is not executable: $gpgv"; return 12; fi
+    if [ ! -s "$keyring" ] || [ ! -r "$keyring" ]; then
+        OA_GPGV_ERR="keyring missing or unreadable: $keyring"
+        return 11
+    fi
+    return 0
+}
+_oa_gpgv() {
+    local out="$1" keyring="$2" gpgv="$PREFIX/bin/gpgv" home="$TMPDIR/gnupg" err="" rc=0 status
+    shift 2
+    OA_GPGV_ERR=""
+    oa_gpgv_check_tools "$keyring" || return $?
+    if ! mkdir -p "$home" || ! chmod 700 "$home"; then
+        OA_GPGV_ERR="cannot create $home"
+        return 12
+    fi
+    if ! status=$(mktemp "$home/status.XXXXXX"); then
+        OA_GPGV_ERR="cannot create a status file in $home"
+        return 12
+    fi
+    if [ -n "$out" ]; then
+        rm -f "$out"
+        err=$(LC_ALL=C "$gpgv" --homedir "$home" --keyring "$keyring" --status-fd 3 --output "$out" "$@" 2>&1 3>"$status") || rc=$?
+    else
+        err=$(LC_ALL=C "$gpgv" --homedir "$home" --keyring "$keyring" --status-fd 3 "$@" 2>&1 3>"$status") || rc=$?
+    fi
+    OA_GPGV_ERR="$err"
+    local verdict=4
+    if [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ] || [ "$rc" -gt 128 ]; then
+        verdict=12
+    elif grep -Eq '^\[GNUPG:\] BADSIG ' "$status"; then
+        verdict=1
+    elif grep -Eq '^\[GNUPG:\] (EXPSIG|EXPKEYSIG|KEYEXPIRED|SIGEXPIRED) ' "$status"; then
+        verdict=3
+    elif ! { grep -Eq '^\[GNUPG:\] GOODSIG ' "$status" && grep -Eq '^\[GNUPG:\] VALIDSIG ' "$status"; }; then
+        # no good signature from a key in the keyring
+        if grep -Eq '^\[GNUPG:\] NO_PUBKEY ' "$status"; then
+            # A key created "in the future" looks like a missing key in the status lines;
+            # only gpgv's own line (anchored at the start of the line) tells them apart.
+            if printf '%s\n' "$err" | grep -Eq '^gpgv: key [0-9A-Fa-f]+ was created .* in the future \(time warp or clock problem\)$'; then
+                verdict=3
+            else
+                verdict=2
+            fi
+        fi
+    elif grep -Eq '^\[GNUPG:\] (REVKEYSIG|FAILURE|NODATA|ERROR) ' "$status" \
+        || awk '$1 == "[GNUPG:]" && $2 == "ERRSIG" && $8 != 9 { f = 1 } END { exit !f }' "$status"; then
+        verdict=4
+    elif [ "$rc" -eq 0 ] || { [ "$rc" -eq 2 ] && grep -Eq '^\[GNUPG:\] NO_PUBKEY ' "$status"; }; then
+        # A good signature from a key in the keyring counts even when the file is also
+        # signed by keys this keyring lacks (gpgv then exits 2; apt accepts this too, e.g.
+        # while Termux signs with an old and a new key). Any other failure line, and the
+        # absence of a good signature, were handled above. Note: gpgv 2.5 stops at the first
+        # signature it cannot check, so a signature that comes after an unknown-key one
+        # is never evaluated (apt has the same limit); a good signature from the keyring
+        # over exactly the checked data is what this accepts.
+        verdict=0
+        if [ -n "$out" ] && [ ! -s "$out" ]; then verdict=4; fi
+    fi
+    rm -f "$status"
+    if [ "$verdict" -ne 0 ] && [ -n "$out" ]; then rm -f "$out"; fi
+    return "$verdict"
+}
+# oa_gpgv_clearsigned <keyring> <clearsigned file> <out>: on success <out> holds the signed text
+oa_gpgv_clearsigned() { _oa_gpgv "$3" "$1" "$2"; }
+# oa_gpgv_detached <keyring> <signature file> <data file>
+oa_gpgv_detached() { _oa_gpgv "" "$1" "$2" "$3"; }
+# ─── end gpgv signature helpers ───────────────
+
 # ─── GitHub mirror fallback (for China/restricted networks) ──
 REPO_BASE_ORIGIN="https://raw.githubusercontent.com/AidanPark/openclaw-android/main"
 REPO_BASE="$REPO_BASE_ORIGIN"
@@ -296,6 +387,18 @@ install_deb() {
         fi
     fi
 
+    # The package must match the checksum in the package list whose signature was
+    # verified (cached files too). Nothing is unpacked before this check passes.
+    local want have
+    want=$(get_deb_sha256 "$filename") || want=""
+    have=$(sha256sum "$deb_file" 2>/dev/null | awk '{ print $1 }') || have=""
+    if [ "${#want}" -ne 64 ] || [[ "$want" == *[!0-9a-f]* ]] || [ "$have" != "$want" ]; then
+        rm -f "$deb_file"
+        echo -e "    ${RED}[FAIL]${NC} $name: verification failed (it does not match the signed package list) — not installed" >&2
+        echo "           Check your network and try again; the package source may be unavailable or the download corrupted." >&2
+        return 1
+    fi
+
     rm -rf "$EXTRACT_DIR"
     mkdir -p "$EXTRACT_DIR"
     if ! dpkg-deb -x "$deb_file" "$EXTRACT_DIR" 2>/dev/null; then
@@ -359,6 +462,125 @@ fetch_pacman_pkg() {
     fi
 }
 
+# ─── glibc package database: signed, from the first mirror that checks out ───
+OA_KEYRING_DIR="$PREFIX/share/termux-keyring"
+_GPKG_REASON=""
+_GPKG_RC=0
+# Download <mirror>/gpkg.db and gpkg.db.sig and verify the signature. On any
+# failure the database is deleted so nothing can read an unverified one.
+# _GPKG_REASON: unreachable | nosig | badsig | clock | tool   (_GPKG_RC = helper code)
+fetch_signed_gpkg_db() {
+    local mirror="$1" rc=0
+    _GPKG_REASON=""
+    _GPKG_RC=0
+    rm -f "$GPKG_DB" "$GPKG_DB.sig"
+    if ! curl -fsSL --max-time 60 -o "$GPKG_DB" "$mirror/gpkg.db"; then
+        rm -f "$GPKG_DB"
+        _GPKG_REASON="unreachable"
+        return 1
+    fi
+    if ! curl -fsSL --max-time 60 -o "$GPKG_DB.sig" "$mirror/gpkg.db.sig"; then
+        rm -f "$GPKG_DB" "$GPKG_DB.sig"
+        _GPKG_REASON="nosig"
+        return 1
+    fi
+    oa_gpgv_detached "$OA_KEYRING_DIR/termux-pacman.gpg" "$GPKG_DB.sig" "$GPKG_DB" || rc=$?
+    _GPKG_RC=$rc
+    if [ "$rc" -eq 0 ]; then
+        return 0
+    fi
+    rm -f "$GPKG_DB" "$GPKG_DB.sig"
+    case "$rc" in
+        1|2|4) _GPKG_REASON="badsig" ;;
+        3) _GPKG_REASON="clock" ;;
+        *) _GPKG_REASON="tool" ;;
+    esac
+    return 1
+}
+
+# Try the mirrors in turn; for the first one whose database signature verifies,
+# download and sha256-check every package in GLIBC_PKGS from that same mirror.
+# Sets GLIBC_FILES and returns 0, or prints what went wrong and what to do and
+# returns 1. There is no unsigned fallback. gpgv and the keyring are checked
+# before anything is downloaded.
+fetch_glibc_packages() {
+    local _mirror _pkg _info _file _sha _fails="" _stop="" _key_unknown=false _verified=false _rc=0
+    GLIBC_FILES=()
+    _GPKG_RC=0
+    oa_gpgv_check_tools "$OA_KEYRING_DIR/termux-pacman.gpg" || _rc=$?
+    if [ "$_rc" -ne 0 ]; then
+        _stop="tool"
+        _GPKG_RC=$_rc
+    else
+        for _mirror in "${PACMAN_MIRRORS[@]}"; do
+            GLIBC_FILES=()
+            echo "  Mirror: ${_mirror%/gpkg/aarch64}"
+            if ! fetch_signed_gpkg_db "$_mirror"; then
+                _fails="$_fails $_GPKG_REASON"
+                case "$_GPKG_REASON" in
+                    unreachable) echo -e "  ${YELLOW}[WARN]${NC} Package database not reachable" ;;
+                    nosig) echo -e "  ${YELLOW}[WARN]${NC} This mirror has no signature for the package database" ;;
+                    badsig)
+                        [ "$_GPKG_RC" -eq 2 ] && _key_unknown=true
+                        echo -e "  ${YELLOW}[WARN]${NC} Signature verification FAILED for the package database on this mirror (code $_GPKG_RC) — not using it" ;;
+                    *) _stop="$_GPKG_REASON"; break ;;   # same on every mirror: stop here
+                esac
+                continue
+            fi
+            _verified=true
+            echo -e "  ${GREEN}✓${NC} Package database signature verified"
+            for _pkg in "${GLIBC_PKGS[@]}"; do
+                if ! _info=$(gpkg_lookup "$_pkg"); then
+                    echo -e "  ${YELLOW}[WARN]${NC} $_pkg: no valid entry in package database"
+                    break
+                fi
+                read -r _file _sha <<< "$_info"
+                fetch_pacman_pkg "$_mirror" "$_file" "$_sha" || break
+                GLIBC_FILES+=("$_file")
+            done
+            if [ "${#GLIBC_FILES[@]}" -eq "${#GLIBC_PKGS[@]}" ]; then
+                return 0
+            fi
+        done
+    fi
+    GLIBC_FILES=()
+    echo -e "  ${RED}✗${NC} Could not install glibc."
+    if [ -n "$_stop" ]; then
+        case "$_stop" in
+            tool)
+                case "$_GPKG_RC" in
+                    10) echo "    Cannot verify package signatures: gpgv is missing. Reinstall the app and try again, or report this." ;;
+                    11) echo "    Cannot verify package signatures: the Termux keyring is missing. Reinstall the app and try again, or report this." ;;
+                    *) echo "    gpgv cannot run on this device, so package signatures cannot be checked. Installation was stopped for safety. Please report this (error code $_GPKG_RC)." ;;
+                esac ;;
+            *)
+                echo "    Signature check failed. Check the phone's date and time (turn on automatic date & time); if they are right, the signing key may have changed. Restart the app to retry, or report this." ;;
+        esac
+    elif [ "$_verified" = true ]; then
+        echo "    A package list was verified, but the packages could not be downloaded and checked from those mirrors."
+        echo "    Check your network connection and restart the app to retry."
+    else
+        case "$_fails" in
+            *badsig*)
+                if [ "$_key_unknown" = true ]; then
+                    echo "    The package list is signed by a key this app does not know (the signing key may have changed)."
+                    echo "    Installation was stopped for safety. Restart the app later (it fetches the latest setup on each start), or report this."
+                else
+                    echo "    The package list failed its signature check on every mirror that answered. Something may be tampering with the download."
+                    echo "    Installation was stopped for safety. Try another network and restart the app to retry."
+                fi ;;
+            *nosig*)
+                echo "    No reachable mirror offered a signed package list, so nothing could be verified."
+                echo "    Installation was stopped for safety. Restart the app to retry later, or report this." ;;
+            *)
+                echo "    Could not download glibc from any mirror:"
+                printf '      %s\n' "${PACMAN_MIRRORS[@]}"
+                echo "    Check your network connection and restart the app to retry." ;;
+        esac
+    fi
+    return 1
+}
+
 # Extract a downloaded .pkg.tar.xz from $PKG_DIR into target dir
 install_pacman_pkg() {
     local filename="$1"
@@ -384,12 +606,85 @@ install_pacman_pkg() {
 echo -e "▸ ${YELLOW}[1/7]${NC} Installing essential packages..."
 mkdir -p "$DEB_DIR" "$PKG_DIR"
 
-# Download Packages index to resolve .deb filenames
+# Download the Packages index to resolve .deb filenames, and prove it is the one
+# Termux signed:  InRelease (signed)  →  size + sha256 of Packages  →  Packages
+# →  sha256 of each .deb (checked in install_deb). There is no unsigned fallback:
+# if the list cannot be verified, the installation stops here.
 echo "  Fetching package index..."
 PACKAGES_FILE="$TMPDIR/Packages"
-curl -fsSL --max-time 60 \
-    "${TERMUX_DEB_REPO}/dists/stable/main/binary-aarch64/Packages" \
-    -o "$PACKAGES_FILE"
+OA_INRELEASE="$TMPDIR/InRelease"
+OA_RELEASE_VERIFIED="$TMPDIR/Release.verified"
+OA_DEB_KEYRING="$OA_KEYRING_DIR/termux-autobuilds.gpg"
+
+# oa_fail_index <reason|helper code>: say what went wrong and what to do, then stop
+oa_fail_index() {
+    rm -f "$OA_INRELEASE" "$OA_RELEASE_VERIFIED" "$PACKAGES_FILE"
+    echo -e "  ${RED}✗${NC} Could not verify the Termux package list."
+    case "$1" in
+        download)
+            echo "    The package list could not be downloaded. Check your network connection and restart the app to retry." ;;
+        mismatch)
+            echo "    The downloaded package list does not match its signed checksum. The download may be corrupted or tampered with, or the server may be updating: wait a minute, try another network, and restart the app to retry." ;;
+        noentry)
+            echo "    The signed package list has no checksum for the package index. Try again later and restart the app to retry; if it keeps failing, report this." ;;
+        1)
+            echo "    The package list failed its signature check. Something may be tampering with the download. Try another network and restart the app to retry." ;;
+        2)
+            echo "    The package list is signed by a key this app does not know (the Termux signing key may have changed). Get the latest version of the app and try again, or report this." ;;
+        3)
+            echo "    The signature check failed because of a date problem. Check that the phone's date and time are correct (automatic date & time) and restart the app to retry. It can also mean the Termux signing key changed." ;;
+        10)
+            echo "    Cannot verify package signatures: gpgv is missing. Reinstall the app and try again, or report this." ;;
+        11)
+            echo "    Cannot verify package signatures: the Termux keyring is missing. Reinstall the app and try again, or report this." ;;
+        12)
+            echo "    gpgv cannot run on this device, so package signatures cannot be checked. Please report this (error code 12)." ;;
+        *)
+            echo "    The signature check did not give a clear answer (error code $1). Restart the app to retry; if it keeps failing, report this." ;;
+    esac
+    echo "    Installation was stopped for safety: nothing from the unverified package list was installed."
+    exit 1
+}
+
+_idx_rc=0
+oa_gpgv_check_tools "$OA_DEB_KEYRING" || _idx_rc=$?
+[ "$_idx_rc" -eq 0 ] || oa_fail_index "$_idx_rc"
+curl -fsSL --max-time 60 -o "$OA_INRELEASE" \
+    "${TERMUX_DEB_REPO}/dists/stable/InRelease" || oa_fail_index download
+oa_gpgv_clearsigned "$OA_DEB_KEYRING" "$OA_INRELEASE" "$OA_RELEASE_VERIFIED" || _idx_rc=$?
+[ "$_idx_rc" -eq 0 ] || oa_fail_index "$_idx_rc"
+echo -e "  ${GREEN}✓${NC} Package list signature verified"
+
+# Size and sha256 of Packages as stated in the signed Release (its SHA256: block)
+_want_sha="" _want_size=""
+_rel_line=$(awk '
+    /^SHA256:/ { f = 1; next }
+    /^[^ ]/ { f = 0 }
+    f && $3 == "main/binary-aarch64/Packages" { print $1, $2; exit }
+' "$OA_RELEASE_VERIFIED") || _rel_line=""
+read -r _want_sha _want_size <<< "$_rel_line" || true
+if [ "${#_want_sha}" -ne 64 ] || [[ "$_want_sha" == *[!0-9a-f]* ]] || [[ "$_want_size" == *[!0-9]* ]] || [ -z "$_want_size" ]; then
+    oa_fail_index noentry
+fi
+curl -fsSL --max-time 60 -o "$PACKAGES_FILE" \
+    "${TERMUX_DEB_REPO}/dists/stable/main/binary-aarch64/Packages" || oa_fail_index download
+_got_sha=$(sha256sum "$PACKAGES_FILE" | awk '{ print $1 }')
+_got_size=$(wc -c < "$PACKAGES_FILE" | tr -d ' ')
+if [ "$_got_sha" != "$_want_sha" ] || [ "$_got_size" != "$_want_size" ]; then
+    oa_fail_index mismatch
+fi
+rm -f "$OA_INRELEASE" "$OA_RELEASE_VERIFIED"
+echo -e "  ${GREEN}✓${NC} Package list matches the signed checksum"
+
+# sha256 of the .deb whose "Filename:" is $1, from the (verified) Packages index
+get_deb_sha256() {
+    awk -v fn="$1" '
+        /^$/ { if (fname == fn && sha != "") { print sha; done = 1; exit } fname = ""; sha = ""; next }
+        /^Filename: / { fname = $2 }
+        /^SHA256: / { sha = $2 }
+        END { if (!done && fname == fn && sha != "") print sha }
+    ' "$PACKAGES_FILE"
+}
 
 # Resolve package filename from Packages index
 get_deb_filename() {
@@ -448,7 +743,10 @@ for pkg in "${DEB_PACKAGES[@]}"; do
         continue
     fi
     echo "  [$COUNT/$TOTAL] $pkg"
-    install_deb "$filename"
+    install_deb "$filename" || {
+        echo -e "  ${RED}✗${NC} Could not install '$pkg' (required). Check your network connection and restart the app to retry."
+        exit 1
+    }
 done
 
 # Make sure newly extracted binaries are executable
@@ -472,32 +770,13 @@ else
 
     # Download glibc packages directly from the pacman repo (no pacman needed).
     # gcc-libs-glibc provides libstdc++.so.6 needed by Node.js.
-    # Mirrors are tried in turn; database and packages come from the same mirror.
+    # The package database must carry a valid signature (checked with the bootstrap's
+    # gpgv and the termux-pacman key); mirrors are tried in turn, and database and
+    # packages come from the same mirror. There is no unsigned fallback.
     GLIBC_PKGS=(glibc gcc-libs-glibc)
     GLIBC_FILES=()
     echo "  Downloading glibc + gcc-libs (~34MB)..."
-    for _mirror in "${PACMAN_MIRRORS[@]}"; do
-        GLIBC_FILES=()
-        echo "  Mirror: ${_mirror%/gpkg/aarch64}"
-        if ! curl -fsSL --max-time 60 -o "$GPKG_DB" "$_mirror/gpkg.db"; then
-            echo -e "  ${YELLOW}[WARN]${NC} Package database not reachable"
-            continue
-        fi
-        for _pkg in "${GLIBC_PKGS[@]}"; do
-            if ! _info=$(gpkg_lookup "$_pkg"); then
-                echo -e "  ${YELLOW}[WARN]${NC} $_pkg: no valid entry in package database"
-                break
-            fi
-            read -r _file _sha <<< "$_info"
-            fetch_pacman_pkg "$_mirror" "$_file" "$_sha" || break
-            GLIBC_FILES+=("$_file")
-        done
-        [ "${#GLIBC_FILES[@]}" -eq "${#GLIBC_PKGS[@]}" ] && break
-    done
-    if [ "${#GLIBC_FILES[@]}" -ne "${#GLIBC_PKGS[@]}" ]; then
-        echo -e "  ${RED}✗${NC} Could not download glibc from any mirror:"
-        printf '      %s\n' "${PACMAN_MIRRORS[@]}"
-        echo "    Check your network connection and restart the app to retry."
+    if ! fetch_glibc_packages; then
         exit 1
     fi
     for _file in "${GLIBC_FILES[@]}"; do
@@ -1459,7 +1738,7 @@ else
 fi
 
 # ─── Cleanup ────────────────────────────────
-rm -rf "$DEB_DIR" "$PKG_DIR" "$PACKAGES_FILE" "$TMPDIR/gpkg.db" 2>/dev/null || true
+rm -rf "$DEB_DIR" "$PKG_DIR" "$PACKAGES_FILE" "$OA_INRELEASE" "$OA_RELEASE_VERIFIED" "$TMPDIR/gpkg.db" "$TMPDIR/gpkg.db.sig" "$TMPDIR/gnupg" 2>/dev/null || true
 
 # ─── Done ────────────────────────────────────
 touch "$MARKER"

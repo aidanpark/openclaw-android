@@ -76,7 +76,7 @@
 
 설치 스크립트는 Termux와 일반 Linux 환경의 차이를 자동으로 해결합니다. 사용자가 직접 할 일은 없으며, 설치 명령어 하나로 아래 내용이 모두 처리됩니다:
 
-1. **glibc 환경** — glibc 동적 링커(pacman의 glibc-runner)를 설치하여 표준 Linux 바이너리가 수정 없이 실행되도록 설정
+1. **glibc 환경** — glibc 동적 링커(pacman의 glibc-runner)를 설치하여 표준 Linux 바이너리가 수정 없이 실행되도록 설정. 설치 전에 Termux 서명 키로 패키지 목록을 검증합니다
 2. **Node.js (glibc)** — 공식 Node.js linux-arm64 바이너리를 다운로드하고 ld.so 로더 스크립트로 래핑 (patchelf는 Android에서 segfault를 유발하므로 미사용)
 3. **경로 변환** — 일반 Linux 경로(`/tmp`, `/bin/sh`, `/usr/bin/env`)를 Termux 경로로 자동 변환
 4. **임시 폴더 설정** — Android에서 접근 가능한 임시 폴더로 자동 설정

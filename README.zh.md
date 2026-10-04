@@ -79,7 +79,7 @@ Android 也配拥有一个 Shell。
 
 安装程序会自动处理 Termux 与标准 Linux 之间的差异。你无需手动操作——一条安装命令会完成以下所有工作：
 
-1. **glibc 环境** — 安装 glibc 动态链接器（通过 pacman 的 glibc-runner），使标准 Linux 二进制文件无需修改即可运行
+1. **glibc 环境** — 安装 glibc 动态链接器（通过 pacman 的 glibc-runner），使标准 Linux 二进制文件无需修改即可运行。安装前会用 Termux 签名密钥验证软件包列表
 2. **Node.js (glibc)** — 下载官方 Node.js linux-arm64 版本，并通过 ld.so 加载脚本进行包装（不使用 patchelf，因为它会在 Android 上导致段错误）
 3. **路径转换** — 自动将标准 Linux 路径（`/tmp`、`/bin/sh`、`/usr/bin/env`）转换为 Termux 路径
 4. **临时目录配置** — 为 Android 配置可访问的临时文件夹

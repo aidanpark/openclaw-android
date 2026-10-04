@@ -31,6 +31,8 @@ class BootstrapManager(
         private const val DOWNLOAD_CONNECT_TIMEOUT_MS = 5_000
         private const val DOWNLOAD_READ_TIMEOUT_MS = 10_000
         private const val DOWNLOAD_TOTAL_TIMEOUT_SEC = 12L
+        private const val SHEBANG_LENGTH = 2
+        private const val STALE_TEMP_AGE_MS = 10L * 60 * 1000
         private const val PREFS_NAME = "openclaw"
         private const val PREF_VERSION_CODE = "versionCode"
     }
@@ -96,7 +98,9 @@ class BootstrapManager(
                 AppLogger.i(TAG, "Incomplete bootstrap detected, reinstalling...")
                 prefixDir.deleteRecursively()
             }
-            stagingDir.renameTo(prefixDir)
+            if (!stagingDir.renameTo(prefixDir)) {
+                throw java.io.IOException("Could not move the new bootstrap into place")
+            }
             setupDirectories()
             copyAssetScripts()
             syncWwwFromAssets()
@@ -423,6 +427,7 @@ exit ${d}_rc
      * are per address / per read, so a blocked network could otherwise stall far past them.
      */
     private fun downloadPostSetupScript(target: File): Boolean {
+        cleanStaleTemps(target)
         val url = "https://raw.githubusercontent.com/AidanPark/openclaw-android/main/post-setup.sh"
         val conn = URL(url).openConnection()
         conn.connectTimeout = DOWNLOAD_CONNECT_TIMEOUT_MS
@@ -431,7 +436,10 @@ exit ${d}_rc
         return try {
             val task =
                 executor.submit {
-                    replaceAtomically(target) { out -> conn.getInputStream().use { it.copyTo(out) } }
+                    replaceAtomically(
+                        target,
+                        requireShebang = true,
+                    ) { out -> conn.getInputStream().use { it.copyTo(out) } }
                 }
             task.get(DOWNLOAD_TOTAL_TIMEOUT_SEC, TimeUnit.SECONDS)
             AppLogger.i(TAG, "post-setup.sh downloaded from GitHub")
@@ -448,16 +456,43 @@ exit ${d}_rc
     /** Write via a unique temp file and rename so a failed copy never leaves a truncated script. */
     private fun replaceAtomically(
         target: File,
+        requireShebang: Boolean = false,
         write: (java.io.OutputStream) -> Unit,
     ) {
         val tmp = File.createTempFile("${target.name}.", ".tmp", target.parentFile)
         try {
             tmp.outputStream().use { write(it) }
-            if (tmp.length() == 0L) throw java.io.IOException("empty download for ${target.name}")
+            // An empty body, or a captive portal / error page that came back as HTML with a 200,
+            // must never be installed as a script
+            val problem =
+                when {
+                    tmp.length() == 0L -> "empty download for ${target.name}"
+                    requireShebang && !startsWithShebang(tmp) -> "downloaded ${target.name} is not a script"
+                    else -> null
+                }
+            if (problem != null) throw java.io.IOException(problem)
             tmp.setExecutable(true)
             if (!tmp.renameTo(target)) throw java.io.IOException("rename failed for ${target.name}")
         } finally {
             tmp.delete()
+        }
+    }
+
+    private fun startsWithShebang(file: File): Boolean =
+        file.inputStream().use { input ->
+            val head = ByteArray(SHEBANG_LENGTH)
+            input.read(head) == SHEBANG_LENGTH && head[0] == '#'.code.toByte() && head[1] == '!'.code.toByte()
+        }
+
+    /** Remove `<name>.*.tmp` files a killed process left next to [target] (they would sit on the PATH). */
+    private fun cleanStaleTemps(target: File) {
+        try {
+            target.parentFile
+                ?.listFiles { f -> f.name.startsWith("${target.name}.") && f.name.endsWith(".tmp") }
+                ?.filter { System.currentTimeMillis() - it.lastModified() > STALE_TEMP_AGE_MS } // not a live download
+                ?.forEach { it.delete() }
+        } catch (e: SecurityException) {
+            AppLogger.w(TAG, "Could not clean stale temp files", e)
         }
     }
 
@@ -542,12 +577,13 @@ exit ${d}_rc
      */
     fun installOaCli() {
         val oaBin = File(prefixDir, "bin/oa")
+        cleanStaleTemps(oaBin)
         val oaUrl = "https://raw.githubusercontent.com/AidanPark/openclaw-android/main/oa.sh"
         try {
             val conn = URL(oaUrl).openConnection()
             conn.connectTimeout = DOWNLOAD_CONNECT_TIMEOUT_MS
             conn.readTimeout = DOWNLOAD_READ_TIMEOUT_MS
-            replaceAtomically(oaBin) { out -> conn.getInputStream().use { it.copyTo(out) } }
+            replaceAtomically(oaBin, requireShebang = true) { out -> conn.getInputStream().use { it.copyTo(out) } }
             AppLogger.i(TAG, "oa CLI installed at ${oaBin.absolutePath}")
         } catch (e: Exception) {
             AppLogger.w(TAG, "Failed to install oa CLI", e)

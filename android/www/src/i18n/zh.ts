@@ -94,7 +94,7 @@ export const zh = {
 
   updates_title: '更新',
   updates_checking: '正在检查更新...',
-  updates_up_to_date: '一切都是最新的。',
+  updates_up_to_date: '没有需要单独下载的更新。应用本身的新版本请在 设置 → 关于 中查看。',
   updates_updating: '正在更新 {name}...',
   updates_update: '更新',
 
@@ -102,4 +102,17 @@ export const zh = {
   platforms_installing: '正在安装 {name}...',
   platforms_active: '当前使用',
   platforms_install: '安装并切换',
+
+  // Setup - failure
+  setup_failed_title: '安装未能完成',
+  setup_err_network: '无法连接到下载服务器。请检查网络后重试。',
+  setup_err_missing: '安装文件已不在下载地址上。请更新应用后重试。',
+  setup_err_hash: '下载的文件与预期校验值不符（可能被篡改或被替换）。安装已中止。',
+  setup_err_local: '无法保存下载内容（存储空间不足或文件异常过大）。请释放空间后重试。',
+  setup_err_unknown: '安装过程中出现问题。请重试。',
+  setup_retry: '重试',
+
+  // Unexpected UI error
+  error_boundary_title: '出了点问题',
+  error_boundary_reload: '重新加载',
 }

@@ -7,8 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview",
-    "build:zip": "npm run build && cd dist && zip -r ../www.zip . && cd .. && echo 'Created www.zip'"
+    "preview": "vite preview"
   },
   "dependencies": {
     "react": "^19.2.0",

@@ -36,7 +36,7 @@ internal object BridgeGuard {
             "oaInstall" to "oa --install",
         )
 
-    /** Platform id → npm package. */
+    /** Known platform ids (value: the npm package the install scripts manage). */
     val platformPackages: Map<String, String> = mapOf(DEFAULT_PLATFORM to "openclaw")
 
     /** Tool ids shown in Settings → Tools. Keep in sync with `android/www/src/screens/SettingsTools.tsx`. */
@@ -71,6 +71,13 @@ internal object BridgeGuard {
             "gemini-cli" to "gemini",
             "codex-cli" to "codex",
             "opencode" to "opencode",
+        )
+
+    /** Fixed texts the UI may copy to the clipboard, by ID. */
+    val clipboardTexts: Map<String, String> =
+        mapOf(
+            "ppkCommand" to
+                "adb shell device_config set_sync_disabled_for_tests activity_manager/max_phantom_processes 2147483647",
         )
 
     fun isPlatform(id: String): Boolean = platformPackages.containsKey(id)

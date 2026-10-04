@@ -10,13 +10,15 @@ export function SettingsKeepAlive() {
 
   useEffect(() => {
     const status = bridge.callJson<{ isIgnoring: boolean }>('getBatteryOptimizationStatus')
+    // Existing debt: one-shot read of native state on mount; restructuring is a behavior risk
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (status) setBatteryExcluded(status.isIgnoring)
   }, [])
 
   const ppkCommand = 'adb shell device_config set_sync_disabled_for_tests activity_manager/max_phantom_processes 2147483647'
 
   function handleCopyCommand() {
-    bridge.call('copyToClipboard', ppkCommand)
+    bridge.call('copyText', 'ppkCommand')
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }

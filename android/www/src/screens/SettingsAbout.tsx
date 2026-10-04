@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useRoute } from '../lib/router'
 import { bridge } from '../lib/bridge'
+import { useRuntimeProbes, type ProbeSpec } from '../lib/useRuntimeProbes'
 import { t } from '../i18n'
 
 interface AppInfo {
@@ -9,11 +10,18 @@ interface AppInfo {
   packageName: string
 }
 
+const ABOUT_PROBES: ProbeSpec[] = [
+  { label: 'Node.js', commandId: 'nodeVersion' },
+  { label: 'git', commandId: 'gitVersion', format: v => v.replace('git version ', '') },
+  { label: 'oa', commandId: 'oaVersion' },
+]
+
 export function SettingsAbout() {
   const { navigate } = useRoute()
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
-  const [scriptVersion, setScriptVersion] = useState<string>('—')
-  const [runtimeInfo, setRuntimeInfo] = useState<Record<string, string>>({})
+  const probed = useRuntimeProbes(ABOUT_PROBES)
+  const scriptVersion = probed['oa']
+  const runtimeInfo = { 'Node.js': probed['Node.js'], git: probed['git'] }
 
   const [apkUpdateAvailable, setApkUpdateAvailable] = useState(false)
 
@@ -24,21 +32,9 @@ export function SettingsAbout() {
     if (info) setAppInfo(info)
 
 
-
-    // Check APK update availability (async, non-blocking)
-    setTimeout(() => {
-      const apkInfo = bridge.callJson<{ updateAvailable?: boolean }>('getApkUpdateInfo')
-      if (apkInfo?.updateAvailable) setApkUpdateAvailable(true)
-    }, 0)
-
-    // Get runtime versions
-    const nodeV = bridge.callJson<{ stdout: string }>('runCommand', 'nodeVersion')
-    const gitV = bridge.callJson<{ stdout: string }>('runCommand', 'gitVersion')
-    const oaV = bridge.callJson<{ stdout: string }>('runCommand', 'oaVersion')
-    setScriptVersion(oaV?.stdout?.trim() || '—')
-    setRuntimeInfo({
-      'Node.js': nodeV?.stdout?.trim() || '—',
-      'git': gitV?.stdout?.trim()?.replace('git version ', '') || '—',
+    // Check APK update availability — answered by an event, the page is never blocked
+    bridge.apkUpdateInfo().then(apkInfo => {
+      if (apkInfo.updateAvailable) setApkUpdateAvailable(true)
     })
   }, [])
 

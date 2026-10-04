@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [App v0.4.1 / Script v1.1.2] - 2026-10-04
+
+### Security
+
+- App: the web view's command bridge now runs only an allow-list of commands, and the web view's input is no longer interpreted by a shell. The terminal-injection bridge methods are removed, `openUrl` accepts `https` only, and the web view can no longer navigate to external pages. Reported by @3em0.
+- App: the bootstrap archive is verified against a SHA-256 pinned in the APK before it is extracted, and a failed or tampered download leaves the existing installation untouched. The remote www and bootstrap update channel (already dead) is removed. Reported by @3em0.
+- The optional-tool selection file is read as data instead of being sourced as shell, so a crafted file can no longer run commands during setup.
+- The npm wrapper refuses global installs of `openclaw` at any version other than the pinned one (`npm install -g openclaw@latest` is blocked; `oa --update` is the supported way).
+
+### Fixed
+
+- App: fix the app replacing the downloaded setup script with the older copy bundled in the APK after the first relaunch, and re-running that outdated copy afterwards. The first launch now records the app version, the script refresh runs off the main thread with timeouts, and a plain offline relaunch keeps the downloaded copy (after an app upgrade, an offline launch falls back to the bundled copy).
+- App: fix the app being terminated by an unhandled exception when a command times out.
+- App: the dashboard shows the Node.js version again.
+- Fix git hanging in the Android app: the git wrapper executed itself forever after setup and the real git binary had been deleted. New installs keep the real binary. **Existing app users get git back by running `oa --update` once; upgrading the app alone does not repair it.**
+- Fix the git wrapper removing a directory you passed to `git clone`. After a failed clone it now removes only npm's own temporary clone directories (and empty directories); a directory that has content is never removed.
+- Download the `oa` command atomically so an interrupted download cannot leave a non-executable `oa`.
+
+### Changed
+
+- The gateway's "update available" notice is turned off during install and update unless you set the option yourself.
+- clawdhub is no longer reinstalled on every app setup rerun.
+- Dashboard token instructions are documented in the README and troubleshooting guide.
+- `oa --backup` and `oa --restore` are rewritten: backups now include conversation history and a consistent snapshot of the SQLite state, are created with owner-only permissions, and restore works across Termux and the Claw app. Restore refuses to run while the gateway is running and takes a safety backup first (the latest five are kept). The Claw app now installs the backup scripts, so `oa --backup` works there.
+- Add a Japanese README (thanks @eltociear).
+- App: the bootstrap can be downloaded through the `ghfast.top` mirror when GitHub is unreachable; the download is accepted only if it matches the pinned SHA-256. The tools screen now recognizes npm tools installed under `$PREFIX/bin` and `~/.local/bin`, and opening a system settings screen with no handler no longer crashes the app.
+- Compatibility: backups created by this version use a new archive layout and are restored by this version's `oa --restore`; older `oa` versions cannot restore them correctly (older backups still restore).
+
 ## [Script v1.1.1] - 2026-10-03
 
 ### Fixed

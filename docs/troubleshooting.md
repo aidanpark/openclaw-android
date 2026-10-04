@@ -88,6 +88,34 @@ openclaw gateway
 
 If you get a "gateway already running" error, see the [Gateway won't start](#gateway-wont-start-gateway-already-running-or-port-is-already-in-use) section above.
 
+## Dashboard asks for a token or shows "unauthorized"
+
+```
+unauthorized
+```
+
+### Cause
+
+The dashboard at `http://127.0.0.1:18789/` signs in with the gateway token. OpenClaw does not show it by default: `openclaw config get gateway.auth.token` hides secrets (it prints `__OPENCLAW_REDACTED__`), and `openclaw dashboard --no-open` prints a link without the token.
+
+### Solution
+
+Print the token from the config file (OpenClaw writes it as plain JSON):
+
+```bash
+node -p "require(process.env.HOME + '/.openclaw/openclaw.json').gateway.auth.token"
+```
+
+Then either paste the token into the dashboard's auth field, or open this address (replace `<token>`):
+
+```
+http://127.0.0.1:18789/#token=<token>
+```
+
+Keep the token private — anyone who has it can control your OpenClaw.
+
+If the command fails, the file was probably edited by hand (comments are not valid JSON): open `~/.openclaw/openclaw.json` in an editor and copy the value of `gateway.auth.token`. If there is no `gateway.auth.token`, OpenClaw's dashboard documentation suggests running `openclaw doctor --generate-gateway-token`.
+
 ## SSH connection failed: "Connection refused"
 
 ```

@@ -83,7 +83,7 @@ REPO_BASE="$REPO_BASE_ORIGIN"
 
 BASHRC_MARKER_START="# >>> OpenClaw on Android >>>"
 BASHRC_MARKER_END="# <<< OpenClaw on Android <<<"
-OA_VERSION="1.1.1"
+OA_VERSION="1.1.2"
 
 # ── Platform detection ──
 # 1. Explicit marker file (new install and after first update)

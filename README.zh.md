@@ -178,6 +178,12 @@ Android 可能会在屏幕关闭时杀死后台进程或对其进行限制。详
 
 请参阅 [Termux SSH 设置指南](docs/termux-ssh-guide.md) 了解 SSH 访问和仪表盘隧道设置。
 
+仪表盘地址是 `http://127.0.0.1:18789/`。如果它要求输入令牌（或显示 "unauthorized"），请先打印令牌，再带上它打开仪表盘：
+```bash
+node -p "require(process.env.HOME + '/.openclaw/openclaw.json').gateway.auth.token"
+```
+将令牌粘贴到仪表盘的认证输入框，或打开 `http://127.0.0.1:18789/#token=<令牌>`。请勿泄露令牌。详情见：[仪表盘要求令牌](docs/troubleshooting.md#dashboard-asks-for-a-token-or-shows-unauthorized)（英文）。
+
 ## 管理多台设备
 
 如果你在同一网络中的多台设备上运行 OpenClaw，可以使用 <a href="https://myopenclawhub.com" target="_blank">Dashboard Connect</a> 工具从电脑统一管理。
@@ -219,7 +225,7 @@ oa --update && source ~/.bashrc
 
 如果更新时网关正在运行，请在更新后重新启动它（停止后重新运行 `openclaw gateway`，或重启应用），以使用更新后的运行时。
 
-**注意**：`openclaw update`（以及 `openclaw --update`）被有意阻止——本项目安装了一个守卫，将 OpenClaw 锁定在已验证的版本上。网关可能仍会打印类似 `update available … Run: openclaw update` 的提示，但该命令会被阻止。请改用 `oa --update`。只读的 `openclaw update status` 仍然可用。
+**注意**：`openclaw update`（以及 `openclaw --update`）被有意阻止——本项目安装了一个守卫，将 OpenClaw 锁定在已验证的版本上。网关的 "update available" 提示已为你关闭（`update.checkOnStart=false`）。如果你自行重新开启，它可能会打印类似 `update available … Run: openclaw update` 的提示，但该命令会被阻止，请改用 `oa --update`。只读的 `openclaw update status` 仍然可用。
 
 > 如果 `oa` 命令不可用（旧版安装），请使用 curl 运行：
 > ```bash
@@ -228,19 +234,23 @@ oa --update && source ~/.bashrc
 
 ## 备份与恢复
 
-OpenClaw 内置的备份命令（`openclaw backup create`）在 Android 上经常失败，因为它依赖硬链接，而 Android 的应用私有存储会阻止硬链接操作。`oa --backup` 命令通过直接使用 `tar` 来解决这个问题，同时完全兼容 OpenClaw 的备份规范。
+OpenClaw 内置的备份命令（`openclaw backup create`）在 Android 上会失败，因为它依赖硬链接，而 Android 的应用私有存储会阻止硬链接操作；它也不会包含你的对话记录。`oa --backup` 命令解决了这两个问题：用 `tar` 打包整个 OpenClaw 数据目录（`~/.openclaw`），为 SQLite 数据库生成一致的快照，并生成可通过 `openclaw backup verify` 校验的归档。
 
 创建备份：
 ```bash
 oa --backup
 ```
-备份存储在 `~/.openclaw-android/backup/` 目录下，文件名带有时间戳（例如 `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`）。你也可以指定自定义路径：`oa --backup ~/my-backups/`。每次备份包含你的配置、状态、工作区和代理。
+备份存储在 `~/.openclaw-android/backup/` 目录下，文件名带有时间戳（例如 `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`）。你也可以指定自定义路径：`oa --backup ~/my-backups/`。每次备份包含你的配置、状态、对话记录、工作区和代理（不含日志、临时文件和插件依赖目录）。
+
+> **请妥善保管备份文件。** 备份中包含你的 API 密钥和登录凭据。文件创建时仅你自己可读（`/sdcard` 等共享存储可能不遵守此权限）；请勿分享或上传到公开的地方。
+>
+> **Claw 应用：** 如果 `oa --backup` 提示 `backup.sh not found`（在此功能加入之前安装的应用），请运行一次 `oa --update`。
 
 从备份恢复：
 ```bash
 oa --restore
 ```
-此命令会列出默认备份目录中所有可用的备份。只需选择你要恢复的备份编号即可。工具会自动从备份清单中检测平台并将数据恢复到 `~/.openclaw/`。注意这会覆盖现有数据，因此需要确认。
+此命令会列出默认备份目录中所有可用的备份。只需选择你要恢复的备份编号即可。工具会自动从备份清单中检测平台，并将数据恢复到本设备的 `~/.openclaw/`（在其他设备上创建的备份也可以恢复）。请先停止 OpenClaw 网关；网关运行时该命令会拒绝执行。覆盖之前，它会把当前数据保存为安全备份，位于 `~/.openclaw-android/backup/pre-restore/`。备份之后新建的文件会保留。需要确认后才会执行。
 
 ## 故障排除
 
@@ -492,6 +502,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 7. 通过 `openclaw-apply-patches.sh` 应用平台特定补丁
 8. 安装 `openclaw update` 守卫（`openclaw-shim.sh`），使锁定版本得以保持
 9. 安装 `clawdhub`（技能管理器）以及 `undici` 依赖（如需要）
+10. 关闭网关的 "update available" 提示（`openclaw config set update.checkOnStart false`），除非你已自行设置过该值
 
 **[6.5] 环境变量 + CLI + 标记文件：**
 
@@ -601,6 +612,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - 刷新 `openclaw update` 守卫（`openclaw-shim.sh`），保持 `openclaw update`/`--update` 持续被阻止
 - 更新/安装 `clawdhub`（技能管理器）
 - 如需要，为 clawdhub 安装 `undici`（Node.js v24+）
+- 关闭网关的 "update available" 提示（`update.checkOnStart=false`），仅在你尚未自行设置该值时
 - 如需要，将技能从 `~/skills/` 迁移到 `~/.openclaw/workspace/skills/`
 - 如缺失则安装 PyYAML
 

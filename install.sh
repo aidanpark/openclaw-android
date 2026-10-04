@@ -59,7 +59,7 @@ bash "$SCRIPT_DIR/scripts/setup-paths.sh"
 
 step 5 "Platform Runtime Dependencies (L2)"
 if [ "${PLATFORM_NEEDS_GLIBC:-false}" = true ]; then bash "$SCRIPT_DIR/scripts/install-glibc.sh"; fi
-if [ "${PLATFORM_NEEDS_NODEJS:-false}" = true ]; then bash "$SCRIPT_DIR/scripts/install-nodejs.sh" "${PLATFORM_NODE_VERSION:-}"; fi
+if [ "${PLATFORM_NEEDS_NODEJS:-false}" = true ]; then bash "$SCRIPT_DIR/scripts/install-nodejs.sh" "${PLATFORM_NODE_VERSION:-}" "${PLATFORM_NPM_PACKAGE:-}" "${PLATFORM_NPM_PACKAGE_VERSION:-}"; fi
 if [ "${PLATFORM_NEEDS_BUILD_TOOLS:-false}" = true ]; then bash "$SCRIPT_DIR/scripts/install-build-tools.sh"; fi
 if [ "${PLATFORM_NEEDS_PROOT:-false}" = true ]; then pkg install -y proot; fi
 

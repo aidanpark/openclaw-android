@@ -173,6 +173,12 @@ Android는 백그라운드 프로세스를 종료하거나 화면이 꺼지면 �
 
 SSH 접속 및 대시보드 터널 설정은 [Termux SSH 접속 가이드](docs/termux-ssh-guide.ko.md)를 참고하세요.
 
+대시보드 주소는 `http://127.0.0.1:18789/` 입니다. 토큰을 요구하거나 "unauthorized"가 나오면 토큰을 출력해서 함께 여세요:
+```bash
+node -p "require(process.env.HOME + '/.openclaw/openclaw.json').gateway.auth.token"
+```
+출력된 토큰을 대시보드의 인증 입력란에 붙여 넣거나 `http://127.0.0.1:18789/#token=<토큰>` 주소로 여세요. 토큰은 공개하지 마세요. 자세한 내용: [대시보드가 토큰을 요구함](docs/troubleshooting.ko.md#대시보드가-토큰을-요구하거나-unauthorized가-나옴).
+
 ## 여러 디바이스 관리
 
 같은 네트워크에서 여러 기기에 OpenClaw를 운영한다면, <a href="https://myopenclawhub.com" target="_blank">Dashboard Connect</a> 도구로 PC에서 편리하게 관리할 수 있습니다.
@@ -214,7 +220,7 @@ oa --update && source ~/.bashrc
 
 업데이트 중에 게이트웨이가 실행 중이었다면, 업데이트 뒤 다시 시작하세요(멈춘 뒤 `openclaw gateway` 를 다시 실행하거나 앱을 다시 시작) — 그래야 업데이트된 런타임을 사용합니다.
 
-**참고**: `openclaw update`(및 `openclaw --update`)는 의도적으로 차단되어 있습니다 — 이 프로젝트가 검증한 버전에 OpenClaw을 고정하는 가드가 설치되어 있기 때문입니다. 게이트웨이가 `update available … Run: openclaw update` 같은 메시지를 계속 출력할 수 있지만, 해당 명령어는 차단됩니다. 대신 `oa --update`를 사용하세요. `openclaw update status`(읽기 전용)는 계속 동작합니다.
+**참고**: `openclaw update`(및 `openclaw --update`)는 의도적으로 차단되어 있습니다 — 이 프로젝트가 검증한 버전에 OpenClaw을 고정하는 가드가 설치되어 있기 때문입니다. 게이트웨이의 "update available" 알림은 꺼져 있습니다(`update.checkOnStart=false`). 직접 다시 켠 경우 `update available … Run: openclaw update` 같은 메시지가 출력될 수 있지만 해당 명령어는 차단되므로 대신 `oa --update`를 사용하세요. `openclaw update status`(읽기 전용)는 계속 동작합니다.
 
 > `oa` 명령어가 없는 경우 (이전 설치 사용자), curl로 실행:
 > ```bash
@@ -223,17 +229,23 @@ oa --update && source ~/.bashrc
 
 ## 백업 및 복구
 
-OpenClaw의 내장 백업 명령어(`openclaw backup create`)는 Android의 앱 전용 저장소에서 하드링크(`fs.link()`) 생성이 제한되어 있어 실패하는 경우가 많습니다. `oa --backup` 명령어는 `tar`를 직접 사용하여 이 문제를 해결하면서도, OpenClaw 백업 규격과 완벽하게 호환되는 아카이브를 생성합니다.
+OpenClaw의 내장 백업 명령어(`openclaw backup create`)는 Android의 앱 전용 저장소에서 하드링크(`fs.link()`) 생성이 제한되어 실패하고, 대화 기록도 담지 않습니다. `oa --backup` 명령어는 두 문제를 모두 해결합니다. OpenClaw 데이터 폴더(`~/.openclaw`) 전체를 `tar`로 묶고, SQLite 데이터베이스는 일관된 스냅샷으로 담으며, `openclaw backup verify`가 인정하는 아카이브를 생성합니다.
+
 백업 생성:
 ```bash
 oa --backup
 ```
-백업은 `~/.openclaw-android/backup/` 폴더에 타임스탬프가 포함된 파일명(예: `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`)으로 저장됩니다. `oa --backup ~/my-backups/`와 같이 사용자 지정 경로를 지정할 수도 있습니다. 백업에는 설정, 상태, 워크스페이스, 에이전트 데이터가 모두 포함됩니다.
+백업은 `~/.openclaw-android/backup/` 폴더에 타임스탬프가 포함된 파일명(예: `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`)으로 저장됩니다. `oa --backup ~/my-backups/`와 같이 사용자 지정 경로를 지정할 수도 있습니다. 백업에는 설정, 상태, 대화 기록, 워크스페이스, 에이전트 데이터가 포함됩니다(로그, 임시 파일, 플러그인 의존성 폴더는 제외).
+
+> **백업 파일은 비공개로 보관하세요.** 백업에는 API 키와 로그인 자격 증명이 들어 있습니다. 파일은 본인만 읽을 수 있게 만들어지지만(`/sdcard` 같은 공유 저장소에서는 적용되지 않을 수 있음), 공개된 곳에 공유하거나 올리지 마세요.
+>
+> **Claw 앱:** `oa --backup`이 `backup.sh not found`라고 나오면(이 기능이 들어오기 전에 설치한 앱) `oa --update`를 한 번 실행하세요.
+
 백업에서 복구:
 ```bash
 oa --restore
 ```
-이 명령어를 실행하면 기본 백업 폴더에 있는 사용 가능한 백업 목록이 표시됩니다. 복구하려는 백업의 번호를 선택하면 됩니다. 도구가 백업 매니페스트에서 플랫폼을 자동으로 감지하여 `~/.openclaw/` 경로로 복구를 진행합니다. 기존 데이터를 덮어쓰게 되므로 실행 전 확인 절차가 진행됩니다.
+이 명령어를 실행하면 기본 백업 폴더에 있는 사용 가능한 백업 목록이 표시됩니다. 복구하려는 백업의 번호를 선택하면 됩니다. 도구가 백업 매니페스트에서 플랫폼을 자동으로 감지하여 이 기기의 `~/.openclaw/` 경로로 복구합니다(다른 기기에서 만든 백업도 복구할 수 있습니다). 먼저 OpenClaw 게이트웨이를 중지하세요. 게이트웨이가 실행 중이면 복구를 거부합니다. 덮어쓰기 전에 현재 데이터를 `~/.openclaw-android/backup/pre-restore/`에 안전 백업으로 저장합니다. 백업 이후에 만든 파일은 그대로 남습니다. 실행 전 확인 절차가 진행됩니다.
 
 ## 문제 해결
 
@@ -485,6 +497,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 7. `openclaw-apply-patches.sh`로 플랫폼별 패치 적용
 8. `openclaw update` 가드(`openclaw-shim.sh`) 설치 — 고정 버전이 유지되도록 함
 9. `clawdhub` (스킬 매니저) 및 필요 시 `undici` 의존성 설치
+10. 게이트웨이의 "update available" 알림 끄기(`openclaw config set update.checkOnStart false`) — 이미 직접 설정한 값이 있으면 그대로 둠
 
 **[6.5] 환경변수 + CLI + 마커:**
 
@@ -594,6 +607,7 @@ GitHub에서 전체 저장소 tarball을 다운로드하고 임시 디렉토리�
 - `openclaw update` 가드(`openclaw-shim.sh`) 갱신 — `openclaw update`/`--update`가 계속 차단되도록 유지
 - `clawdhub` (스킬 매니저) 업데이트/설치
 - 필요 시 clawdhub용 `undici` 설치 (Node.js v24+)
+- 게이트웨이의 "update available" 알림 끄기(`update.checkOnStart=false`) — 직접 설정한 값이 없을 때만
 - 필요 시 `~/skills/`에서 `~/.openclaw/workspace/skills/`로 스킬 마이그레이션
 - PyYAML 누락 시 설치
 

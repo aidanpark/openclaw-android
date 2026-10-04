@@ -27,13 +27,34 @@ node_check() {
     if node -e "$code" 2>/dev/null; then pass "$desc"; else fail "$desc"; fi
 }
 
+# A known gap is a limitation we have measured and deliberately not fixed yet.
+# It is reported but never counted as a failure. If it starts working, say so
+# loudly ([GAP-CLOSED]) so the check is promoted to a regular one instead of
+# silently turning green.
+KNOWN=0; CLOSED=0
+YELLOW='\033[1;33m'
+known_gap() {
+    local desc="$1" got="$2" want="$3"
+    if [ "$got" = "$want" ]; then
+        echo -e "${YELLOW}[GAP-CLOSED]${NC} $desc — works now; promote this to a regular check"
+        CLOSED=$((CLOSED+1))
+    else
+        echo -e "${YELLOW}[KNOWN-GAP]${NC} $desc (got: ${got:-empty})"
+        KNOWN=$((KNOWN+1))
+    fi
+}
+
 echo "=== Compatibility Constraint Harness ==="
 echo ""
 
 # ─────────────────────────────────────────────────
 # AXIS 1: LD_PRELOAD lifecycle
 #   Constraint A: node.real must load WITHOUT bionic LD_PRELOAD
-#   Constraint B: child bionic processes must HAVE LD_PRELOAD
+#   Constraint B: node must NOT carry LD_PRELOAD back into its own environment
+#                 or its children — libtermux-exec.so re-injects it on execve and
+#                 glibc children then die with "Could not find a PHDR".
+#                 (glibc-compat.js deletes LD_PRELOAD on purpose since v1.0.22;
+#                 shebang resolution is done in JS instead — see axis 2.)
 # ─────────────────────────────────────────────────
 echo "--- Axis 1: LD_PRELOAD lifecycle ---"
 
@@ -47,42 +68,90 @@ else
     fail "1a: node wrapper missing or missing 'unset LD_PRELOAD' (path: ${WRAPPER:-not set})"
 fi
 
-# 1b: LD_PRELOAD must be restored in node's environment (for child inheritance)
-node_check "1b: LD_PRELOAD restored in node env" \
-    "if (!process.env.LD_PRELOAD) process.exit(1)"
-
-# 1c: child /bin/sh inherits LD_PRELOAD
-CHILD_LP=$(node -e "
-const { execSync } = require('child_process');
-process.stdout.write(execSync('echo \$LD_PRELOAD', {encoding:'utf8'}).trim());
-" 2>/dev/null)
-if [ -n "$CHILD_LP" ] && echo "$CHILD_LP" | grep -q "libtermux-exec"; then
-    pass "1c: child sh inherits LD_PRELOAD (libtermux-exec)"
+# 1b: LD_PRELOAD must NOT be in node's environment (compat deletes it, and the
+#     saved copy _OA_ORIG_LD_PRELOAD too). "|" = both empty; a crash prints nothing.
+NODE_LP=$(node -e "process.stdout.write((process.env.LD_PRELOAD||'')+'|'+(process.env._OA_ORIG_LD_PRELOAD||''))" 2>/dev/null)
+if [ "$NODE_LP" = "|" ]; then
+    pass "1b: no LD_PRELOAD / _OA_ORIG_LD_PRELOAD in node env"
 else
-    fail "1c: child sh missing LD_PRELOAD (got: ${CHILD_LP:-empty})"
+    fail "1b: node env carries LD_PRELOAD (got: ${NODE_LP:-node failed})"
+fi
+
+# 1c: a child of node gets no LD_PRELOAD either ("[]" = child ran and saw none)
+CHILD_LP=$(node -e '
+const { execFileSync } = require("child_process");
+process.stdout.write("[" + execFileSync("sh", ["-c", "printf %s \"$LD_PRELOAD\""], {encoding:"utf8"}) + "]");
+' 2>/dev/null)
+if [ "$CHILD_LP" = "[]" ]; then
+    pass "1c: child of node inherits no LD_PRELOAD"
+else
+    fail "1c: child of node has LD_PRELOAD or failed (got: ${CHILD_LP:-empty})"
+fi
+
+# 1d: a glibc child (node itself, via the wrapper) starts without a PHDR error —
+#     the failure mode that restoring LD_PRELOAD caused
+CHILD_NODE=$(node -e '
+const { execFileSync } = require("child_process");
+process.stdout.write(execFileSync(process.execPath, ["-p", "6*7"], {encoding:"utf8"}).trim());
+' 2>/dev/null)
+if [ "$CHILD_NODE" = "42" ]; then
+    pass "1d: glibc child (node via wrapper) starts normally"
+else
+    fail "1d: glibc child failed to start (got: ${CHILD_NODE:-empty})"
 fi
 
 # ─────────────────────────────────────────────────
 # AXIS 2: Shebang resolution
-#   Constraint A: #!/usr/bin/env must resolve in child processes
+#   Constraint A: #!/usr/bin/env must resolve in child processes. Android has no
+#                 /usr/bin/env and libtermux-exec is no longer injected, so
+#                 glibc-compat.js resolves the shebang in JS for the child_process
+#                 calls it wraps: spawn, spawnSync, execFile, execFileSync, and
+#                 exec (which goes through execFile).
 #   Constraint B: our own wrappers must NOT use #!/usr/bin/env
+#   Known gaps (measured, not fixed — see M1): execSync is not wrapped (Node's
+#   execSync calls its module-local spawnSync, so patching the export is
+#   bypassed), and compound shell commands (| > < & ; $ ( ) ` { }) are skipped.
 # ─────────────────────────────────────────────────
 echo "--- Axis 2: Shebang resolution ---"
 
-# 2a: shebang with /usr/bin/env works from node child process
 TMPSCRIPT="$(mktemp "${TMPDIR:-/tmp}/compat-test.XXXXXX")"
 echo '#!/usr/bin/env sh' > "$TMPSCRIPT"
 echo 'echo shebang-ok' >> "$TMPSCRIPT"
 chmod +x "$TMPSCRIPT"
-SHEBANG_OUT=$(node -e "
-const { execSync } = require('child_process');
-process.stdout.write(execSync('$TMPSCRIPT', {encoding:'utf8'}).trim());
-" 2>/dev/null)
-if [ "$SHEBANG_OUT" = "shebang-ok" ]; then
-    pass "2a: #!/usr/bin/env sh shebang resolves from node"
-else
-    fail "2a: #!/usr/bin/env sh shebang failed (got: ${SHEBANG_OUT:-empty})"
-fi
+
+# run one JS snippet against the script; snippet prints the child's stdout
+shebang_try() {
+    SCRIPT="$TMPSCRIPT" node -e "$1" 2>/dev/null
+}
+shebang_check() {
+    local desc="$1" js="$2" out
+    out=$(shebang_try "$js")
+    if [ "$out" = "shebang-ok" ]; then
+        pass "$desc"
+    else
+        fail "$desc (got: ${out:-empty})"
+    fi
+}
+
+shebang_check "2a-1: spawnSync(script) resolves #!/usr/bin/env" \
+    'const cp=require("child_process");process.stdout.write(cp.spawnSync(process.env.SCRIPT,[],{encoding:"utf8"}).stdout.trim())'
+shebang_check "2a-2: execFileSync(script) resolves #!/usr/bin/env" \
+    'const cp=require("child_process");process.stdout.write(cp.execFileSync(process.env.SCRIPT,[],{encoding:"utf8"}).trim())'
+shebang_check "2a-3: spawnSync('sh', ['-c', script]) resolves #!/usr/bin/env" \
+    'const cp=require("child_process");process.stdout.write(cp.spawnSync("sh",["-c",process.env.SCRIPT],{encoding:"utf8"}).stdout.trim())'
+shebang_check "2a-4: spawnSync(script, {shell:true}) resolves #!/usr/bin/env" \
+    'const cp=require("child_process");process.stdout.write(cp.spawnSync(process.env.SCRIPT,[],{shell:true,encoding:"utf8"}).stdout.trim())'
+shebang_check "2a-5: exec(script) (async, via execFile) resolves #!/usr/bin/env" \
+    'require("child_process").exec(process.env.SCRIPT,{encoding:"utf8"},(e,out)=>process.stdout.write((out||"").trim()))'
+
+shebang_check "2a-6: spawn('sh', ['-c', script]) (async) resolves #!/usr/bin/env" \
+    'const cp=require("child_process");let o="";const c=cp.spawn("sh",["-c",process.env.SCRIPT]);c.stdout.on("data",d=>{o+=d});c.on("close",()=>process.stdout.write(o.trim()))'
+
+# Known gaps — the expected result is that they do NOT work yet
+known_gap "2c: execSync(script) with #!/usr/bin/env (execSync is not wrapped by glibc-compat.js)" \
+    "$(shebang_try 'const cp=require("child_process");process.stdout.write(cp.execSync(process.env.SCRIPT,{encoding:"utf8"}).trim())')" "shebang-ok"
+known_gap "2d: spawnSync('sh', ['-c', 'script | cat']) — compound shell commands are not resolved" \
+    "$(shebang_try 'const cp=require("child_process");process.stdout.write(cp.spawnSync("sh",["-c",process.env.SCRIPT+" | cat"],{encoding:"utf8"}).stdout.trim())')" "shebang-ok"
 rm -f "$TMPSCRIPT"
 
 # 2b: our wrappers do NOT use #!/usr/bin/env
@@ -204,6 +273,7 @@ fi
 echo ""
 echo "==============================="
 echo -e "  Results: ${GREEN}$PASS passed${NC} / ${RED}$FAIL failed${NC} / $TOTAL total"
+echo -e "  Known gaps: $KNOWN open / $CLOSED closed (not counted as failures)"
 echo "==============================="
 echo ""
 

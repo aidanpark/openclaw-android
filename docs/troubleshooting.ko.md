@@ -88,6 +88,34 @@ openclaw gateway
 
 "gateway already running" 에러가 나오면 위의 [게이트웨이가 시작되지 않음](#게이트웨이가-시작되지-않음-gateway-already-running-또는-port-is-already-in-use) 섹션을 참고하세요.
 
+## 대시보드가 토큰을 요구하거나 "unauthorized"가 나옴
+
+```
+unauthorized
+```
+
+### 원인
+
+`http://127.0.0.1:18789/` 대시보드는 게이트웨이 토큰으로 로그인합니다. OpenClaw는 이 토큰을 기본으로 보여 주지 않습니다. `openclaw config get gateway.auth.token`은 비밀값을 가려서(`__OPENCLAW_REDACTED__`) 출력하고, `openclaw dashboard --no-open`은 토큰이 없는 링크만 출력합니다.
+
+### 해결 방법
+
+설정 파일에서 토큰을 출력합니다(OpenClaw가 일반 JSON으로 저장합니다):
+
+```bash
+node -p "require(process.env.HOME + '/.openclaw/openclaw.json').gateway.auth.token"
+```
+
+출력된 토큰을 대시보드의 인증 입력란에 붙여 넣거나, 아래 주소로 여세요(`<토큰>`을 바꿔 넣음):
+
+```
+http://127.0.0.1:18789/#token=<토큰>
+```
+
+토큰은 공개하지 마세요. 토큰을 가진 사람은 누구나 OpenClaw를 제어할 수 있습니다.
+
+명령이 실패하면 파일을 직접 편집했을 가능성이 큽니다(주석은 유효한 JSON이 아닙니다). `~/.openclaw/openclaw.json`을 편집기로 열어 `gateway.auth.token` 값을 복사하세요. `gateway.auth.token`이 아예 없으면 OpenClaw 대시보드 문서는 `openclaw doctor --generate-gateway-token` 실행을 안내합니다.
+
 ## SSH 접속 실패: "Connection refused"
 
 ```

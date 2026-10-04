@@ -20,12 +20,15 @@ android {
         minSdk = 24
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 9
-        versionName = "0.4.0"
+        versionCode = 10
+        versionName = "0.4.1"
 
         ndk { abiFilters += listOf("arm64-v8a") }
 
-        // Initial download URLs (§2.9) — BuildConfig hardcoded fallbacks
+        // Bootstrap download — URL, mirrors and SHA-256 are pinned in the APK (the trust root).
+        // Mirrors are prefixes put in front of the upstream URL; they are safe because the
+        // downloaded bytes must match BOOTSTRAP_SHA256 whichever candidate served them.
+        // Changing the bootstrap version means updating all of these and releasing a new APK.
         buildConfigField(
             "String",
             "BOOTSTRAP_URL",
@@ -33,13 +36,15 @@ android {
         )
         buildConfigField(
             "String",
-            "WWW_URL",
-            "\"https://github.com/AidanPark/openclaw-android-app/releases/download/v1.0.0/www.zip\"",
+            "BOOTSTRAP_SHA256",
+            "\"ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3\"",
         )
+        buildConfigField("String", "BOOTSTRAP_MIRROR_PREFIXES", "\"https://ghfast.top/\"")
+        // Diagnostic only: tells "upstream replaced the file" from "altered in transit" in the log.
         buildConfigField(
             "String",
-            "CONFIG_URL",
-            "\"https://raw.githubusercontent.com/AidanPark/openclaw-android-app/main/config.json\"",
+            "BOOTSTRAP_DIGEST_API_URL",
+            "\"https://api.github.com/repos/termux/termux-packages/releases/tags/bootstrap-2026.02.12-r1%2Bapt.android-7\"",
         )
     }
 
@@ -79,7 +84,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
 
     @Suppress("UnstableApiUsage")
     testOptions {

@@ -31,16 +31,11 @@ class JsBridge(
     companion object {
         private const val TAG = "JsBridge"
         private const val SHELL_INIT_DELAY_MS = 500L
-        private const val COMMAND_TIMEOUT_MS = 5_000L
         private const val PLATFORM_LIST_TIMEOUT_MS = 10_000L
         private const val API_TIMEOUT_MS = 5000
         private const val PROGRESS_START = 0f
         private const val PROGRESS_HALF = 0.5f
         private const val PROGRESS_DONE = 1f
-        private const val PROGRESS_DOWNLOAD = 0.2f
-        private const val PROGRESS_EXTRACT = 0.6f
-        private const val PROGRESS_APPLY = 0.9f
-        private const val PROGRESS_BOOTSTRAP_START = 0.1f
     }
 
     /**
@@ -113,28 +108,15 @@ class JsBridge(
     @JavascriptInterface
     fun getTerminalSessions(): String = gson.toJson(sessionManager.getSessionsInfo())
 
+    /**
+     * Type one of the dashboard's fixed commands into the active terminal. The WebView names a
+     * command ID; it can no longer send arbitrary text to the shell. No newline is added — the
+     * user reviews the command and presses Enter.
+     */
     @JavascriptInterface
-    fun writeToTerminal(
-        id: String,
-        data: String,
-    ) {
-        val session =
-            if (id.isBlank()) {
-                sessionManager.activeSession
-            } else {
-                sessionManager.getSessionById(id) ?: sessionManager.activeSession
-            }
-        session?.write(data)
-    }
-
-    @JavascriptInterface
-    fun runInNewSession(command: String) {
-        val session = sessionManager.createSession()
-        activity.showTerminal()
-        // Delay write until shell process initializes (same pattern as showTerminal post-setup)
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            session.write(command)
-        }, SHELL_INIT_DELAY_MS)
+    fun writeCommandToTerminal(commandId: String) {
+        val command = BridgeGuard.terminalCommands[commandId] ?: return
+        sessionManager.activeSession?.write(command)
     }
 
     // ═══════════════════════════════════════════
@@ -170,13 +152,18 @@ class JsBridge(
 
     @JavascriptInterface
     fun saveToolSelections(json: String) {
+        // post-setup.sh reads this file line by line and acts only on the known INSTALL_* keys with
+        // true/false, so only those may reach it (see BridgeGuard.toolSelectionIds).
+        val selections =
+            BridgeGuard.parseToolSelections(json) ?: run {
+                AppLogger.w(TAG, "Rejected tool selections: not a map of known tool ids to booleans")
+                return
+            }
         val configFile = java.io.File(bootstrapManager.homeDir, ".openclaw-android/tool-selections.conf")
         configFile.parentFile?.mkdirs()
-        val selections = gson.fromJson(json, Map::class.java) as? Map<*, *> ?: return
         val lines =
             selections.entries.joinToString("\n") { (key, value) ->
-                val envKey = "INSTALL_${(key as String).uppercase().replace("-", "_")}"
-                "$envKey=$value"
+                "INSTALL_${key.uppercase().replace("-", "_")}=$value"
             }
         configFile.writeText(lines + "\n")
     }
@@ -187,7 +174,7 @@ class JsBridge(
 
     @JavascriptInterface
     fun getAvailablePlatforms(): String {
-        // Read from cached config.json or return defaults
+        // Single built-in platform
         return gson.toJson(
             listOf(
                 mapOf(
@@ -214,47 +201,40 @@ class JsBridge(
         return result.stdout.ifBlank { "[]" }
     }
 
+    /**
+     * Platforms are installed and pinned by the install scripts (`oa --update`), whose version pin
+     * is the single source of truth — the app does not run npm itself, so it cannot install
+     * `@latest` around that pin. Only known platform ids are acknowledged.
+     */
     @JavascriptInterface
     fun installPlatform(id: String) {
-        launchWithErrorHandling(
-            errorEventType = "install_progress",
-            errorContext = mapOf("target" to id),
-        ) {
-            eventBridge.emit(
-                "install_progress",
-                mapOf("target" to id, "progress" to PROGRESS_START, "message" to "Installing $id..."),
-            )
-            val env = EnvironmentBuilder.build(activity)
-            CommandRunner.runStreaming(
-                "npm install -g $id@latest --ignore-scripts",
-                env,
-                bootstrapManager.homeDir,
-            ) { output ->
-                eventBridge.emit(
-                    "install_progress",
-                    mapOf("target" to id, "progress" to PROGRESS_HALF, "message" to output),
-                )
-            }
-            eventBridge.emit(
-                "install_progress",
-                mapOf("target" to id, "progress" to PROGRESS_DONE, "message" to "$id installed"),
-            )
-        }
+        if (!BridgeGuard.isPlatform(id)) return
+        eventBridge.emit(
+            "install_progress",
+            mapOf(
+                "target" to id,
+                "progress" to PROGRESS_START,
+                "message" to "Platforms are managed by the install scripts. Run 'oa --update' in the terminal.",
+            ),
+        )
     }
 
     @JavascriptInterface
     fun uninstallPlatform(id: String) {
-        launchWithErrorHandling(
-            errorEventType = "install_progress",
-            errorContext = mapOf("target" to id),
-        ) {
-            val env = EnvironmentBuilder.build(activity)
-            CommandRunner.runSync("npm uninstall -g $id", env, bootstrapManager.homeDir)
-        }
+        if (!BridgeGuard.isPlatform(id)) return
+        eventBridge.emit(
+            "install_progress",
+            mapOf(
+                "target" to id,
+                "progress" to PROGRESS_START,
+                "message" to "Platforms are managed by the install scripts.",
+            ),
+        )
     }
 
     @JavascriptInterface
     fun switchPlatform(id: String) {
+        if (!BridgeGuard.isPlatform(id)) return
         // Write active platform marker
         val markerFile = java.io.File(bootstrapManager.homeDir, ".openclaw-android/.platform")
         markerFile.parentFile?.mkdirs()
@@ -264,7 +244,7 @@ class JsBridge(
     @JavascriptInterface
     fun getActivePlatform(): String {
         val markerFile = java.io.File(bootstrapManager.homeDir, ".openclaw-android/.platform")
-        val id = if (markerFile.exists()) markerFile.readText().trim() else "openclaw"
+        val id = BridgeGuard.sanitizePlatformId(if (markerFile.exists()) markerFile.readText() else null)
         return gson.toJson(mapOf("id" to id, "name" to id.replaceFirstChar { it.uppercase() }))
     }
 
@@ -300,16 +280,8 @@ class JsBridge(
         }
 
         // npm global packages - check binary file in node bin
-        val nodeBin = "${bootstrapManager.homeDir.absolutePath}/.openclaw-android/node/bin"
-        val npmBinChecks =
-            mapOf(
-                "claude-code" to "$nodeBin/claude",
-                "gemini-cli" to "$nodeBin/gemini",
-                "codex-cli" to "$nodeBin/codex",
-                "opencode" to "$nodeBin/opencode",
-            )
-        for ((id, path) in npmBinChecks) {
-            if (java.io.File(path).exists()) {
+        for (id in BridgeGuard.npmToolBinaries.keys) {
+            if (isNpmToolInstalled(id)) {
                 tools.add(mapOf("id" to id, "name" to id, "version" to "installed"))
             }
         }
@@ -319,6 +291,7 @@ class JsBridge(
 
     @JavascriptInterface
     fun installTool(id: String) {
+        if (id !in BridgeGuard.toolIds) return
         launchWithErrorHandling(
             errorEventType = "install_progress",
             errorContext = mapOf("target" to id),
@@ -351,7 +324,7 @@ class JsBridge(
                     "opencode" ->
                         "curl -fsSL https://raw.githubusercontent.com/" +
                             "AidanPark/openclaw-android/main/scripts/install-opencode.sh | bash"
-                    else -> "echo 'Unknown tool: $id'"
+                    else -> return@launchWithErrorHandling
                 }
             eventBridge.emit(
                 "install_progress",
@@ -372,6 +345,7 @@ class JsBridge(
 
     @JavascriptInterface
     fun uninstallTool(id: String) {
+        if (id !in BridgeGuard.toolIds) return
         launchWithErrorHandling(
             errorEventType = "install_progress",
             errorContext = mapOf("target" to id),
@@ -396,7 +370,7 @@ class JsBridge(
                             " \$HOME/.openclaw-android/bin/ld.so.opencode" +
                             " \$PREFIX/tmp/ld.so.opencode" +
                             " && rm -rf \$HOME/.config/opencode"
-                    else -> "echo 'Unknown tool: $id'"
+                    else -> return@launchWithErrorHandling
                 }
             CommandRunner.runSync(cmd, env, bootstrapManager.homeDir)
         }
@@ -405,7 +379,6 @@ class JsBridge(
     @JavascriptInterface
     fun isToolInstalled(id: String): String {
         val prefix = bootstrapManager.prefixDir.absolutePath
-        val env = EnvironmentBuilder.build(activity)
         val exists =
             when (id) {
                 "openssh-server" -> java.io.File("$prefix/bin/sshd").exists()
@@ -418,43 +391,71 @@ class JsBridge(
                         java.io.File("$prefix/bin/chromium").exists()
                 }
                 "code-server" -> java.io.File("$prefix/bin/code-server").exists()
-                else -> {
-                    // npm global packages: check via command -v
-                    val result =
-                        CommandRunner.runSync(
-                            "command -v $id 2>/dev/null",
-                            env,
-                            bootstrapManager.prefixDir,
-                            timeoutMs = COMMAND_TIMEOUT_MS,
-                        )
-                    result.stdout.trim().isNotEmpty()
-                }
+                else -> isNpmToolInstalled(id)
             }
         return gson.toJson(mapOf("installed" to exists))
+    }
+
+    /**
+     * npm global installs land under the Termux prefix (`$PREFIX/bin`), some tools drop a launcher
+     * in `~/.local/bin`, and the node directory is on the PATH too — so look in all of them, the
+     * same places `command -v` would. Unknown ids are never "installed".
+     */
+    private fun isNpmToolInstalled(id: String): Boolean {
+        val bin = BridgeGuard.npmToolBinaries[id] ?: return false
+        val dirs =
+            listOf(
+                "${bootstrapManager.prefixDir.absolutePath}/bin",
+                "${bootstrapManager.homeDir.absolutePath}/.local/bin",
+                "${bootstrapManager.homeDir.absolutePath}/.openclaw-android/node/bin",
+            )
+        return dirs.any { java.io.File(it, bin).exists() }
     }
 
     // ═══════════════════════════════════════════
     // Commands domain
     // ═══════════════════════════════════════════
 
+    /** Run one of the fixed version probes by ID (see [BridgeGuard.versionCommands]). */
     @JavascriptInterface
-    fun runCommand(cmd: String): String {
-        val env = EnvironmentBuilder.build(activity)
-        val result = CommandRunner.runSync(cmd, env, bootstrapManager.homeDir)
-        return gson.toJson(result)
+    fun runCommand(commandId: String): String {
+        val command = BridgeGuard.versionCommands[commandId] ?: return blockedCommandResult()
+        val env = probeEnvironment()
+        val result = CommandRunner.runExecutable(command.executable, command.args, env, bootstrapManager.homeDir)
+        val shown =
+            if (command.firstLineOnly) {
+                result.copy(
+                    stdout =
+                        result.stdout
+                            .lineSequence()
+                            .firstOrNull()
+                            .orEmpty(),
+                )
+            } else {
+                result
+            }
+        return gson.toJson(shown)
     }
 
     @JavascriptInterface
     fun runCommandAsync(
         callbackId: String,
-        cmd: String,
+        commandId: String,
     ) {
+        val command = BridgeGuard.versionCommands[commandId]
+        if (command == null) {
+            eventBridge.emit(
+                "command_output",
+                mapOf("callbackId" to callbackId, "data" to "Command is not allowed", "done" to true),
+            )
+            return
+        }
         launchWithErrorHandling(
             errorEventType = "command_output",
             errorContext = mapOf("callbackId" to callbackId, "done" to true),
         ) {
-            val env = EnvironmentBuilder.build(activity)
-            CommandRunner.runStreaming(cmd, env, bootstrapManager.homeDir) { output ->
+            val env = probeEnvironment()
+            CommandRunner.streamExecutable(command.executable, command.args, env, bootstrapManager.homeDir) { output ->
                 eventBridge.emit(
                     "command_output",
                     mapOf("callbackId" to callbackId, "data" to output, "done" to false),
@@ -467,42 +468,30 @@ class JsBridge(
         }
     }
 
+    /**
+     * The app environment plus the OpenClaw wrapper directory (where the `node` wrapper lives),
+     * appended last so it can never shadow a command the app already resolves.
+     */
+    private fun probeEnvironment(): Map<String, String> {
+        val env = EnvironmentBuilder.build(activity)
+        val wrappers = "${bootstrapManager.homeDir.absolutePath}/.openclaw-android/bin"
+        return env + ("PATH" to "${env["PATH"].orEmpty()}:$wrappers")
+    }
+
+    private fun blockedCommandResult(): String =
+        gson.toJson(CommandRunner.CommandResult(exitCode = -1, stdout = "", stderr = "Command is not allowed"))
+
     // ═══════════════════════════════════════════
     // Updates domain
     // ═══════════════════════════════════════════
 
+    /**
+     * Over-the-air component updates (www / bootstrap) were removed: the update channel no longer
+     * exists, www always ships inside the APK, and downloads were not integrity-checked. The app
+     * itself updates through APK releases and the scripts through `oa --update`.
+     */
     @JavascriptInterface
-    fun checkForUpdates(): String {
-        // Compare local versions with config.json remote versions
-        val updates = mutableListOf<Map<String, String>>()
-        try {
-            val configFile =
-                java.io.File(
-                    activity.filesDir,
-                    "usr/share/openclaw-app/config.json",
-                )
-            if (configFile.exists()) {
-                val config = gson.fromJson(configFile.readText(), Map::class.java) as? Map<*, *>
-                val localWwwVersion =
-                    activity
-                        .getSharedPreferences("openclaw", 0)
-                        .getString("www_version", "0.0.0")
-                val remoteWwwVersion = ((config?.get("www") as? Map<*, *>)?.get("version") as? String)
-                if (remoteWwwVersion != null && remoteWwwVersion != localWwwVersion) {
-                    updates.add(
-                        mapOf(
-                            "component" to "www",
-                            "currentVersion" to (localWwwVersion ?: "0.0.0"),
-                            "newVersion" to remoteWwwVersion,
-                        ),
-                    )
-                }
-            }
-        } catch (_: Exception) {
-            // ignore parse errors
-        }
-        return gson.toJson(updates)
-    }
+    fun checkForUpdates(): String = gson.toJson(emptyList<Map<String, String>>())
 
     @JavascriptInterface
     fun getApkUpdateInfo(): String {
@@ -538,100 +527,14 @@ class JsBridge(
 
     @JavascriptInterface
     fun applyUpdate(component: String) {
-        launchWithErrorHandling(
-            errorEventType = "install_progress",
-            errorContext = mapOf("target" to component),
-        ) {
-            emitProgress(component, PROGRESS_START, "Updating $component...")
-            when (component) {
-                "www" -> updateWww()
-                "bootstrap" -> updateBootstrap()
-                "scripts" -> emitProgress("scripts", PROGRESS_HALF, "Scripts are updated with bootstrap")
-            }
-            emitProgress(component, PROGRESS_DONE, "$component updated")
-        }
-    }
-
-    private fun emitProgress(
-        target: String,
-        progress: Float,
-        message: String,
-    ) {
         eventBridge.emit(
             "install_progress",
             mapOf(
-                "target" to target,
-                "progress" to progress,
-                "message" to message,
+                "target" to component,
+                "progress" to PROGRESS_START,
+                "message" to "Over-the-air updates are no longer supported. Update the app instead.",
             ),
         )
-    }
-
-    private suspend fun updateWww() {
-        try {
-            val url = UrlResolver(activity).getWwwUrl()
-            val stagingWww = java.io.File(activity.cacheDir, "www-staging")
-            stagingWww.deleteRecursively()
-            stagingWww.mkdirs()
-
-            emitProgress("www", PROGRESS_DOWNLOAD, "Downloading...")
-            val zipFile = java.io.File(activity.cacheDir, "www.zip")
-            java.net.URL(url).openStream().use { input ->
-                zipFile.outputStream().use { output -> input.copyTo(output) }
-            }
-
-            emitProgress("www", PROGRESS_EXTRACT, "Extracting...")
-            extractZipToDir(zipFile, stagingWww)
-            zipFile.delete()
-
-            emitProgress("www", PROGRESS_APPLY, "Applying...")
-            val wwwDir = bootstrapManager.wwwDir
-            wwwDir.deleteRecursively()
-            wwwDir.parentFile?.mkdirs()
-            stagingWww.renameTo(wwwDir)
-
-            activity.runOnUiThread { activity.reloadWebView() }
-        } catch (e: Exception) {
-            emitProgress("www", PROGRESS_START, "Update failed: ${e.message}")
-        }
-    }
-
-    private suspend fun updateBootstrap() {
-        try {
-            emitProgress("bootstrap", PROGRESS_BOOTSTRAP_START, "Downloading bootstrap...")
-            bootstrapManager.startSetup { progress, message ->
-                emitProgress("bootstrap", progress, message)
-            }
-        } catch (e: Exception) {
-            emitProgress("bootstrap", PROGRESS_START, "Update failed: ${e.message}")
-        }
-    }
-
-    private fun extractZipToDir(
-        zipFile: java.io.File,
-        targetDir: java.io.File,
-    ) {
-        java.util.zip.ZipInputStream(zipFile.inputStream()).use { zis ->
-            var entry = zis.nextEntry
-            while (entry != null) {
-                extractZipEntry(zis, entry, targetDir)
-                entry = zis.nextEntry
-            }
-        }
-    }
-
-    private fun extractZipEntry(
-        zis: java.util.zip.ZipInputStream,
-        entry: java.util.zip.ZipEntry,
-        targetDir: java.io.File,
-    ) {
-        val destFile = java.io.File(targetDir, entry.name)
-        if (entry.isDirectory) {
-            destFile.mkdirs()
-        } else {
-            destFile.parentFile?.mkdirs()
-            destFile.outputStream().use { out -> zis.copyTo(out) }
-        }
     }
 
     // ═══════════════════════════════════════════
@@ -663,7 +566,7 @@ class JsBridge(
         activity.runOnUiThread {
             val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
             intent.data = Uri.parse("package:${activity.packageName}")
-            activity.startActivity(intent)
+            startActivitySafely(intent)
         }
     }
 
@@ -679,7 +582,16 @@ class JsBridge(
                         }
                     else -> Intent(Settings.ACTION_SETTINGS)
                 }
+            startActivitySafely(intent)
+        }
+    }
+
+    /** Runs on the UI thread, outside WebView's exception guard: a missing handler must not crash the app. */
+    private fun startActivitySafely(intent: Intent) {
+        try {
             activity.startActivity(intent)
+        } catch (e: android.content.ActivityNotFoundException) {
+            AppLogger.w(TAG, "No activity can handle ${intent.action}", e)
         }
     }
 
@@ -717,9 +629,17 @@ class JsBridge(
 
     @JavascriptInterface
     fun openUrl(url: String) {
+        if (!BridgeGuard.isSafeExternalUrl(url)) {
+            AppLogger.w(TAG, "Blocked openUrl for non-https URL")
+            return
+        }
         val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
         intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        activity.startActivity(intent)
+        try {
+            activity.startActivity(intent)
+        } catch (e: android.content.ActivityNotFoundException) {
+            AppLogger.w(TAG, "No browser to open the URL", e)
+        }
     }
 
     /** Returns positive if a > b, negative if a < b, 0 if equal (semver: major.minor.patch) */

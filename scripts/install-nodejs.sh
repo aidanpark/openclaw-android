@@ -3,10 +3,11 @@
 # Extracted from install-glibc-env.sh — Node.js only, assumes glibc already installed.
 # Called by orchestrator when config.env PLATFORM_NEEDS_NODEJS=true.
 #
-# Usage: install-nodejs.sh <version>
+# Usage: install-nodejs.sh <version> [<platform npm package> <its pinned version>]
 #   <version> is the pinned Node.js version (X.Y.Z). Callers pass
 #   PLATFORM_NODE_VERSION from platforms/<platform>/config.env (the SSOT);
-#   this script has no default of its own.
+#   this script has no default of its own. The optional package/pin pair is the
+#   fallback pin for the npm wrapper's version-pin guard.
 #
 # What it does:
 #   1. Converge to the pinned version (upgrade or downgrade; same version = repair wrappers only)
@@ -45,6 +46,15 @@ if [[ ! "$NODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo -e "${RED}[FAIL]${NC} Invalid Node.js version pin: '${NODE_VERSION}'"
     echo "       The downloaded release may be incomplete. Run 'oa --update' again."
     exit 1
+fi
+# Optional 2nd/3rd arguments: the platform package and its pinned version. They
+# are only the fallback pin of the npm wrapper's version-pin guard (the guard
+# reads the platform's config.env at run time). Missing or malformed = no fallback.
+OA_GUARD_PKG="${2:-}"
+OA_GUARD_PIN="${3:-}"
+if [[ ! "$OA_GUARD_PKG" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || [[ ! "$OA_GUARD_PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    OA_GUARD_PKG=""
+    OA_GUARD_PIN=""
 fi
 NODE_DIST_BASE="https://nodejs.org/dist/v${NODE_VERSION}"
 NODE_TARBALL="node-v${NODE_VERSION}-linux-arm64.tar.xz"
@@ -145,6 +155,146 @@ install_compat_shim() {
     return 0
 }
 
+# Splice the version-pin guard into a generated npm wrapper: the guard text
+# replaces the "# __NPM_GUARD__" line. $1 = wrapper file. OA_GUARD_PKG / OA_GUARD_PIN
+# are the pin this installer ships (the guard also reads the platform config at
+# run time). The guard text must stay identical in scripts/install-nodejs.sh and
+# post-setup.sh.
+oa_inject_npm_guard() {
+    local f="$1" g
+    IFS= read -r -d '' g << 'NPMGUARD' || true
+# ── Version-pin guard ──
+# Refuses a GLOBAL install/update of the pinned platform package at any version
+# other than the pin: 'npm install -g openclaw@latest' (typed by a user or run by
+# an agent) would replace the verified OpenClaw + Node.js pair. Two pins are
+# accepted: the one in the platform config on disk, and the one this wrapper was
+# generated with — an installer that ships a newer pin than the config on disk
+# (a re-install or recovery run) must still be able to install its own pin.
+# Fails open: whatever this block cannot parse is passed to npm unchanged. There
+# is no override on purpose. Limits: npm run by absolute path, abbreviated option
+# names, 'npm exec'/'npx' are not covered.
+_oa_pkg="__OA_PKG__"
+_oa_pin="__OA_PIN__"
+_oa_cfgpin=""
+_oa_cfg="$HOME/.openclaw-android/platforms/openclaw/config.env"
+if [ -f "$_oa_cfg" ]; then
+    _oa_v=$(grep -m1 '^PLATFORM_NPM_PACKAGE_VERSION=' "$_oa_cfg" 2>/dev/null | cut -d'"' -f2)
+    case "$_oa_v" in [0-9]*.[0-9]*.[0-9]*) _oa_cfgpin="$_oa_v" ;; esac
+    _oa_n=$(grep -m1 '^PLATFORM_NPM_PACKAGE=' "$_oa_cfg" 2>/dev/null | cut -d'"' -f2)
+    if [[ "$_oa_n" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then _oa_pkg="$_oa_n"; fi
+fi
+_oa_is_pin() { [ "$1" = "$_oa_pin" ] || { [ -n "$_oa_cfgpin" ] && [ "$1" = "$_oa_cfgpin" ]; }; }
+_oa_check_spec() {
+    local a="$1" x
+    case "$a" in
+        @*) return ;;
+        file:*) _oa_check_spec "${a#file:}"; return ;;
+        "$_oa_pkg") _oa_bad="$a"; return ;;
+        "$_oa_pkg"@*) _oa_is_pin "${a#*@}" || _oa_bad="$a"; return ;;
+    esac
+    x="${a#*npm:}"
+    if [ "$x" != "$a" ]; then
+        case "$x" in
+            "$_oa_pkg") _oa_bad="$a"; return ;;
+            "$_oa_pkg"@*) _oa_is_pin "${x#*@}" || _oa_bad="$a"; return ;;
+        esac
+    fi
+    case "$a" in
+        */"$_oa_pkg"|*/"$_oa_pkg".git|*/"$_oa_pkg"#*|*/"$_oa_pkg".git#*|*/"$_oa_pkg"/archive/*|*/"$_oa_pkg"/tarball/*) _oa_bad="$a" ;;
+        "$_oa_pkg"-[v0-9]*.tgz|*/"$_oa_pkg"-[v0-9]*.tgz|"$_oa_pkg"-[v0-9]*.tar.gz|*/"$_oa_pkg"-[v0-9]*.tar.gz|*/"$_oa_pkg"/tar.gz/*|*/"$_oa_pkg"/zip/*) _oa_bad="$a" ;;
+        .|..|./*|../*|/*|"~"/*|\~/*)
+            case "$a" in "~"/*|\~/*) a="$HOME/${a#*/}" ;; esac
+            if [ -f "$a/package.json" ] && grep -Eq "\"name\"[[:space:]]*:[[:space:]]*\"$_oa_pkg\"" "$a/package.json" 2>/dev/null; then
+                _oa_bad="$a"
+            fi ;;
+    esac
+}
+if [ -n "$_oa_pkg" ] && { [ -n "$_oa_pin" ] || [ -n "$_oa_cfgpin" ]; }; then
+    _oa_global=false; _oa_cmd=""; _oa_pos=0; _oa_names=0; _oa_bad=""; _oa_skip=false; _oa_prev=""
+    _oa_e="${npm_config_global:-${NPM_CONFIG_GLOBAL:-}}"
+    case "$_oa_e" in ""|false|0|null) ;; *) _oa_global=true ;; esac
+    case "${npm_config_location:-${NPM_CONFIG_LOCATION:-}}" in global) _oa_global=true ;; esac
+    _oa_rcs=("$HOME/.npmrc" "${PREFIX:-}/etc/npmrc")
+    _oa_d="$PWD"
+    _oa_i=0
+    # PWD can be stale or relative when the directory was deleted: only walk real absolute paths
+    case "$_oa_d" in /*) ;; *) _oa_d="" ;; esac
+    while [ -n "$_oa_d" ] && [ "$_oa_d" != "/" ] && [ "$_oa_i" -lt 64 ]; do
+        _oa_rcs+=("$_oa_d/.npmrc")
+        [ -f "$_oa_d/package.json" ] && break
+        _oa_d="${_oa_d%/*}"
+        _oa_i=$((_oa_i + 1))
+    done
+    for _oa_rc in "${_oa_rcs[@]}"; do
+        if [ -f "$_oa_rc" ] && grep -Eiq '^[[:space:]]*(global[[:space:]]*=[[:space:]]*"?(true|1|yes|on)"?|location[[:space:]]*=[[:space:]]*"?global"?)' "$_oa_rc" 2>/dev/null; then
+            _oa_global=true
+        fi
+    done
+    for _oa_a in "$@"; do
+        if [ "$_oa_skip" = true ]; then
+            _oa_skip=false
+            [ "$_oa_prev" = "location" ] && [ "$_oa_a" = "global" ] && _oa_global=true
+            continue
+        fi
+        case "$_oa_a" in
+            -*)
+                _oa_n="$_oa_a"
+                while [ "${_oa_n#-}" != "$_oa_n" ]; do _oa_n="${_oa_n#-}"; done
+                _oa_prev="$_oa_n"
+                case "$_oa_n" in
+                    L) _oa_skip=true; _oa_prev="location" ;;
+                    location|prefix|registry|cache|userconfig|globalconfig|loglevel|tag|scope|omit|include|otp|workspace|w|C|script-shell|save-prefix|install-strategy|depth|proxy|https-proxy|noproxy|fetch-timeout|fetch-retries|before|access|audit-level|auth-type|logs-dir|logs-max|node-options) _oa_skip=true ;;
+                    g|global|no-no-global|l*=global) _oa_global=true ;;
+                    g=*|global=*)
+                        # '--global=true' (and '--global=<spec>', which npm reads as a package)
+                        _oa_v="${_oa_n#*=}"
+                        case "$_oa_v" in false) ;; *) _oa_global=true; _oa_check_spec "$_oa_v" ;; esac ;;
+                    *)
+                        if [[ "$_oa_a" =~ ^-[gSDOEBfdspyqlhavnPcmLHwC]+$ ]]; then
+                            case "$_oa_n" in *g*) _oa_global=true ;; esac
+                            case "$_oa_n" in *L) _oa_skip=true; _oa_prev="location" ;; *[wCcm]) _oa_skip=true ;; esac
+                        fi ;;
+                esac ;;
+            *)
+                _oa_pos=$((_oa_pos + 1))
+                if [ -z "$_oa_cmd" ]; then
+                    case "$_oa_a" in
+                        link|lin|ln)
+                            _oa_cmd=install; _oa_global=true; continue ;;
+                        i|in|ins|inst|insta|instal|install|isnt|isnta|isntal|isntall|add|ci|clean-install|install-t|install-te|install-tes|install-test|installT|installTe|installTes|installTest|it|cit|install-ci-test|installCiTest)
+                            _oa_cmd=install; continue ;;
+                        up|ud|upd|upda|updat|update|upg|upgr|upgra|upgrad|upgrade|udp|udpa|udpat|udpate)
+                            _oa_cmd=update; continue ;;
+                    esac
+                fi
+                case "$_oa_a" in always|true|false|*://*) ;; *) if [[ "$_oa_a" =~ ^@?[a-z] ]]; then _oa_names=$((_oa_names + 1)); fi ;; esac
+                _oa_check_spec "$_oa_a" ;;
+        esac
+    done
+    if [ "$_oa_global" = true ] && [ -n "$_oa_cmd" ]; then
+        # 'npm install -g' / 'npm link' with no name installs the package in the current directory
+        if [ -z "$_oa_bad" ] && [ "$_oa_cmd" = install ] && [ "$_oa_pos" -le 1 ]; then _oa_check_spec "."; fi
+        if [ -n "$_oa_bad" ]; then
+            echo "[BLOCKED] $_oa_pkg is pinned to ${_oa_cfgpin:-$_oa_pin} (the version verified by OpenClaw on Android)." >&2
+            echo "          '$_oa_bad' would replace it. Run 'oa --update' to update safely." >&2
+            exit 1
+        fi
+        if [ "$_oa_cmd" = update ] && [ "$_oa_names" -eq 0 ]; then
+            echo "[BLOCKED] 'npm update -g' would also upgrade $_oa_pkg, which is pinned to ${_oa_cfgpin:-$_oa_pin}." >&2
+            echo "          Name the packages to update, or run 'oa --update' to update safely." >&2
+            exit 1
+        fi
+    fi
+fi
+NPMGUARD
+    g="${g//__OA_PKG__/${OA_GUARD_PKG:-}}"
+    g="${g//__OA_PIN__/${OA_GUARD_PIN:-}}"
+    if ! G="$g" awk '$0 == "# __NPM_GUARD__" { print ENVIRON["G"]; next } { print }' "$f" > "$f.g" || ! mv -f "$f.g" "$f"; then
+        rm -f "$f.g"
+        echo -e "${YELLOW}[WARN]${NC} npm version-pin guard could not be added to the npm wrapper"
+    fi
+}
+
 # npm/npx wrappers + corepack shebang. Sets _WROTE_NPM=true if anything was
 # written. Call it as a plain command (not in if/||) so set -e stops the script
 # on a failed write instead of moving an empty file into place.
@@ -153,6 +303,7 @@ write_npm_wrappers() {
     if [ -f "$NODE_DIR/lib/node_modules/npm/bin/npm-cli.js" ]; then
         cat > "$BIN_DIR/npm.tmp" << 'NPMWRAP'
 #!__PREFIX__/bin/bash
+# __NPM_GUARD__
 "__BIN_DIR__/node" "__NODE_DIR__/lib/node_modules/npm/bin/npm-cli.js" "$@"
 _npm_exit=$?
 # Re-patch openclaw CLI wrapper after a global install/update of openclaw.
@@ -199,6 +350,7 @@ case "$*" in *-g*|*--global*)
 esac
 exit $_npm_exit
 NPMWRAP
+        oa_inject_npm_guard "$BIN_DIR/npm.tmp"
         sed -i "s|__PREFIX__|$PREFIX|g; s|__BIN_DIR__|$BIN_DIR|g; s|__NODE_DIR__|$NODE_DIR|g" "$BIN_DIR/npm.tmp"
         chmod +x "$BIN_DIR/npm.tmp"
         mv -f "$BIN_DIR/npm.tmp" "$BIN_DIR/npm"

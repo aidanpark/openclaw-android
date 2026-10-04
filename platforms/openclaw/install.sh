@@ -83,3 +83,15 @@ else
 fi
 
 mkdir -p "$HOME/.openclaw"
+
+# Turn off the gateway's "update available" notice: the OpenClaw version is pinned
+# here, so the notice only points at an update that oa blocks. A value the user
+# already set (true or false) is left alone. Same block as update.sh and the end
+# of post-setup.sh.
+if timeout 60 openclaw config get update.checkOnStart >/dev/null 2>&1; then
+    echo -e "${GREEN}[SKIP]${NC} update.checkOnStart is already set"
+elif timeout 60 openclaw config set update.checkOnStart false >/dev/null 2>&1; then
+    echo -e "${GREEN}[OK]${NC}   OpenClaw update notice turned off (update.checkOnStart=false)"
+else
+    echo -e "${YELLOW}[WARN]${NC} Could not turn off the OpenClaw update notice (non-critical)"
+fi

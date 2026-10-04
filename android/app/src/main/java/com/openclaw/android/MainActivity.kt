@@ -78,39 +78,69 @@ class MainActivity : AppCompatActivity() {
         AppLogger.i(TAG, "Bootstrap installed: $isInstalled, needsPostSetup: ${bootstrapManager.needsPostSetup()}")
 
         // Sync www assets and check for APK version upgrade
+        var scriptUpdate = false
         if (isInstalled) {
-            val prefs = getSharedPreferences("openclaw", 0)
-            val savedVersionCode = prefs.getInt("versionCode", 0)
-            val currentVersionCode = packageManager.getPackageInfo(packageName, 0).versionCode
             // Always sync www from assets to pick up UI updates
             bootstrapManager.syncWwwFromAssets()
             // Ensure oa CLI is installed (network, run in background)
             Thread { bootstrapManager.installOaCli() }.start()
+            val savedVersionCode = bootstrapManager.savedVersionCode()
+            val currentVersionCode = bootstrapManager.currentVersionCode()
             if (currentVersionCode > savedVersionCode) {
                 AppLogger.i(TAG, "APK version upgrade detected: $savedVersionCode -> $currentVersionCode")
-                bootstrapManager.applyScriptUpdate()
-                prefs.edit().putInt("versionCode", currentVersionCode).apply()
+                scriptUpdate = true
             }
         }
-        if (isInstalled) {
-            showTerminal()
-            val session = sessionManager.createSession()
-            if (bootstrapManager.needsPostSetup()) {
-                AppLogger.i(TAG, "Running post-setup script in terminal")
-                val script = bootstrapManager.postSetupScript.absolutePath
-                binding.terminalView.post {
-                    session.write("bash $script\n")
-                }
-            } else if (intent?.getBooleanExtra("from_boot", false) == true) {
-                val platformFile = java.io.File(bootstrapManager.homeDir, ".openclaw-android/.platform")
-                val platformId = if (platformFile.exists()) platformFile.readText().trim() else "openclaw"
-                AppLogger.i(TAG, "Boot launch \u2014 auto-starting $platformId gateway")
-                binding.terminalView.post {
-                    session.write("$platformId gateway\n")
-                }
-            }
-        }
+        if (isInstalled) startInstalledTerminal(scriptUpdate)
         // else: WebView shows setup UI, user triggers startSetup via JsBridge
+    }
+
+    /**
+     * Open the terminal for an installed bootstrap. Script downloads run off the main thread
+     * (NetworkOnMainThreadException otherwise). An unfinished setup waits for the download
+     * before running the script, bounded by the download timeouts; a finished one just
+     * updates in the background.
+     */
+    private fun startInstalledTerminal(scriptUpdate: Boolean) {
+        showTerminal()
+        val session = sessionManager.createSession()
+        val needsPostSetup = bootstrapManager.needsPostSetup()
+        // Background threads must not throw: an uncaught exception would take the whole app down
+        val updateScripts = {
+            try {
+                bootstrapManager.applyScriptUpdate()
+                bootstrapManager.saveCurrentVersionCode()
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "Script update failed", e)
+            }
+        }
+        if (needsPostSetup) {
+            Thread {
+                if (scriptUpdate) {
+                    updateScripts()
+                } else {
+                    runCatching { bootstrapManager.refreshPostSetupScript() }
+                        .onFailure { AppLogger.w(TAG, "post-setup refresh failed", it) }
+                }
+                runOnUiThread {
+                    if (!isFinishing) {
+                        AppLogger.i(TAG, "Running post-setup script in terminal")
+                        val script = bootstrapManager.postSetupScript.absolutePath
+                        binding.terminalView.post { session.write("bash $script\n") }
+                    }
+                }
+            }.start()
+            return
+        }
+        if (scriptUpdate) Thread { updateScripts() }.start()
+        if (intent?.getBooleanExtra("from_boot", false) == true) {
+            val platformFile = java.io.File(bootstrapManager.homeDir, ".openclaw-android/.platform")
+            // The marker is typed into the shell — only a known platform id is trusted
+            val saved = if (platformFile.exists()) platformFile.readText() else null
+            val platformId = BridgeGuard.sanitizePlatformId(saved)
+            AppLogger.i(TAG, "Boot launch \u2014 auto-starting $platformId gateway")
+            binding.terminalView.post { session.write("$platformId gateway\n") }
+        }
     }
 
     // --- Terminal setup ---
@@ -140,6 +170,20 @@ class MainActivity : AppCompatActivity() {
             addJavascriptInterface(jsBridge, "OpenClaw")
             webViewClient =
                 object : WebViewClient() {
+                    // The bridge is exposed to whatever page the WebView shows, so only the app's
+                    // own UI (bundled or synced www) may load; anything else is blocked.
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        request: android.webkit.WebResourceRequest?,
+                    ): Boolean {
+                        val target = request?.url?.toString() ?: return true
+                        val allowed =
+                            target.startsWith("file://${bootstrapManager.wwwDir.absolutePath}/") ||
+                                target.startsWith("file:///android_asset/www/")
+                        if (!allowed) AppLogger.w(TAG, "Blocked WebView navigation to a non-app page")
+                        return !allowed
+                    }
+
                     override fun onPageFinished(
                         view: WebView?,
                         url: String?,

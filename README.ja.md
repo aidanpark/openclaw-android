@@ -173,6 +173,12 @@ Androidは画面オフ時にバックグラウンドプロセスを終了した�
 
 SSHアクセスとダッシュボードトンネルの設定方法は[Termux SSHセットアップガイド](docs/termux-ssh-guide.md)を参照してください。
 
+ダッシュボードのアドレスは `http://127.0.0.1:18789/` です。トークンを求められる（または "unauthorized" と表示される）場合は、トークンを表示して一緒に開いてください:
+```bash
+node -p "require(process.env.HOME + '/.openclaw/openclaw.json').gateway.auth.token"
+```
+表示されたトークンをダッシュボードの認証欄に貼り付けるか、`http://127.0.0.1:18789/#token=<トークン>` を開きます。トークンは公開しないでください。詳細: [ダッシュボードがトークンを要求する](docs/troubleshooting.md#dashboard-asks-for-a-token-or-shows-unauthorized)（英語）。
+
 ## 複数端末の管理
 
 同じネットワーク上の複数端末でOpenClawを運用する場合は、<a href="https://myopenclawhub.com" target="_blank">Dashboard Connect</a> ツールを使うとPCからまとめて管理できます。
@@ -214,7 +220,7 @@ oa --update && source ~/.bashrc
 
 アップデート中にゲートウェイが動作していた場合は、更新後に再起動してください（停止して `openclaw gateway` を再実行するか、アプリを再起動します）。そうすると更新されたランタイムが反映されます。
 
-**注意**: `openclaw update`（および `openclaw --update`）は意図的にブロックされています。ガードによってOpenClawは本プロジェクトが検証したバージョンに固定されます。ゲートウェイが `update available … Run: openclaw update` のようなメッセージを表示することがありますが、代わりに `oa --update` を使ってください。`openclaw update status`（読み取り専用）は引き続き利用できます。
+**注意**: `openclaw update`（および `openclaw --update`）は意図的にブロックされています。ガードによってOpenClawは本プロジェクトが検証したバージョンに固定されます。ゲートウェイの "update available" 通知はオフになっています（`update.checkOnStart=false`）。自分で再びオンにした場合は `update available … Run: openclaw update` のようなメッセージが表示されることがありますが、そのコマンドはブロックされるため、代わりに `oa --update` を使ってください。`openclaw update status`（読み取り専用）は引き続き利用できます。
 
 > `oa`コマンドが利用できない場合（古いインストール環境）は、curl経由で実行してください。
 > ```bash
@@ -223,19 +229,23 @@ oa --update && source ~/.bashrc
 
 ## バックアップとリストア
 
-OpenClaw標準のバックアップコマンド（`openclaw backup create`）はハードリンクに依存しており、Androidのアプリ専用ストレージではブロックされるため、しばしば失敗します。`oa --backup`コマンドは、OpenClawのバックアップ仕様との完全な互換性を保ちつつ`tar`を直接利用することでこの問題を回避します。
+OpenClaw標準のバックアップコマンド（`openclaw backup create`）は、Androidのアプリ専用ストレージでブロックされるハードリンクに依存しているため失敗し、会話履歴も含まれません。`oa --backup`コマンドはこの両方を解決します。OpenClawのデータフォルダ（`~/.openclaw`）全体を`tar`でまとめ、SQLiteデータベースは整合性のあるスナップショットとして保存し、`openclaw backup verify`が受け付けるアーカイブを作成します。
 
 バックアップを作成するには:
 ```bash
 oa --backup
 ```
-バックアップは `~/.openclaw-android/backup/` にタイムスタンプ付きのファイル名（例: `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`）で保存されます。`oa --backup ~/my-backups/` のように保存先を指定することもできます。各バックアップには設定、状態、ワークスペース、エージェントが含まれます。
+バックアップは `~/.openclaw-android/backup/` にタイムスタンプ付きのファイル名（例: `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`）で保存されます。`oa --backup ~/my-backups/` のように保存先を指定することもできます。各バックアップには設定、状態、会話履歴、ワークスペース、エージェントが含まれます（ログ、一時ファイル、プラグインの依存フォルダは除く）。
+
+> **バックアップは非公開で保管してください。** バックアップにはAPIキーとログイン認証情報が含まれます。ファイルは本人だけが読めるように作成されます（`/sdcard` などの共有ストレージでは無効になる場合があります）。公開の場所で共有・アップロードしないでください。
+>
+> **Clawアプリ:** `oa --backup` が `backup.sh not found` と表示される場合（この機能の追加前にインストールしたアプリ）は、`oa --update` を一度実行してください。
 
 バックアップから復元するには:
 ```bash
 oa --restore
 ```
-このコマンドはデフォルトのバックアップディレクトリから利用可能なバックアップを一覧表示します。復元したいバックアップの番号を選ぶだけで、バックアップマニフェストからプラットフォームを自動検出し、`~/.openclaw/`への復元処理を行います。既存データを上書きするため、確認プロンプトが表示されます。
+このコマンドはデフォルトのバックアップディレクトリから利用可能なバックアップを一覧表示します。復元したいバックアップの番号を選ぶだけで、バックアップマニフェストからプラットフォームを自動検出し、この端末の `~/.openclaw/` に復元します（別の端末で作成したバックアップも復元できます）。先にOpenClawゲートウェイを停止してください。ゲートウェイが動作中は復元を拒否します。上書きする前に、現在のデータを `~/.openclaw-android/backup/pre-restore/` に安全バックアップとして保存します。バックアップ後に作成されたファイルは残ります。確認プロンプトが表示されます。
 
 ## トラブルシューティング
 
@@ -487,6 +497,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 7. `openclaw-apply-patches.sh` でプラットフォーム固有のパッチを適用
 8. 固定バージョンが維持されるよう、`openclaw update` ガード（`openclaw-shim.sh`）をインストール
 9. 必要に応じて `clawdhub`（スキルマネージャ）と `undici` 依存をインストール
+10. ゲートウェイの "update available" 通知をオフにする（`openclaw config set update.checkOnStart false`）。すでに自分で値を設定している場合はそのまま
 
 **[6.5] 環境変数 + CLI + マーカー:**
 
@@ -597,6 +608,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - `openclaw update` ガード（`openclaw-shim.sh`）を更新し、`openclaw update`/`--update` のブロックを維持
 - `clawdhub`（スキルマネージャ）を更新／インストール
 - 必要に応じてclawdhub用の `undici` をインストール（Node.js v24+）
+- ゲートウェイの "update available" 通知をオフにする（`update.checkOnStart=false`）。自分で値を設定していない場合のみ
 - 必要に応じてスキルを `~/skills/` から `~/.openclaw/workspace/skills/` へ移行
 - 不足していればPyYAMLをインストール
 

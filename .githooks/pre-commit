@@ -184,4 +184,43 @@ if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$SHIM_SRC" -e "$PIN_COPY"; then
     fi
 fi
 
+# --- npm guard function: install-nodejs.sh == post-setup.sh (same function, two generators) ---
+
+GUARD_A="scripts/install-nodejs.sh"
+GUARD_B="post-setup.sh"
+if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$GUARD_A" -e "$GUARD_B"; then
+    guard_fn() {
+        git show ":$1" 2>/dev/null \
+            | awk '/^oa_inject_npm_guard\(\) \{/{f=1} f{print} f&&/^NPMGUARD$/{e=1} f&&e&&/^}$/{exit}'
+    }
+    GA=$(guard_fn "$GUARD_A")
+    GB=$(guard_fn "$GUARD_B")
+    if [ -n "$GA$GB" ] && [ "$GA" != "$GB" ]; then
+        echo ""
+        echo "ERROR: npm guard mismatch"
+        echo "  oa_inject_npm_guard() in $GUARD_A and $GUARD_B must be identical."
+        exit 1
+    fi
+fi
+
+# --- git wrapper functions: post-setup.sh == scripts/repair-app-git.sh (same text, two copies) ---
+
+GW_A="post-setup.sh"
+GW_B="scripts/repair-app-git.sh"
+if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$GW_A" -e "$GW_B"; then
+    gw_block() {
+        git show ":$1" 2>/dev/null \
+            | awk '/^# ─── git wrapper functions/{f=1} f{print} /^# ─── end git wrapper functions/{exit}'
+    }
+    GWA=$(gw_block "$GW_A")
+    GWB=$(gw_block "$GW_B")
+    if [ -n "$GWA$GWB" ] && [ "$GWA" != "$GWB" ]; then
+        echo ""
+        echo "ERROR: git wrapper block mismatch"
+        echo "  The block between '# ─── git wrapper functions' and '# ─── end git wrapper functions'"
+        echo "  in $GW_A and $GW_B must be identical."
+        exit 1
+    fi
+fi
+
 echo "All checks passed."

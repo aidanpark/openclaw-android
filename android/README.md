@@ -1,6 +1,6 @@
 # OpenClaw Android App
 
-Standalone APK for running OpenClaw on Android. Thin APK (~5MB) with WebView UI, native PTY terminal, Termux bootstrap runtime, and OTA updates.
+Standalone APK for running OpenClaw on Android. Thin APK (~5MB) with WebView UI, native PTY terminal, and the Termux bootstrap runtime.
 
 ## Architecture
 
@@ -10,7 +10,6 @@ APK (~5MB)
 ├── WebView: React SPA (setup, dashboard, settings)
 ├── JsBridge: WebView ↔ Kotlin communication (31 methods, 7 domains)
 ├── EventBridge: Kotlin → WebView event dispatch
-└── OTA: www.zip download + atomic replace
 ```
 
 ## Build
@@ -36,7 +35,6 @@ cd android
 cd android/www
 npm install
 npm run build        # Output: dist/
-npm run build:zip    # Output: www.zip (for OTA)
 ```
 
 ## Project Structure
@@ -52,7 +50,9 @@ android/
 │   │   ├── EventBridge.kt            # Kotlin → WebView CustomEvent
 │   │   ├── CommandRunner.kt          # Shell command execution
 │   │   ├── EnvironmentBuilder.kt     # Termux environment variables
-│   │   ├── UrlResolver.kt            # BuildConfig + config.json URL resolution
+│   │   ├── BootstrapDownloader.kt    # Pinned-SHA-256 bootstrap download with mirrors
+│   │   ├── BridgeGuard.kt            # Allow-list for commands from the web view
+│   │   ├── ArtifactSecurity.kt       # Archive path validation
 │   │   └── TerminalSessionManager.kt # Multi-session terminal management
 │   ├── assets/www/                    # Bundled fallback UI (vanilla JS)
 │   └── res/                           # Android resources
@@ -74,7 +74,7 @@ android/
 | `targetSdk 28` | W^X bypass — allows exec in /data/data/ |
 | `minSdk 24` | apt-android-7 bootstrap requirement |
 | Hash routing | `file://` protocol doesn't support History API |
-| No CSS framework | Minimal bundle size for OTA delivery |
+| No CSS framework | Minimal bundle size |
 | System font stack | Android WebView, no custom font loading needed |
 
 ## JsBridge API Domains
@@ -85,8 +85,8 @@ android/
 | Setup | 3 | bootstrap status, start setup |
 | Platform | 6 | install/uninstall/switch platforms |
 | Tools | 5 | install/uninstall CLI tools |
-| Commands | 2 | sync/async shell execution |
-| Updates | 2 | check/apply OTA updates |
+| Commands | 2 | allow-listed command execution |
+| Updates | 2 | script and app update checks |
 | System | 6 | app info, battery, settings, storage |
 
 ## License

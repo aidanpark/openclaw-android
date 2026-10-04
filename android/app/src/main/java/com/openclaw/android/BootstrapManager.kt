@@ -6,6 +6,8 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.InputStream
 import java.net.URL
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 
 /**
@@ -26,6 +28,11 @@ class BootstrapManager(
         private val ELF_SIGNATURE = byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte())
         private const val SYMLINK_SEPARATOR = "←"
         private const val SYMLINK_PARTS_COUNT = 2
+        private const val DOWNLOAD_CONNECT_TIMEOUT_MS = 5_000
+        private const val DOWNLOAD_READ_TIMEOUT_MS = 10_000
+        private const val DOWNLOAD_TOTAL_TIMEOUT_SEC = 12L
+        private const val PREFS_NAME = "openclaw"
+        private const val PREF_VERSION_CODE = "versionCode"
     }
 
     val prefixDir = File(context.filesDir, "usr")
@@ -64,53 +71,74 @@ class BootstrapManager(
      */
     suspend fun startSetup(onProgress: (Float, String) -> Unit) =
         withContext(Dispatchers.IO) {
-            // Clean up any incomplete previous attempt before starting
+            // Step 1: Get a verified bootstrap archive. This comes first so a failed or refused
+            // download leaves any installed prefix exactly as it was.
+            onProgress(PROGRESS_PREPARING, "Preparing bootstrap...")
+            val bootstrapArchive = getBootstrapArchive(onProgress)
+
+            // Clean up any incomplete previous attempt
             if (stagingDir.exists()) {
                 AppLogger.i(TAG, "Removing incomplete staging dir from previous attempt")
                 stagingDir.deleteRecursively()
             }
-            if (isInstalled()) {
-                // Bootstrap exists but setup is incomplete — wipe and reinstall
-                AppLogger.i(TAG, "Incomplete bootstrap detected, reinstalling...")
-                prefixDir.deleteRecursively()
-            }
-
-            // Step 1: Download or extract bootstrap
-            onProgress(PROGRESS_PREPARING, "Preparing bootstrap...")
-            val zipStream = getBootstrapStream(onProgress)
-
             // Step 2: Extract bootstrap
             onProgress(PROGRESS_EXTRACTING, "Extracting bootstrap...")
-            extractBootstrap(zipStream)
+            bootstrapArchive.use { archive -> extractBootstrap(archive.inputStream) }
 
             // Step 3: Fix paths and configure
             onProgress(PROGRESS_CONFIGURING, "Configuring environment...")
             fixTermuxPaths(stagingDir)
             configureApt(stagingDir)
 
-            // Step 4: Atomic rename
+            // Step 4: Swap in the new prefix. The old one is only removed now that the new one has
+            // been downloaded, verified, extracted and configured — a failure above leaves it intact.
+            if (isInstalled()) {
+                AppLogger.i(TAG, "Incomplete bootstrap detected, reinstalling...")
+                prefixDir.deleteRecursively()
+            }
             stagingDir.renameTo(prefixDir)
             setupDirectories()
             copyAssetScripts()
             syncWwwFromAssets()
             setupTermuxExec()
+            // Without this the first relaunch looks like an APK upgrade (0 -> N)
+            saveCurrentVersionCode()
 
             onProgress(1f, "Setup complete")
         }
 
     // --- Bootstrap source ---
 
-    private suspend fun getBootstrapStream(onProgress: (Float, String) -> Unit): InputStream {
-        // Phase 0: Try assets first
+    /** The archive to extract, plus the temp file to delete once it has been read. */
+    private class BootstrapArchive(
+        val inputStream: InputStream,
+        private val temporaryFile: File? = null,
+    ) : java.io.Closeable {
+        override fun close() {
+            inputStream.close()
+            temporaryFile?.delete()
+        }
+    }
+
+    private fun getBootstrapArchive(onProgress: (Float, String) -> Unit): BootstrapArchive {
+        // Phase 0: an archive bundled in the APK is covered by the APK signature
         try {
-            return context.assets.open("bootstrap-aarch64.zip")
+            return BootstrapArchive(context.assets.open("bootstrap-aarch64.zip"))
         } catch (_: Exception) {
-            // Phase 1: Download from network
+            // Phase 1: download from network
         }
 
         onProgress(PROGRESS_DOWNLOADING, "Downloading bootstrap...")
-        val url = UrlResolver(context).getBootstrapUrl()
-        return URL(url).openStream()
+        // URL, mirrors and SHA-256 are all pinned in the APK; nothing remote can change them.
+        val mirrors = BuildConfig.BOOTSTRAP_MIRROR_PREFIXES.split(',').filter { it.isNotBlank() }
+        val archive =
+            BootstrapDownloader(
+                cacheDir = context.cacheDir,
+                urls = listOf(BuildConfig.BOOTSTRAP_URL) + mirrors.map { it + BuildConfig.BOOTSTRAP_URL },
+                expectedSha256 = BuildConfig.BOOTSTRAP_SHA256,
+                upstreamDigestUrl = BuildConfig.BOOTSTRAP_DIGEST_API_URL,
+            ).download()
+        return BootstrapArchive(archive.inputStream(), archive)
     }
 
     // --- Extraction ---
@@ -136,8 +164,9 @@ class BootstrapManager(
         if (entry.name == "SYMLINKS.txt") {
             processSymlinks(zip, stagingDir)
         } else if (!entry.isDirectory) {
-            val file = File(stagingDir, entry.name)
+            val file = ArtifactSecurity.resolveInsideDirectory(stagingDir, entry.name)
             file.parentFile?.mkdirs()
+            file.delete() // never write through a symlink an earlier entry planted
             file.outputStream().use { out -> zip.copyTo(out) }
             markExecutableIfNeeded(file, entry.name)
         }
@@ -191,7 +220,7 @@ class BootstrapManager(
             }.forEach { parts ->
                 val symlinkTarget = parts[0].trim().replace("com.termux", ourPackage)
                 val symlinkPath = parts[1].trim()
-                val linkFile = File(targetDir, symlinkPath)
+                val linkFile = ArtifactSecurity.resolveInsideDirectory(targetDir, symlinkPath)
                 linkFile.parentFile?.mkdirs()
                 try {
                     Os.symlink(symlinkTarget, linkFile.absolutePath)
@@ -338,39 +367,97 @@ exit ${d}_rc
 
     /**
      * Copy post-setup.sh and glibc-compat.js to home dir.
-     * post-setup.sh: try GitHub first, fall back to bundled asset.
-     * glibc-compat.js: always use bundled asset.
+     * post-setup.sh: try GitHub first (background threads only), fall back to bundled asset.
+     * glibc-compat.js: the node wrapper reads lib/glibc-compat.js first (v1.1.1+); patches/ is
+     * kept for older wrappers, so the bundled copy goes in only when patches/ has none yet or
+     * lib/ has none (patches/ is then what the wrapper loads). lib/ is never touched here.
      */
     private fun copyAssetScripts() {
         val ocaDir = File(homeDir, ".openclaw-android")
         ocaDir.mkdirs()
-        File(ocaDir, "patches").mkdirs()
+        val patchesDir = File(ocaDir, "patches")
+        patchesDir.mkdirs()
 
-        val postSetup = File(ocaDir, "post-setup.sh")
-        copyPostSetupScript(postSetup)
-        copyBundledAsset("glibc-compat.js", File(ocaDir, "patches/glibc-compat.js"))
+        copyPostSetupScript(File(ocaDir, "post-setup.sh"), keepExistingOnFailure = false)
+
+        val patchesCompat = File(patchesDir, "glibc-compat.js")
+        val libCompat = File(ocaDir, "lib/glibc-compat.js")
+        if (!patchesCompat.exists() || !libCompat.exists()) {
+            copyBundledAsset("glibc-compat.js", patchesCompat)
+        } else {
+            AppLogger.i(TAG, "glibc-compat.js kept (lib/ copy present)")
+        }
     }
 
-    private fun copyPostSetupScript(target: File) {
-        val url = "https://raw.githubusercontent.com/AidanPark/openclaw-android/main/post-setup.sh"
-        try {
-            java.net.URL(url).openStream().use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
-            }
-            target.setExecutable(true)
-            AppLogger.i(TAG, "post-setup.sh downloaded from GitHub")
+    /**
+     * Re-fetch post-setup.sh before the terminal re-runs an unfinished setup, so a user whose
+     * first run failed does not keep re-running the same stale copy. Blocking, bounded by
+     * DOWNLOAD_TOTAL_TIMEOUT_SEC — call from a background thread. If the download fails, the
+     * copy already in place is kept (it came from GitHub or a newer APK); the bundle is used
+     * only when there is none.
+     */
+    fun refreshPostSetupScript() {
+        File(homeDir, ".openclaw-android").mkdirs()
+        copyPostSetupScript(postSetupScript, keepExistingOnFailure = true)
+    }
+
+    private fun copyPostSetupScript(
+        target: File,
+        keepExistingOnFailure: Boolean,
+    ) {
+        if (downloadPostSetupScript(target)) return
+        if (keepExistingOnFailure && target.length() > 0L) {
+            AppLogger.w(TAG, "post-setup.sh download failed, keeping existing copy")
             return
-        } catch (e: Exception) {
-            AppLogger.w(TAG, "Failed to download post-setup.sh, using bundled fallback", e)
         }
         try {
-            context.assets.open("post-setup.sh").use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
-            }
-            target.setExecutable(true)
+            replaceAtomically(target) { out -> context.assets.open("post-setup.sh").use { it.copyTo(out) } }
             AppLogger.i(TAG, "post-setup.sh copied from bundled assets")
         } catch (e: Exception) {
             AppLogger.w(TAG, "Failed to copy bundled post-setup.sh", e)
+        }
+    }
+
+    /**
+     * Download post-setup.sh from GitHub with an overall deadline. HttpURLConnection timeouts
+     * are per address / per read, so a blocked network could otherwise stall far past them.
+     */
+    private fun downloadPostSetupScript(target: File): Boolean {
+        val url = "https://raw.githubusercontent.com/AidanPark/openclaw-android/main/post-setup.sh"
+        val conn = URL(url).openConnection()
+        conn.connectTimeout = DOWNLOAD_CONNECT_TIMEOUT_MS
+        conn.readTimeout = DOWNLOAD_READ_TIMEOUT_MS
+        val executor = Executors.newSingleThreadExecutor()
+        return try {
+            val task =
+                executor.submit {
+                    replaceAtomically(target) { out -> conn.getInputStream().use { it.copyTo(out) } }
+                }
+            task.get(DOWNLOAD_TOTAL_TIMEOUT_SEC, TimeUnit.SECONDS)
+            AppLogger.i(TAG, "post-setup.sh downloaded from GitHub")
+            true
+        } catch (e: Exception) {
+            (conn as? java.net.HttpURLConnection)?.disconnect()
+            AppLogger.w(TAG, "Failed to download post-setup.sh", e)
+            false
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    /** Write via a unique temp file and rename so a failed copy never leaves a truncated script. */
+    private fun replaceAtomically(
+        target: File,
+        write: (java.io.OutputStream) -> Unit,
+    ) {
+        val tmp = File.createTempFile("${target.name}.", ".tmp", target.parentFile)
+        try {
+            tmp.outputStream().use { write(it) }
+            if (tmp.length() == 0L) throw java.io.IOException("empty download for ${target.name}")
+            tmp.setExecutable(true)
+            if (!tmp.renameTo(target)) throw java.io.IOException("rename failed for ${target.name}")
+        } finally {
+            tmp.delete()
         }
     }
 
@@ -391,17 +478,23 @@ exit ${d}_rc
     // Runtime packages are installed by post-setup.sh in the terminal
 
     /**
-     * Apply script update on APK version upgrade:
-     * - Overwrites post-setup.sh and glibc-compat.js from latest assets
-     * - Installs/updates oa CLI from GitHub so users can run `oa --update`
+     * Apply script update on APK version upgrade (blocking — background thread only).
+     * www sync and the oa CLI install are handled by MainActivity.onCreate, not repeated here.
      */
     fun applyScriptUpdate() {
         if (!isInstalled()) return
         copyAssetScripts()
-        syncWwwFromAssets()
-        installOaCli()
         AppLogger.i(TAG, "Script update applied")
     }
+
+    fun savedVersionCode(): Int = prefs().getInt(PREF_VERSION_CODE, 0)
+
+    @Suppress("DEPRECATION")
+    fun currentVersionCode(): Int = context.packageManager.getPackageInfo(context.packageName, 0).versionCode
+
+    fun saveCurrentVersionCode() = prefs().edit().putInt(PREF_VERSION_CODE, currentVersionCode()).apply()
+
+    private fun prefs() = context.getSharedPreferences(PREFS_NAME, 0)
 
     /**
      * Copy bundled assets/www into wwwDir, overwriting any existing files.
@@ -442,14 +535,19 @@ exit ${d}_rc
         }
     }
 
+    /**
+     * Fetch the oa CLI from GitHub (background thread only). Written through a temp file and
+     * renamed, executable bit set before the rename, so a failed or interrupted download can
+     * never leave a truncated or non-executable `oa` behind (and the old copy stays usable).
+     */
     fun installOaCli() {
         val oaBin = File(prefixDir, "bin/oa")
         val oaUrl = "https://raw.githubusercontent.com/AidanPark/openclaw-android/main/oa.sh"
         try {
-            java.net.URL(oaUrl).openStream().use { input ->
-                oaBin.outputStream().use { output -> input.copyTo(output) }
-            }
-            oaBin.setExecutable(true)
+            val conn = URL(oaUrl).openConnection()
+            conn.connectTimeout = DOWNLOAD_CONNECT_TIMEOUT_MS
+            conn.readTimeout = DOWNLOAD_READ_TIMEOUT_MS
+            replaceAtomically(oaBin) { out -> conn.getInputStream().use { it.copyTo(out) } }
             AppLogger.i(TAG, "oa CLI installed at ${oaBin.absolutePath}")
         } catch (e: Exception) {
             AppLogger.w(TAG, "Failed to install oa CLI", e)

@@ -173,6 +173,12 @@ Android may kill background processes or throttle them when the screen is off. S
 
 See the [Termux SSH Setup Guide](docs/termux-ssh-guide.md) for SSH access and dashboard tunnel setup.
 
+The dashboard itself is at `http://127.0.0.1:18789/`. If it asks for a token (or shows "unauthorized"), print the token and open the dashboard with it:
+```bash
+node -p "require(process.env.HOME + '/.openclaw/openclaw.json').gateway.auth.token"
+```
+Then paste it into the dashboard's auth field, or open `http://127.0.0.1:18789/#token=<token>`. Keep the token private. Details: [Dashboard asks for a token](docs/troubleshooting.md#dashboard-asks-for-a-token-or-shows-unauthorized).
+
 ## Managing Multiple Devices
 
 If you run OpenClaw on multiple devices on the same network, use the <a href="https://myopenclawhub.com" target="_blank">Dashboard Connect</a> tool to manage them from your PC.
@@ -214,7 +220,7 @@ Already up-to-date components are skipped. Components you haven't installed are 
 
 If the gateway was running during the update, restart it afterwards (stop it and run `openclaw gateway` again, or restart the app) so it picks up the updated runtime.
 
-**Note**: `openclaw update` (and `openclaw --update`) is intentionally blocked — a guard keeps OpenClaw pinned to the version verified by this project. The gateway may still print something like `update available … Run: openclaw update`; use `oa --update` instead. `openclaw update status` (read-only) still works.
+**Note**: `openclaw update` (and `openclaw --update`) is intentionally blocked — a guard keeps OpenClaw pinned to the version verified by this project. The gateway's "update available" notice is turned off for you (`update.checkOnStart=false`; if you turned it back on, it may print something like `update available … Run: openclaw update` — use `oa --update` instead). `openclaw update status` (read-only) still works.
 
 > If the `oa` command is not available (older installations), run it with curl:
 > ```bash
@@ -223,19 +229,23 @@ If the gateway was running during the update, restart it afterwards (stop it and
 
 ## Backup & Restore
 
-OpenClaw's built-in backup command (`openclaw backup create`) often fails on Android because it relies on hardlinks, which are blocked in Android's app-private storage. The `oa --backup` command works around this by using `tar` directly while maintaining full compatibility with the OpenClaw backup specification.
+OpenClaw's built-in backup command (`openclaw backup create`) fails on Android because it relies on hardlinks, which are blocked in Android's app-private storage, and it also leaves out your conversation history. The `oa --backup` command works around both: it archives your whole OpenClaw data folder (`~/.openclaw`) with `tar`, takes consistent snapshots of the SQLite databases, and writes an archive that `openclaw backup verify` accepts.
 
 To create a backup:
 ```bash
 oa --backup
 ```
-Backups are stored in `~/.openclaw-android/backup/` with a timestamped filename (e.g., `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`). You can also specify a custom path: `oa --backup ~/my-backups/`. Each backup includes your configuration, state, workspaces, and agents.
+Backups are stored in `~/.openclaw-android/backup/` with a timestamped filename (e.g., `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`). You can also specify a custom path: `oa --backup ~/my-backups/`. Each backup includes your configuration, state, conversation history, workspaces, and agents (logs, temporary files and plugin dependency folders are left out).
+
+> **Keep backups private.** A backup contains your API keys and login credentials. The file is created so that only you can read it (shared storage such as `/sdcard` may ignore that); do not share it or upload it anywhere public.
+>
+> **Claw app:** if `oa --backup` says `backup.sh not found` (apps installed before this feature), run `oa --update` once.
 
 To restore from a backup:
 ```bash
 oa --restore
 ```
-This command lists all available backups in the default backup directory. Simply select the number of the backup you wish to restore. The tool automatically detects the platform from the backup manifest and handles the restoration to `~/.openclaw/`. Note that this will overwrite existing data, so a confirmation is required.
+This command lists all available backups in the default backup directory. Simply select the number of the backup you wish to restore. The tool automatically detects the platform from the backup manifest and restores into `~/.openclaw/` on this device (backups made on another device work too). Stop the OpenClaw gateway first; the command refuses to run while it is up. Before overwriting anything, it saves a safety backup of your current data in `~/.openclaw-android/backup/pre-restore/`. Files created after the backup was made are kept. A confirmation is required.
 
 ## Troubleshooting
 
@@ -487,6 +497,7 @@ Delegates to the platform's own install script. For OpenClaw, this:
 7. Applies platform-specific patches via `openclaw-apply-patches.sh`
 8. Installs the `openclaw update` guard (`openclaw-shim.sh`) so the pinned version holds
 9. Installs `clawdhub` (skill manager) and `undici` dependency if needed
+10. Turns off the gateway's "update available" notice (`openclaw config set update.checkOnStart false`), unless you already set that value yourself
 
 **[6.5] Environment Variables + CLI + Marker:**
 
@@ -596,6 +607,7 @@ Delegates to `platforms/<platform>/update.sh`. For OpenClaw, this:
 - Refreshes the `openclaw update` guard (`openclaw-shim.sh`) so `openclaw update`/`--update` stay blocked
 - Updates/installs `clawdhub` (skill manager)
 - Installs `undici` for clawdhub if needed (Node.js v24+)
+- Turns off the gateway's "update available" notice (`update.checkOnStart=false`) if you have not set that value yourself
 - Migrates skills from `~/skills/` to `~/.openclaw/workspace/skills/` if needed
 - Installs PyYAML if missing
 

@@ -9,7 +9,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.1.1"
+OA_VERSION="1.1.2"
 
 echo ""
 echo -e "${BOLD}========================================${NC}"
@@ -194,11 +194,19 @@ chmod +x "$PREFIX/bin/oaupdate"
 cp "$RELEASE_TMP/uninstall.sh" "$PROJECT_DIR/uninstall.sh"
 chmod +x "$PROJECT_DIR/uninstall.sh"
 
+# App installs: repair a git wrapper that exec's itself (non-fatal; no-op elsewhere)
+if [ -f "$RELEASE_TMP/scripts/repair-app-git.sh" ]; then
+    bash "$RELEASE_TMP/scripts/repair-app-git.sh" || echo -e "${YELLOW}[WARN]${NC} git repair did not finish (non-critical)"
+elif [ -f "$PREFIX/bin/git.wrapper-installed" ]; then
+    # optional on purpose (a cached tarball older than this updater must not block the whole update)
+    echo -e "${YELLOW}[WARN]${NC} The git repair script is missing from the downloaded copy (cached download?). Run 'oa --update' again in a few minutes."
+fi
+
 if [ "$IS_GLIBC" = false ]; then
     echo ""
     echo -e "${BOLD}[MIGRATE] Bionic -> glibc Architecture${NC}"
     echo "----------------------------------------"
-    if bash "$RELEASE_TMP/scripts/install-glibc.sh" && bash "$RELEASE_TMP/scripts/install-nodejs.sh" "$PLATFORM_NODE_VERSION"; then
+    if bash "$RELEASE_TMP/scripts/install-glibc.sh" && bash "$RELEASE_TMP/scripts/install-nodejs.sh" "$PLATFORM_NODE_VERSION" "${PLATFORM_NPM_PACKAGE:-}" "${PLATFORM_NPM_PACKAGE_VERSION:-}"; then
         IS_GLIBC=true
         echo -e "${GREEN}[OK]${NC}   glibc migration complete"
     else
@@ -208,7 +216,7 @@ fi
 
 # Converge Node.js to the pinned version (checked by the Node gate before step 4)
 if [ "$IS_GLIBC" = true ]; then
-    bash "$RELEASE_TMP/scripts/install-nodejs.sh" "$PLATFORM_NODE_VERSION" || true
+    bash "$RELEASE_TMP/scripts/install-nodejs.sh" "$PLATFORM_NODE_VERSION" "${PLATFORM_NPM_PACKAGE:-}" "${PLATFORM_NPM_PACKAGE_VERSION:-}" || true
 fi
 
 bash "$RELEASE_TMP/scripts/setup-env.sh"
@@ -220,7 +228,7 @@ if [ "$IS_GLIBC" = true ]; then
     if [ ! -d "$GLIBC_BIN_DIR" ] || [ ! -x "$GLIBC_BIN_DIR/node" ]; then
         echo ""
         echo -e "${BOLD}[MIGRATE] Moving wrappers to $GLIBC_BIN_DIR${NC}"
-        bash "$RELEASE_TMP/scripts/install-nodejs.sh" "$PLATFORM_NODE_VERSION" || true
+        bash "$RELEASE_TMP/scripts/install-nodejs.sh" "$PLATFORM_NODE_VERSION" "${PLATFORM_NPM_PACKAGE:-}" "${PLATFORM_NPM_PACKAGE_VERSION:-}" || true
         echo -e "${GREEN}[OK]${NC}   Wrapper migration complete"
     fi
     export PATH="$GLIBC_BIN_DIR:$GLIBC_NODE_DIR/bin:$HOME/.local/bin:$PATH"

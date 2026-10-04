@@ -39,6 +39,152 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# ─── npm version-pin guard ────────────────────
+# Fallback pin for the guard in the npm wrapper (the guard reads config.env at
+# run time once it exists; a first install has none yet).
+OA_GUARD_PKG="openclaw"
+OA_GUARD_PIN="$PLATFORM_NPM_PACKAGE_VERSION"
+
+# Splice the version-pin guard into a generated npm wrapper: the guard text
+# replaces the "# __NPM_GUARD__" line. $1 = wrapper file. OA_GUARD_PKG / OA_GUARD_PIN
+# are the pin this installer ships (the guard also reads the platform config at
+# run time). The guard text must stay identical in scripts/install-nodejs.sh and
+# post-setup.sh.
+oa_inject_npm_guard() {
+    local f="$1" g
+    IFS= read -r -d '' g << 'NPMGUARD' || true
+# ── Version-pin guard ──
+# Refuses a GLOBAL install/update of the pinned platform package at any version
+# other than the pin: 'npm install -g openclaw@latest' (typed by a user or run by
+# an agent) would replace the verified OpenClaw + Node.js pair. Two pins are
+# accepted: the one in the platform config on disk, and the one this wrapper was
+# generated with — an installer that ships a newer pin than the config on disk
+# (a re-install or recovery run) must still be able to install its own pin.
+# Fails open: whatever this block cannot parse is passed to npm unchanged. There
+# is no override on purpose. Limits: npm run by absolute path, abbreviated option
+# names, 'npm exec'/'npx' are not covered.
+_oa_pkg="__OA_PKG__"
+_oa_pin="__OA_PIN__"
+_oa_cfgpin=""
+_oa_cfg="$HOME/.openclaw-android/platforms/openclaw/config.env"
+if [ -f "$_oa_cfg" ]; then
+    _oa_v=$(grep -m1 '^PLATFORM_NPM_PACKAGE_VERSION=' "$_oa_cfg" 2>/dev/null | cut -d'"' -f2)
+    case "$_oa_v" in [0-9]*.[0-9]*.[0-9]*) _oa_cfgpin="$_oa_v" ;; esac
+    _oa_n=$(grep -m1 '^PLATFORM_NPM_PACKAGE=' "$_oa_cfg" 2>/dev/null | cut -d'"' -f2)
+    if [[ "$_oa_n" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then _oa_pkg="$_oa_n"; fi
+fi
+_oa_is_pin() { [ "$1" = "$_oa_pin" ] || { [ -n "$_oa_cfgpin" ] && [ "$1" = "$_oa_cfgpin" ]; }; }
+_oa_check_spec() {
+    local a="$1" x
+    case "$a" in
+        @*) return ;;
+        file:*) _oa_check_spec "${a#file:}"; return ;;
+        "$_oa_pkg") _oa_bad="$a"; return ;;
+        "$_oa_pkg"@*) _oa_is_pin "${a#*@}" || _oa_bad="$a"; return ;;
+    esac
+    x="${a#*npm:}"
+    if [ "$x" != "$a" ]; then
+        case "$x" in
+            "$_oa_pkg") _oa_bad="$a"; return ;;
+            "$_oa_pkg"@*) _oa_is_pin "${x#*@}" || _oa_bad="$a"; return ;;
+        esac
+    fi
+    case "$a" in
+        */"$_oa_pkg"|*/"$_oa_pkg".git|*/"$_oa_pkg"#*|*/"$_oa_pkg".git#*|*/"$_oa_pkg"/archive/*|*/"$_oa_pkg"/tarball/*) _oa_bad="$a" ;;
+        "$_oa_pkg"-[v0-9]*.tgz|*/"$_oa_pkg"-[v0-9]*.tgz|"$_oa_pkg"-[v0-9]*.tar.gz|*/"$_oa_pkg"-[v0-9]*.tar.gz|*/"$_oa_pkg"/tar.gz/*|*/"$_oa_pkg"/zip/*) _oa_bad="$a" ;;
+        .|..|./*|../*|/*|"~"/*|\~/*)
+            case "$a" in "~"/*|\~/*) a="$HOME/${a#*/}" ;; esac
+            if [ -f "$a/package.json" ] && grep -Eq "\"name\"[[:space:]]*:[[:space:]]*\"$_oa_pkg\"" "$a/package.json" 2>/dev/null; then
+                _oa_bad="$a"
+            fi ;;
+    esac
+}
+if [ -n "$_oa_pkg" ] && { [ -n "$_oa_pin" ] || [ -n "$_oa_cfgpin" ]; }; then
+    _oa_global=false; _oa_cmd=""; _oa_pos=0; _oa_names=0; _oa_bad=""; _oa_skip=false; _oa_prev=""
+    _oa_e="${npm_config_global:-${NPM_CONFIG_GLOBAL:-}}"
+    case "$_oa_e" in ""|false|0|null) ;; *) _oa_global=true ;; esac
+    case "${npm_config_location:-${NPM_CONFIG_LOCATION:-}}" in global) _oa_global=true ;; esac
+    _oa_rcs=("$HOME/.npmrc" "${PREFIX:-}/etc/npmrc")
+    _oa_d="$PWD"
+    _oa_i=0
+    # PWD can be stale or relative when the directory was deleted: only walk real absolute paths
+    case "$_oa_d" in /*) ;; *) _oa_d="" ;; esac
+    while [ -n "$_oa_d" ] && [ "$_oa_d" != "/" ] && [ "$_oa_i" -lt 64 ]; do
+        _oa_rcs+=("$_oa_d/.npmrc")
+        [ -f "$_oa_d/package.json" ] && break
+        _oa_d="${_oa_d%/*}"
+        _oa_i=$((_oa_i + 1))
+    done
+    for _oa_rc in "${_oa_rcs[@]}"; do
+        if [ -f "$_oa_rc" ] && grep -Eiq '^[[:space:]]*(global[[:space:]]*=[[:space:]]*"?(true|1|yes|on)"?|location[[:space:]]*=[[:space:]]*"?global"?)' "$_oa_rc" 2>/dev/null; then
+            _oa_global=true
+        fi
+    done
+    for _oa_a in "$@"; do
+        if [ "$_oa_skip" = true ]; then
+            _oa_skip=false
+            [ "$_oa_prev" = "location" ] && [ "$_oa_a" = "global" ] && _oa_global=true
+            continue
+        fi
+        case "$_oa_a" in
+            -*)
+                _oa_n="$_oa_a"
+                while [ "${_oa_n#-}" != "$_oa_n" ]; do _oa_n="${_oa_n#-}"; done
+                _oa_prev="$_oa_n"
+                case "$_oa_n" in
+                    L) _oa_skip=true; _oa_prev="location" ;;
+                    location|prefix|registry|cache|userconfig|globalconfig|loglevel|tag|scope|omit|include|otp|workspace|w|C|script-shell|save-prefix|install-strategy|depth|proxy|https-proxy|noproxy|fetch-timeout|fetch-retries|before|access|audit-level|auth-type|logs-dir|logs-max|node-options) _oa_skip=true ;;
+                    g|global|no-no-global|l*=global) _oa_global=true ;;
+                    g=*|global=*)
+                        # '--global=true' (and '--global=<spec>', which npm reads as a package)
+                        _oa_v="${_oa_n#*=}"
+                        case "$_oa_v" in false) ;; *) _oa_global=true; _oa_check_spec "$_oa_v" ;; esac ;;
+                    *)
+                        if [[ "$_oa_a" =~ ^-[gSDOEBfdspyqlhavnPcmLHwC]+$ ]]; then
+                            case "$_oa_n" in *g*) _oa_global=true ;; esac
+                            case "$_oa_n" in *L) _oa_skip=true; _oa_prev="location" ;; *[wCcm]) _oa_skip=true ;; esac
+                        fi ;;
+                esac ;;
+            *)
+                _oa_pos=$((_oa_pos + 1))
+                if [ -z "$_oa_cmd" ]; then
+                    case "$_oa_a" in
+                        link|lin|ln)
+                            _oa_cmd=install; _oa_global=true; continue ;;
+                        i|in|ins|inst|insta|instal|install|isnt|isnta|isntal|isntall|add|ci|clean-install|install-t|install-te|install-tes|install-test|installT|installTe|installTes|installTest|it|cit|install-ci-test|installCiTest)
+                            _oa_cmd=install; continue ;;
+                        up|ud|upd|upda|updat|update|upg|upgr|upgra|upgrad|upgrade|udp|udpa|udpat|udpate)
+                            _oa_cmd=update; continue ;;
+                    esac
+                fi
+                case "$_oa_a" in always|true|false|*://*) ;; *) if [[ "$_oa_a" =~ ^@?[a-z] ]]; then _oa_names=$((_oa_names + 1)); fi ;; esac
+                _oa_check_spec "$_oa_a" ;;
+        esac
+    done
+    if [ "$_oa_global" = true ] && [ -n "$_oa_cmd" ]; then
+        # 'npm install -g' / 'npm link' with no name installs the package in the current directory
+        if [ -z "$_oa_bad" ] && [ "$_oa_cmd" = install ] && [ "$_oa_pos" -le 1 ]; then _oa_check_spec "."; fi
+        if [ -n "$_oa_bad" ]; then
+            echo "[BLOCKED] $_oa_pkg is pinned to ${_oa_cfgpin:-$_oa_pin} (the version verified by OpenClaw on Android)." >&2
+            echo "          '$_oa_bad' would replace it. Run 'oa --update' to update safely." >&2
+            exit 1
+        fi
+        if [ "$_oa_cmd" = update ] && [ "$_oa_names" -eq 0 ]; then
+            echo "[BLOCKED] 'npm update -g' would also upgrade $_oa_pkg, which is pinned to ${_oa_cfgpin:-$_oa_pin}." >&2
+            echo "          Name the packages to update, or run 'oa --update' to update safely." >&2
+            exit 1
+        fi
+    fi
+fi
+NPMGUARD
+    g="${g//__OA_PKG__/${OA_GUARD_PKG:-}}"
+    g="${g//__OA_PIN__/${OA_GUARD_PIN:-}}"
+    if ! G="$g" awk '$0 == "# __NPM_GUARD__" { print ENVIRON["G"]; next } { print }' "$f" > "$f.g" || ! mv -f "$f.g" "$f"; then
+        rm -f "$f.g"
+        echo -e "${YELLOW}[WARN]${NC} npm version-pin guard could not be added to the npm wrapper"
+    fi
+}
+
 # ─── GitHub mirror fallback (for China/restricted networks) ──
 REPO_BASE_ORIGIN="https://raw.githubusercontent.com/AidanPark/openclaw-android/main"
 REPO_BASE="$REPO_BASE_ORIGIN"
@@ -424,6 +570,7 @@ if [ "$INSTALLED_VER" = "$NODE_VERSION" ]; then
     if [ -f "$NODE_DIR/lib/node_modules/npm/bin/npm-cli.js" ]; then
         cat > "$BIN_DIR/npm.tmp" << NPMWRAP
 #!$PREFIX/bin/bash
+# __NPM_GUARD__
 "$BIN_DIR/node" "$NODE_DIR/lib/node_modules/npm/bin/npm-cli.js" "\$@"
 _npm_exit=\$?
 # Re-patch openclaw CLI wrapper after a global install/update of openclaw.
@@ -470,6 +617,7 @@ case "\$*" in *-g*|*--global*)
 esac
 exit \$_npm_exit
 NPMWRAP
+        oa_inject_npm_guard "$BIN_DIR/npm.tmp"
         chmod +x "$BIN_DIR/npm.tmp"
         mv -f "$BIN_DIR/npm.tmp" "$BIN_DIR/npm"
     fi
@@ -585,6 +733,7 @@ WRAPPER
     if [ -f "$NODE_DIR/lib/node_modules/npm/bin/npm-cli.js" ]; then
         cat > "$BIN_DIR/npm.tmp" << NPMWRAP
 #!$PREFIX/bin/bash
+# __NPM_GUARD__
 "$BIN_DIR/node" "$NODE_DIR/lib/node_modules/npm/bin/npm-cli.js" "\$@"
 _npm_exit=\$?
 # Re-patch openclaw CLI wrapper after a global install/update of openclaw.
@@ -631,6 +780,7 @@ case "\$*" in *-g*|*--global*)
 esac
 exit \$_npm_exit
 NPMWRAP
+        oa_inject_npm_guard "$BIN_DIR/npm.tmp"
         chmod +x "$BIN_DIR/npm.tmp"
         mv -f "$BIN_DIR/npm.tmp" "$BIN_DIR/npm"
     fi
@@ -688,18 +838,57 @@ git config --global --unset-all url."https://github.com/".insteadOf 2>/dev/null 
 git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/"
 git config --global --add url."https://github.com/".insteadOf "git@github.com:"
 
-# Git wrapper: replace $PREFIX/bin/git with a wrapper that:
-#   1. Strips --recurse-submodules (triggers open() on hardcoded com.termux path)
-#   2. Cleans existing target dirs before clone (npm's withTempDir creates dir first)
-# npm caches git path at module load via which.sync('git'), so we must replace the binary.
-# $PREFIX/bin/git is a symlink -> ../libexec/git-core/git (the real ELF binary).
-REAL_GIT="$PREFIX/libexec/git-core/git"
-if [ -f "$REAL_GIT" ] && [ ! -f "$PREFIX/bin/git.wrapper-installed" ]; then
-    echo "  Installing git wrapper (strips --recurse-submodules)..."
-    rm -f "$PREFIX/bin/git"
-    # Write shebang with absolute path (no LD_PRELOAD = no /bin/bash rewrite)
-    echo "#!${PREFIX}/bin/bash" > "$PREFIX/bin/git"
-    cat >> "$PREFIX/bin/git" << 'ENDWRAP'
+# ─── git wrapper functions ────────────────────
+# The Termux git package ships the real binary as $PREFIX/bin/git (a regular file)
+# and libexec/git-core/git as a symlink to it; older layouts had it the other way
+# round. Our wrapper replaces bin/git, so the real binary is first kept as
+# bin/git.real — it must never be the only copy that gets deleted, and the wrapper
+# must never exec something that resolves back to itself.
+GIT_BIN="$PREFIX/bin/git"
+GIT_REAL="$PREFIX/bin/git.real"
+GIT_MARKER="$PREFIX/bin/git.wrapper-installed"
+# true when $1 is one of our wrappers (this version or an older one)
+git_is_wrapper() { [ -f "$1" ] && grep -q 'is_clone=false' "$1" 2>/dev/null; }
+# $1 is a regular file that is NOT a wrapper (callers check): true when it prints a git version.
+# Never call this on something that might be a wrapper — the old wrapper loops forever.
+git_runs() {
+    local out
+    [ -f "$1" ] || return 1
+    git_is_wrapper "$1" && return 1
+    # git reads the system/global config even for --version: probe it without them, so a
+    # broken ~/.gitconfig cannot make a good binary look dead
+    if command -v timeout >/dev/null 2>&1; then
+        out=$(env HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null timeout 10 "$1" --version 2>/dev/null) || return 1
+    else
+        out=$(env HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$1" --version 2>/dev/null) || return 1
+    fi
+    case "$out" in "git version"*) return 0 ;; esac
+    return 1
+}
+# print the path of the real git binary: a regular file, after resolving symlinks,
+# that is not one of our wrappers. Fails when there is none. A binary freshly unpacked
+# at bin/git (or via libexec/git-core/git) wins over an older bin/git.real.
+git_find_real() {
+    local c r
+    for c in "$GIT_BIN" "$PREFIX/libexec/git-core/git" "$GIT_REAL"; do
+        r=$(readlink -f "$c" 2>/dev/null) || continue
+        if [ -f "$r" ] && [ ! -L "$r" ] && ! git_is_wrapper "$r" && git_runs "$r"; then
+            printf '%s\n' "$r"
+            return 0
+        fi
+    done
+    return 1
+}
+# write the wrapper over $GIT_BIN (temp file + rename)
+git_write_wrapper() {
+    local tmp="$GIT_BIN.new.$$"
+    {
+        printf '#!%s/bin/bash\n' "$PREFIX"
+        printf 'PFX="%s"\n' "$PREFIX"
+        cat << 'ENDWRAP'
+# openclaw-android git wrapper: drops --recurse-submodules (it opens a hardcoded
+# com.termux path) and clears an existing clone target in a temp/cache dir (npm creates it first)
+unset CDPATH
 filtered=()
 is_clone=false
 for a in "$@"; do
@@ -713,20 +902,119 @@ if $is_clone; then
   for a in "${filtered[@]}"; do
     case "$a" in
       clone|--*|-*|http*|ssh*|git*|[0-9]) ;;
-      *) [ -d "$a" ] && rm -rf "$a" ;;
+      *)
+        # only temp/cache directories (npm creates its clone target first); a directory
+        # the user named (a source repo, a --reference) must never be deleted
+        if [ -d "$a" ]; then
+          # compare resolved paths with resolved bases (/data/data is a link to /data/user/0)
+          d=$(cd -P "$a" 2>/dev/null && pwd -P) || d=""
+          ok=false
+          for base in "$HOME/.npm" "$PFX/tmp" "${TMPDIR:-}" "${npm_config_cache:-}"; do
+            [ -n "$base" ] || continue
+            b=$(cd "$base" 2>/dev/null && pwd -P) || continue
+            case "$d" in "$b"/*) ok=true ;; esac
+          done
+          if $ok; then
+            case "$d" in
+              */_cacache/tmp/git-clone*)
+                # npm's own throw-away clone dir (it reuses it for its https -> ssh fallbacks,
+                # so it may hold a failed attempt's files): safe to empty. Only the directory
+                # directly under _cacache/tmp/ -- nothing nested below it
+                case "${d##*/_cacache/tmp/}" in
+                  */*) ;;
+                  *) rm -rf "$a" ;;
+                esac ;;
+              *)
+                # anything else only if it is EMPTY: a directory that already has content is
+                # never deleted, whatever it is called
+                if [ -z "$(ls -A "$a" 2>/dev/null)" ]; then rmdir "$a" 2>/dev/null; fi ;;
+            esac
+          fi
+        fi ;;
     esac
   done
 fi
 ENDWRAP
-    echo "exec \"$REAL_GIT\" \"\${filtered[@]}\"" >> "$PREFIX/bin/git"
-    chmod +x "$PREFIX/bin/git"
-    touch "$PREFIX/bin/git.wrapper-installed"
-    echo -e "  ${GREEN}\u2713${NC} git wrapper installed"
-else
-    if [ -f "$PREFIX/bin/git.wrapper-installed" ]; then
-        echo -e "  ${GREEN}[SKIP]${NC} git wrapper already installed"
+        # exec -a keeps the name git was called by: git decides built-in commands
+        # (git-upload-pack ...) from argv[0], and those names are links to this wrapper
+        printf 'exec -a "${0##*/}" "%s" "${filtered[@]}"\n' "$GIT_REAL"
+    } > "$tmp" || { rm -f "$tmp"; return 1; }
+    chmod +x "$tmp" && mv -f "$tmp" "$GIT_BIN" || { rm -f "$tmp"; return 1; }
+}
+# true when the wrapper is in place and points at an existing real binary
+git_wrapper_ok() {
+    git_is_wrapper "$GIT_BIN" && [ -x "$GIT_REAL" ] && ! git_is_wrapper "$GIT_REAL" \
+        && grep -qF "exec -a \"\${0##*/}\" \"$GIT_REAL\"" "$GIT_BIN" \
+        && git_real_runs
+}
+# the saved real binary prints a git version
+git_real_runs() { git_runs "$GIT_REAL"; }
+# run the installed wrapper once: it must print a git version (bounded when `timeout` exists)
+git_selfcheck() {
+    local out
+    if command -v timeout >/dev/null 2>&1; then
+        out=$(env HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null timeout 10 "$GIT_BIN" --version 2>/dev/null) || return 1
     else
-        echo -e "  ${RED}\u2717${NC} Real git not found at $REAL_GIT"
+        out=$(env HOME=/nonexistent XDG_CONFIG_HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$GIT_BIN" --version 2>/dev/null) || return 1
+    fi
+    case "$out" in "git version"*) return 0 ;; esac
+    return 1
+}
+# keep the real binary as bin/git.real, write the wrapper, check it works.
+# Returns 0 ok, 2 when there is no real binary to keep (caller must get one), 1 on failure.
+git_install_wrapper() {
+    local real
+    real=$(git_find_real) || return 2
+    if [ "$real" != "$GIT_REAL" ]; then
+        cp -p "$real" "$GIT_REAL.tmp" && chmod +x "$GIT_REAL.tmp" && mv -f "$GIT_REAL.tmp" "$GIT_REAL" \
+            || { rm -f "$GIT_REAL.tmp"; return 1; }
+    fi
+    chmod +x "$GIT_REAL" 2>/dev/null || true
+    git_write_wrapper || return 1
+    if ! git_selfcheck; then
+        # The wrapper does not run: put the real binary back as bin/git so git still
+        # works (without the wrapper) and the failure does not make things worse.
+        if git_real_runs; then
+            cp -p "$GIT_REAL" "$GIT_BIN.rb" && mv -f "$GIT_BIN.rb" "$GIT_BIN" || rm -f "$GIT_BIN.rb"
+        fi
+        return 1
+    fi
+    touch "$GIT_MARKER"
+    return 0
+}
+# ─── end git wrapper functions ────────────────
+
+# Git wrapper: replace $PREFIX/bin/git with a wrapper that:
+#   1. Strips --recurse-submodules (triggers open() on hardcoded com.termux path)
+#   2. Cleans existing target dirs before clone (npm's withTempDir creates dir first)
+# npm caches git path at module load via which.sync('git'), so we must replace the binary.
+# The real binary is kept as $PREFIX/bin/git.real (see the git wrapper functions above).
+if git_wrapper_ok; then
+    touch "$GIT_MARKER"
+    echo -e "  ${GREEN}[SKIP]${NC} git wrapper already installed"
+else
+    echo "  Installing git wrapper (strips --recurse-submodules)..."
+    git_rc=0
+    git_install_wrapper || git_rc=$?
+    if [ "$git_rc" -eq 2 ]; then
+        # No real git binary on disk (an earlier broken install deleted it): fetch it again.
+        echo "  Real git binary missing — downloading it again..."
+        if _git_deb=$(get_deb_filename git) && [ -n "$_git_deb" ] && install_deb "$_git_deb"; then
+            git_rc=0
+            git_install_wrapper || git_rc=$?
+        else
+            git_rc=3
+        fi
+    fi
+    if [ "$git_rc" -eq 0 ]; then
+        echo -e "  ${GREEN}✓${NC} git wrapper installed"
+    else
+        if [ "$git_rc" -eq 3 ]; then
+            echo -e "  ${RED}✗${NC} Could not download git. Check your network connection and restart the app to retry."
+        else
+            echo -e "  ${RED}✗${NC} Could not set up git: the git wrapper would not run."
+            echo "    Restart the app to try again, or report this."
+        fi
         exit 1
     fi
 fi
@@ -844,17 +1132,23 @@ fi
 # Block `openclaw update` so the pin holds (after the npm wrappers from [3/7])
 bash "$OC_SHIM_GEN" | sed 's/^/  /'
 
-# Install clawdhub (skill manager)
-echo "  Installing clawdhub..."
-if npm install -g clawdhub --no-fund --no-audit; then
-    echo -e "  ${GREEN}✓${NC} clawdhub installed"
-    CLAWHUB_DIR="$(npm root -g)/clawdhub"
-    if [ -d "$CLAWHUB_DIR" ] && ! (cd "$CLAWHUB_DIR" && node -e "require('undici')" 2>/dev/null); then
-        echo "  Installing undici dependency for clawdhub..."
-        (cd "$CLAWHUB_DIR" && npm install undici --no-fund --no-audit) || true
-    fi
+# Install clawdhub (skill manager) — only when it is missing: re-running this script
+# (e.g. after removing the done-marker to pick up a fixed post-setup.sh) must not
+# reinstall it.
+CLAWHUB_DIR="$(npm root -g 2>/dev/null || true)/clawdhub"
+if [ -f "$CLAWHUB_DIR/package.json" ]; then
+    echo -e "  ${GREEN}[SKIP]${NC} clawdhub already installed"
 else
-    echo -e "  ${YELLOW}[WARN]${NC} clawdhub installation failed (non-critical)"
+    echo "  Installing clawdhub..."
+    if npm install -g clawdhub --no-fund --no-audit; then
+        echo -e "  ${GREEN}✓${NC} clawdhub installed"
+    else
+        echo -e "  ${YELLOW}[WARN]${NC} clawdhub installation failed (non-critical)"
+    fi
+fi
+if [ -d "$CLAWHUB_DIR" ] && ! (cd "$CLAWHUB_DIR" && node -e "require('undici')" 2>/dev/null); then
+    echo "  Installing undici dependency for clawdhub..."
+    (cd "$CLAWHUB_DIR" && npm install undici --no-fund --no-audit) || true
 fi
 
 # PyYAML (for .skill packaging)
@@ -930,19 +1224,74 @@ BASHRC
 echo -e "  ${GREEN}✓${NC} ~/.bashrc configured"
 
 # oa CLI (enables oa --update, oa --backup, etc.)
-if curl -fsSL "$REPO_BASE/oa.sh" \
-        -o "$PREFIX/bin/oa" 2>/dev/null; then
-    chmod +x "$PREFIX/bin/oa"
+# Downloaded to a temp file, checked (a script starts with "#!"), made executable and
+# only then renamed into place — an interrupted download must not leave a partial oa or
+# one without the execute bit (the app's umask makes new files 0600). A working oa that
+# is already there stays untouched when the download fails.
+_oa_tmp="$PREFIX/bin/.oa.tmp.$$"
+if curl -fsSL "$REPO_BASE/oa.sh" -o "$_oa_tmp" 2>/dev/null \
+        && [ "$(head -c 2 "$_oa_tmp" 2>/dev/null)" = "#!" ] \
+        && chmod +x "$_oa_tmp" && mv -f "$_oa_tmp" "$PREFIX/bin/oa"; then
     echo -e "  ${GREEN}✓${NC} oa CLI installed"
 else
+    rm -f "$_oa_tmp"
     echo -e "  ${YELLOW}[WARN]${NC} oa CLI installation failed (non-critical)"
+fi
+
+# Files that oa --backup / oa --restore need (the same ones oa --update installs).
+# All three are fetched first and put in place together, so a failed download never
+# leaves a half set; oa --update installs them later if this step is skipped.
+_oa_dl_ok=true
+mkdir -p "$OCA_DIR/scripts" "$OCA_DIR/platforms/openclaw"
+for _oa_f in scripts/lib.sh scripts/backup.sh platforms/openclaw/config.env; do
+    if ! curl -fsSL "$REPO_BASE/$_oa_f" -o "$OCA_DIR/$_oa_f.tmp" 2>/dev/null || [ ! -s "$OCA_DIR/$_oa_f.tmp" ]; then
+        _oa_dl_ok=false
+        break
+    fi
+    # A mirror can answer 200 with an HTML page: scripts must start with #!, config.env must define the data dir
+    case "$_oa_f" in
+        *.sh) head -c 2 "$OCA_DIR/$_oa_f.tmp" | grep -q '^#!' || { _oa_dl_ok=false; break; } ;;
+        *.env) grep -q '^PLATFORM_DATA_DIR=' "$OCA_DIR/$_oa_f.tmp" || { _oa_dl_ok=false; break; } ;;
+    esac
+done
+if [ "$_oa_dl_ok" = true ]; then
+    for _oa_f in scripts/lib.sh scripts/backup.sh platforms/openclaw/config.env; do
+        mv -f "$OCA_DIR/$_oa_f.tmp" "$OCA_DIR/$_oa_f"
+    done
+    echo -e "  ${GREEN}✓${NC} backup/restore scripts installed (oa --backup, oa --restore)"
+else
+    rm -f "$OCA_DIR/scripts/lib.sh.tmp" "$OCA_DIR/scripts/backup.sh.tmp" "$OCA_DIR/platforms/openclaw/config.env.tmp"
+    echo -e "  ${YELLOW}[WARN]${NC} Could not download the backup/restore scripts (non-critical) — run oa --update later to get them"
 fi
 
 # ─── [7/7] Optional Tools ──────────────────
 TOOL_CONF="$OCA_DIR/tool-selections.conf"
 if [ -f "$TOOL_CONF" ]; then
-    # shellcheck source=/dev/null
-    source "$TOOL_CONF"
+    # Read the selections as data, never as code: only the known keys, and only the
+    # exact values true/false. The file is written by the app's setup screen, so
+    # it must not be executed (a value with a newline or $(...) would run).
+    _tool_lineno=0
+    while IFS= read -r _tool_line || [ -n "$_tool_line" ]; do
+        _tool_lineno=$((_tool_lineno + 1))
+        # Check the length first: string operations on a huge line are very slow
+        if [ "${#_tool_line}" -gt 80 ]; then
+            echo -e "  ${YELLOW}[WARN]${NC} Ignoring line $_tool_lineno of tool-selections.conf (too long)"
+            continue
+        fi
+        _tool_line="${_tool_line%$'\r'}"
+        [ -z "$_tool_line" ] && continue
+        _tool_key="${_tool_line%%=*}"
+        _tool_val="${_tool_line#*=}"
+        case "$_tool_key" in
+            INSTALL_TMUX|INSTALL_TTYD|INSTALL_DUFS|INSTALL_CODE_SERVER|INSTALL_PLAYWRIGHT|INSTALL_CLAUDE_CODE|INSTALL_GEMINI_CLI|INSTALL_CODEX_CLI)
+                if [ "$_tool_line" != "$_tool_key" ] && { [ "$_tool_val" = "true" ] || [ "$_tool_val" = "false" ]; }; then
+                    printf -v "$_tool_key" '%s' "$_tool_val"
+                    continue
+                fi
+                ;;
+        esac
+        echo -e "  ${YELLOW}[WARN]${NC} Ignoring line $_tool_lineno of tool-selections.conf (unknown option or invalid value)"
+    done < "$TOOL_CONF"
 
     HAS_TOOLS=false
     for var in INSTALL_TMUX INSTALL_TTYD INSTALL_DUFS INSTALL_CODE_SERVER INSTALL_PLAYWRIGHT INSTALL_CLAUDE_CODE INSTALL_GEMINI_CLI INSTALL_CODEX_CLI; do
@@ -1124,6 +1473,18 @@ echo "  Loading environment..."
 # ~/.bashrc is written for interactive shells; a non-zero status from any line
 # in it must not abort setup before onboard (errexit is off inside `||`).
 source "$HOME/.bashrc" || true
+
+# Turn off the gateway's "update available" notice: the OpenClaw version is pinned
+# here, so the notice only points at an update that oa blocks. A value the user
+# already set (true or false) is left alone. Same block as platforms/openclaw
+# install.sh and update.sh.
+if timeout 60 openclaw config get update.checkOnStart >/dev/null 2>&1; then
+    echo -e "  ${GREEN}[SKIP]${NC} update.checkOnStart is already set"
+elif timeout 60 openclaw config set update.checkOnStart false >/dev/null 2>&1; then
+    echo -e "  ${GREEN}✓${NC} OpenClaw update notice turned off (update.checkOnStart=false)"
+else
+    echo -e "  ${YELLOW}[WARN]${NC} Could not turn off the OpenClaw update notice (non-critical)"
+fi
 echo ""
 echo "  Starting OpenClaw onboard..."
 echo ""

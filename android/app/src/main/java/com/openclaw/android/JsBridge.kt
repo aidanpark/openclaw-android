@@ -569,30 +569,60 @@ class JsBridge(
 
     private suspend fun updateWww() {
         try {
-            val url = UrlResolver(activity).getWwwUrl()
+            val component = UrlResolver(activity).getWwwComponent()
+            val version = ArtifactSecurity.requireVersion(component.version, "www")
+            val expectedSha256 = ArtifactSecurity.requireSha256(component.sha256, "www")
             val stagingWww = java.io.File(activity.cacheDir, "www-staging")
             stagingWww.deleteRecursively()
             stagingWww.mkdirs()
 
             emitProgress("www", PROGRESS_DOWNLOAD, "Downloading...")
-            val zipFile = java.io.File(activity.cacheDir, "www.zip")
-            java.net.URL(url).openStream().use { input ->
-                zipFile.outputStream().use { output -> input.copyTo(output) }
-            }
+            val zipFile = downloadVerifiedWww(component.url, version, expectedSha256)
 
             emitProgress("www", PROGRESS_EXTRACT, "Extracting...")
-            extractZipToDir(zipFile, stagingWww)
-            zipFile.delete()
+            try {
+                extractZipToDir(zipFile, stagingWww)
+            } finally {
+                zipFile.delete()
+            }
 
             emitProgress("www", PROGRESS_APPLY, "Applying...")
             val wwwDir = bootstrapManager.wwwDir
             wwwDir.deleteRecursively()
             wwwDir.parentFile?.mkdirs()
             stagingWww.renameTo(wwwDir)
+            activity.getSharedPreferences("openclaw", 0).edit().putString("www_version", version).apply()
 
             activity.runOnUiThread { activity.reloadWebView() }
         } catch (e: Exception) {
             emitProgress("www", PROGRESS_START, "Update failed: ${e.message}")
+            throw e
+        }
+    }
+
+    private fun downloadVerifiedWww(
+        url: String,
+        version: String,
+        expectedSha256: String,
+    ): java.io.File {
+        val zipFile = java.io.File(activity.cacheDir, "www.zip")
+        zipFile.delete()
+        var verified = false
+
+        try {
+            java.net.URL(url).openStream().use { input ->
+                zipFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            val actualSha256 = ArtifactSecurity.sha256Hex(zipFile)
+            if (actualSha256 != expectedSha256) {
+                throw SecurityException("www SHA-256 mismatch for version $version")
+            }
+            verified = true
+            return zipFile
+        } finally {
+            if (!verified) {
+                zipFile.delete()
+            }
         }
     }
 
@@ -625,7 +655,7 @@ class JsBridge(
         entry: java.util.zip.ZipEntry,
         targetDir: java.io.File,
     ) {
-        val destFile = java.io.File(targetDir, entry.name)
+        val destFile = ArtifactSecurity.resolveInsideDirectory(targetDir, entry.name)
         if (entry.isDirectory) {
             destFile.mkdirs()
         } else {

@@ -38,6 +38,16 @@ android {
         )
         buildConfigField(
             "String",
+            "WWW_VERSION",
+            "null",
+        )
+        buildConfigField(
+            "String",
+            "WWW_SHA256",
+            "null",
+        )
+        buildConfigField(
+            "String",
             "CONFIG_URL",
             "\"https://raw.githubusercontent.com/AidanPark/openclaw-android-app/main/config.json\"",
         )

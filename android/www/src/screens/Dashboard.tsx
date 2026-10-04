@@ -14,17 +14,17 @@ interface PlatformInfo {
 
 function getCommands() {
   return [
-    { label: 'Gateway', cmd: 'openclaw gateway', desc: t('cmd_gateway') },
-    { label: 'Status', cmd: 'openclaw status', desc: t('cmd_status') },
-    { label: 'Onboard', cmd: 'openclaw onboard', desc: t('cmd_onboard') },
-    { label: 'Logs', cmd: 'openclaw logs --follow', desc: t('cmd_logs') },
+    { label: 'Gateway', commandId: 'openclawGateway', cmd: 'openclaw gateway', desc: t('cmd_gateway') },
+    { label: 'Status', commandId: 'openclawStatus', cmd: 'openclaw status', desc: t('cmd_status') },
+    { label: 'Onboard', commandId: 'openclawOnboard', cmd: 'openclaw onboard', desc: t('cmd_onboard') },
+    { label: 'Logs', commandId: 'openclawLogs', cmd: 'openclaw logs --follow', desc: t('cmd_logs') },
   ]
 }
 
 function getManagement() {
   return [
-    { label: 'Update', cmd: 'oa --update', desc: t('cmd_update') },
-    { label: 'Install Tools', cmd: 'oa --install', desc: t('cmd_install_tools') },
+    { label: 'Update', commandId: 'oaUpdate', cmd: 'oa --update', desc: t('cmd_update') },
+    { label: 'Install Tools', commandId: 'oaInstall', cmd: 'oa --install', desc: t('cmd_install_tools') },
   ]
 }
 
@@ -40,9 +40,9 @@ export function Dashboard() {
     const ap = bridge.callJson<PlatformInfo>('getActivePlatform')
     if (ap) setPlatform(ap)
 
-    const nodeV = bridge.callJson<{ stdout: string }>('runCommand', 'node -v 2>/dev/null')
-    const gitV = bridge.callJson<{ stdout: string }>('runCommand', 'git --version 2>/dev/null')
-    const ocV = bridge.callJson<{ stdout: string }>('runCommand', 'openclaw --version 2>/dev/null')
+    const nodeV = bridge.callJson<{ stdout: string }>('runCommand', 'nodeVersion')
+    const gitV = bridge.callJson<{ stdout: string }>('runCommand', 'gitVersion')
+    const ocV = bridge.callJson<{ stdout: string }>('runCommand', 'openclawVersion')
     setRuntimeInfo({
       'Node.js': nodeV?.stdout?.trim() || '—',
       'git': gitV?.stdout?.trim()?.replace('git version ', '') || '—',
@@ -54,9 +54,9 @@ export function Dashboard() {
     refreshStatus()
   }, [])
 
-  function runInTerminal(cmd: string) {
+  function runInTerminal(commandId: string) {
     bridge.call('showTerminal')
-    bridge.call('writeToTerminal', '', cmd)
+    bridge.call('writeCommandToTerminal', commandId)
   }
 
 
@@ -95,7 +95,7 @@ export function Dashboard() {
             key={item.cmd}
             className="card-row"
             style={{ cursor: 'pointer', borderTop: i > 0 ? '1px solid var(--border)' : 'none', padding: '10px 0' }}
-            onClick={() => runInTerminal(item.cmd)}
+            onClick={() => runInTerminal(item.commandId)}
           >
             <div className="card-content">
               <div className="card-label">{item.label}</div>
@@ -125,7 +125,7 @@ export function Dashboard() {
             key={item.cmd}
             className="card-row"
             style={{ cursor: 'pointer', borderTop: i > 0 ? '1px solid var(--border)' : 'none', padding: '10px 0' }}
-            onClick={() => runInTerminal(item.cmd)}
+            onClick={() => runInTerminal(item.commandId)}
           >
             <div className="card-content">
               <div className="card-label">{item.label}</div>

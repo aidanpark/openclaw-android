@@ -31,7 +31,6 @@ class JsBridge(
     companion object {
         private const val TAG = "JsBridge"
         private const val SHELL_INIT_DELAY_MS = 500L
-        private const val COMMAND_TIMEOUT_MS = 5_000L
         private const val PLATFORM_LIST_TIMEOUT_MS = 10_000L
         private const val API_TIMEOUT_MS = 5000
         private const val PROGRESS_START = 0f
@@ -41,7 +40,59 @@ class JsBridge(
         private const val PROGRESS_EXTRACT = 0.6f
         private const val PROGRESS_APPLY = 0.9f
         private const val PROGRESS_BOOTSTRAP_START = 0.1f
+        private const val TERMINAL_COMMAND_NEWLINE = "\n"
     }
+
+    private data class BridgeCommand(
+        val executable: String,
+        val args: List<String> = emptyList(),
+    )
+
+    private val versionCommands =
+        mapOf(
+            "nodeVersion" to BridgeCommand("node", listOf("-v")),
+            "gitVersion" to BridgeCommand("git", listOf("--version")),
+            "openclawVersion" to BridgeCommand("openclaw", listOf("--version")),
+            "oaVersion" to BridgeCommand("oa", listOf("--version")),
+        )
+
+    private val terminalCommands =
+        mapOf(
+            "openclawGateway" to "openclaw gateway",
+            "openclawStatus" to "openclaw status",
+            "openclawOnboard" to "openclaw onboard",
+            "openclawLogs" to "openclaw logs --follow",
+            "oaUpdate" to "oa --update",
+            "oaInstall" to "oa --install",
+        )
+
+    private val platformPackages =
+        mapOf(
+            "openclaw" to "openclaw",
+        )
+
+    private val allowedToolIds =
+        setOf(
+            "tmux",
+            "ttyd",
+            "dufs",
+            "openssh-server",
+            "android-tools",
+            "chromium",
+            "code-server",
+            "claude-code",
+            "gemini-cli",
+            "codex-cli",
+            "opencode",
+        )
+
+    private val npmToolBinaries =
+        mapOf(
+            "claude-code" to "claude",
+            "gemini-cli" to "gemini",
+            "codex-cli" to "codex",
+            "opencode" to "opencode",
+        )
 
     /**
      * Launch a coroutine on Dispatchers.IO with error handling.
@@ -113,8 +164,7 @@ class JsBridge(
     @JavascriptInterface
     fun getTerminalSessions(): String = gson.toJson(sessionManager.getSessionsInfo())
 
-    @JavascriptInterface
-    fun writeToTerminal(
+    private fun writeToTerminalInternal(
         id: String,
         data: String,
     ) {
@@ -128,12 +178,19 @@ class JsBridge(
     }
 
     @JavascriptInterface
-    fun runInNewSession(command: String) {
+    fun writeCommandToTerminal(commandId: String) {
+        val command = terminalCommands[commandId] ?: return
+        writeToTerminalInternal("", command)
+    }
+
+    @JavascriptInterface
+    fun runCommandInNewSession(commandId: String) {
+        val command = terminalCommands[commandId] ?: return
         val session = sessionManager.createSession()
         activity.showTerminal()
         // Delay write until shell process initializes (same pattern as showTerminal post-setup)
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            session.write(command)
+            session.write(command + TERMINAL_COMMAND_NEWLINE)
         }, SHELL_INIT_DELAY_MS)
     }
 
@@ -216,6 +273,7 @@ class JsBridge(
 
     @JavascriptInterface
     fun installPlatform(id: String) {
+        val pkg = platformPackages[id] ?: return
         launchWithErrorHandling(
             errorEventType = "install_progress",
             errorContext = mapOf("target" to id),
@@ -226,7 +284,8 @@ class JsBridge(
             )
             val env = EnvironmentBuilder.build(activity)
             CommandRunner.runStreaming(
-                "npm install -g $id@latest --ignore-scripts",
+                "npm",
+                listOf("install", "-g", "$pkg@latest", "--ignore-scripts"),
                 env,
                 bootstrapManager.homeDir,
             ) { output ->
@@ -244,17 +303,24 @@ class JsBridge(
 
     @JavascriptInterface
     fun uninstallPlatform(id: String) {
+        val pkg = platformPackages[id] ?: return
         launchWithErrorHandling(
             errorEventType = "install_progress",
             errorContext = mapOf("target" to id),
         ) {
             val env = EnvironmentBuilder.build(activity)
-            CommandRunner.runSync("npm uninstall -g $id", env, bootstrapManager.homeDir)
+            CommandRunner.runExecutable(
+                "npm",
+                listOf("uninstall", "-g", pkg),
+                env,
+                bootstrapManager.homeDir,
+            )
         }
     }
 
     @JavascriptInterface
     fun switchPlatform(id: String) {
+        if (!platformPackages.containsKey(id)) return
         // Write active platform marker
         val markerFile = java.io.File(bootstrapManager.homeDir, ".openclaw-android/.platform")
         markerFile.parentFile?.mkdirs()
@@ -264,7 +330,8 @@ class JsBridge(
     @JavascriptInterface
     fun getActivePlatform(): String {
         val markerFile = java.io.File(bootstrapManager.homeDir, ".openclaw-android/.platform")
-        val id = if (markerFile.exists()) markerFile.readText().trim() else "openclaw"
+        val savedId = if (markerFile.exists()) markerFile.readText().trim() else "openclaw"
+        val id = if (platformPackages.containsKey(savedId)) savedId else "openclaw"
         return gson.toJson(mapOf("id" to id, "name" to id.replaceFirstChar { it.uppercase() }))
     }
 
@@ -319,6 +386,7 @@ class JsBridge(
 
     @JavascriptInterface
     fun installTool(id: String) {
+        if (!allowedToolIds.contains(id)) return
         launchWithErrorHandling(
             errorEventType = "install_progress",
             errorContext = mapOf("target" to id),
@@ -372,6 +440,7 @@ class JsBridge(
 
     @JavascriptInterface
     fun uninstallTool(id: String) {
+        if (!allowedToolIds.contains(id)) return
         launchWithErrorHandling(
             errorEventType = "install_progress",
             errorContext = mapOf("target" to id),
@@ -405,7 +474,7 @@ class JsBridge(
     @JavascriptInterface
     fun isToolInstalled(id: String): String {
         val prefix = bootstrapManager.prefixDir.absolutePath
-        val env = EnvironmentBuilder.build(activity)
+        val nodeBin = "${bootstrapManager.homeDir.absolutePath}/.openclaw-android/node/bin"
         val exists =
             when (id) {
                 "openssh-server" -> java.io.File("$prefix/bin/sshd").exists()
@@ -419,15 +488,8 @@ class JsBridge(
                 }
                 "code-server" -> java.io.File("$prefix/bin/code-server").exists()
                 else -> {
-                    // npm global packages: check via command -v
-                    val result =
-                        CommandRunner.runSync(
-                            "command -v $id 2>/dev/null",
-                            env,
-                            bootstrapManager.prefixDir,
-                            timeoutMs = COMMAND_TIMEOUT_MS,
-                        )
-                    result.stdout.trim().isNotEmpty()
+                    val bin = npmToolBinaries[id] ?: return gson.toJson(mapOf("installed" to false))
+                    java.io.File("$nodeBin/$bin").exists()
                 }
             }
         return gson.toJson(mapOf("installed" to exists))
@@ -439,8 +501,15 @@ class JsBridge(
 
     @JavascriptInterface
     fun runCommand(cmd: String): String {
+        val command = versionCommands[cmd] ?: return blockedCommandResult()
         val env = EnvironmentBuilder.build(activity)
-        val result = CommandRunner.runSync(cmd, env, bootstrapManager.homeDir)
+        val result =
+            CommandRunner.runExecutable(
+                command.executable,
+                command.args,
+                env,
+                bootstrapManager.homeDir,
+            )
         return gson.toJson(result)
     }
 
@@ -449,12 +518,30 @@ class JsBridge(
         callbackId: String,
         cmd: String,
     ) {
+        val command =
+            versionCommands[cmd]
+                ?: run {
+                    eventBridge.emit(
+                        "command_output",
+                        mapOf(
+                            "callbackId" to callbackId,
+                            "data" to "Command is not allowed",
+                            "done" to true,
+                        ),
+                    )
+                    return
+                }
         launchWithErrorHandling(
             errorEventType = "command_output",
             errorContext = mapOf("callbackId" to callbackId, "done" to true),
         ) {
             val env = EnvironmentBuilder.build(activity)
-            CommandRunner.runStreaming(cmd, env, bootstrapManager.homeDir) { output ->
+            CommandRunner.runStreaming(
+                command.executable,
+                command.args,
+                env,
+                bootstrapManager.homeDir,
+            ) { output ->
                 eventBridge.emit(
                     "command_output",
                     mapOf("callbackId" to callbackId, "data" to output, "done" to false),
@@ -466,6 +553,15 @@ class JsBridge(
             )
         }
     }
+
+    private fun blockedCommandResult(): String =
+        gson.toJson(
+            CommandRunner.CommandResult(
+                exitCode = -1,
+                stdout = "",
+                stderr = "Command is not allowed",
+            ),
+        )
 
     // ═══════════════════════════════════════════
     // Updates domain

@@ -43,6 +43,7 @@ class MainActivity : AppCompatActivity() {
         private const val TAB_ADD_PAD_DP = 12
         private const val INDICATOR_HEIGHT_DP = 2
         private const val INPUT_MODE_TYPE_NULL = 1
+        private val ALLOWED_PLATFORM_IDS = setOf("openclaw")
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -103,7 +104,8 @@ class MainActivity : AppCompatActivity() {
                 }
             } else if (intent?.getBooleanExtra("from_boot", false) == true) {
                 val platformFile = java.io.File(bootstrapManager.homeDir, ".openclaw-android/.platform")
-                val platformId = if (platformFile.exists()) platformFile.readText().trim() else "openclaw"
+                val savedPlatformId = if (platformFile.exists()) platformFile.readText().trim() else "openclaw"
+                val platformId = if (ALLOWED_PLATFORM_IDS.contains(savedPlatformId)) savedPlatformId else "openclaw"
                 AppLogger.i(TAG, "Boot launch \u2014 auto-starting $platformId gateway")
                 binding.terminalView.post {
                     session.write("$platformId gateway\n")

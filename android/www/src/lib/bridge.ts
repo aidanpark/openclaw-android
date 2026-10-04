@@ -10,7 +10,8 @@ interface OpenClawBridge {
   switchSession(id: string): void
   closeSession(id: string): void
   getTerminalSessions(): string
-  writeToTerminal(id: string, data: string): void
+  writeCommandToTerminal(commandId: string): void
+  runCommandInNewSession(commandId: string): void
   getSetupStatus(): string
   getBootstrapStatus(): string
   startSetup(): void
@@ -25,8 +26,8 @@ interface OpenClawBridge {
   installTool(id: string): void
   uninstallTool(id: string): void
   isToolInstalled(id: string): string
-  runCommand(cmd: string): string
-  runCommandAsync(callbackId: string, cmd: string): void
+  runCommand(commandId: string): string
+  runCommandAsync(callbackId: string, commandId: string): void
   checkForUpdates(): string
   applyUpdate(component: string): void
   getApkUpdateInfo(): string

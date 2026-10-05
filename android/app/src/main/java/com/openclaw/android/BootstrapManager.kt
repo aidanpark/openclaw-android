@@ -285,15 +285,12 @@ class BootstrapManager(
         val prefix = prefixDir.absolutePath
         val ourPackage = context.packageName
 
-        // sources.list: HTTPS→HTTP downgrade + package name fix
+        // sources.list: package name fix only. It used to be downgraded https -> http and apt was told
+        // to accept unsigned packages; neither is wanted — the app installs tools through the signed
+        // post-setup chain, and apt cannot install here anyway (dpkg's hardcoded paths).
         val sourcesList = dir.resolve("etc/apt/sources.list")
         if (sourcesList.exists()) {
-            sourcesList.writeText(
-                sourcesList
-                    .readText()
-                    .replace("https://", "http://")
-                    .replace("com.termux", ourPackage),
-            )
+            sourcesList.writeText(sourcesList.readText().replace("com.termux", ourPackage))
         }
 
         // apt.conf: full rewrite with correct paths
@@ -322,8 +319,6 @@ class BootstrapManager(
             Dpkg::Options:: "--force-bad-path";
             Dpkg::Options:: "--instdir=$prefix";
             Dpkg::Options:: "--admindir=$prefix/var/lib/dpkg";
-            Acquire::AllowInsecureRepositories "true";
-            APT::Get::AllowUnauthenticated "true";
             """.trimIndent(),
         )
     }
@@ -519,7 +514,33 @@ exit ${d}_rc
     fun applyScriptUpdate() {
         if (!isInstalled()) return
         copyAssetScripts()
+        removeInsecureAptOptions()
         AppLogger.i(TAG, "Script update applied")
+    }
+
+    /**
+     * An install made by an older app has `apt.conf` lines that make apt accept unsigned packages.
+     * Remove exactly those two lines (idempotent; nothing else in the file is touched).
+     */
+    private fun removeInsecureAptOptions() {
+        val aptConf = File(prefixDir, "etc/apt/apt.conf")
+        if (!aptConf.isFile) return
+        try {
+            val text = aptConf.readText()
+            val cleaned =
+                text
+                    .lines()
+                    .filterNot {
+                        it.trim().startsWith("Acquire::AllowInsecureRepositories") ||
+                            it.trim().startsWith("APT::Get::AllowUnauthenticated")
+                    }.joinToString("\n")
+            if (cleaned != text) {
+                aptConf.writeText(cleaned)
+                AppLogger.i(TAG, "Removed unsigned-package options from apt.conf")
+            }
+        } catch (e: java.io.IOException) {
+            AppLogger.w(TAG, "Could not clean apt.conf", e)
+        }
     }
 
     fun savedVersionCode(): Int = prefs().getInt(PREF_VERSION_CODE, 0)

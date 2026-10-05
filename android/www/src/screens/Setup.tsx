@@ -9,6 +9,19 @@ interface Props {
 
 type SetupPhase = 'platform-select' | 'tool-select' | 'installing' | 'failed' | 'done'
 
+interface SetupState {
+  phase?: 'idle' | 'running' | 'done' | 'failed'
+  progress?: number
+  message?: string
+  errorKind?: string
+}
+
+// A page created while an install runs (the Activity was recreated) missed its progress events;
+// ask native where it is and continue from there instead of showing the first step at 0%.
+function readSetupState(): SetupState {
+  return bridge.callJson<SetupState>('getSetupState') ?? {}
+}
+
 interface Platform {
   id: string
   name: string
@@ -21,7 +34,6 @@ function getOptionalTools() {
     { id: 'tmux', name: 'tmux', desc: t('tool_tmux') },
     { id: 'ttyd', name: 'ttyd', desc: t('tool_ttyd') },
     { id: 'dufs', name: 'dufs', desc: t('tool_dufs') },
-    { id: 'code-server', name: 'code-server', desc: t('tool_code_server') },
     { id: 'claude-code', name: 'Claude Code', desc: t('tool_claude_code') },
     { id: 'gemini-cli', name: 'Gemini CLI', desc: t('tool_gemini_cli') },
     { id: 'codex-cli', name: 'Codex CLI', desc: t('tool_codex_cli') },
@@ -38,13 +50,19 @@ function getTips() {
 }
 
 export function Setup({ onComplete }: Props) {
-  const [phase, setPhase] = useState<SetupPhase>('platform-select')
+  const [restored] = useState(readSetupState)
+  const [phase, setPhase] = useState<SetupPhase>(() =>
+    restored.phase === 'running' ? 'installing'
+      : restored.phase === 'failed' ? 'failed'
+      : restored.phase === 'done' ? 'done'
+      : 'platform-select',
+  )
   const [platforms, setPlatforms] = useState<Platform[]>([])
   const [selectedPlatform, setSelectedPlatform] = useState('')
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set())
-  const [progress, setProgress] = useState(0)
-  const [message, setMessage] = useState('')
-  const [errorKind, setErrorKind] = useState('')
+  const [progress, setProgress] = useState(restored.phase === 'running' ? (restored.progress ?? 0) : 0)
+  const [message, setMessage] = useState(restored.phase === 'running' ? (restored.message ?? '') : '')
+  const [errorKind, setErrorKind] = useState(restored.phase === 'failed' ? (restored.errorKind ?? 'UNKNOWN') : '')
   const [tipIndex, setTipIndex] = useState(0)
 
   // Load available platforms
@@ -69,7 +87,12 @@ export function Setup({ onComplete }: Props) {
       setPhase('failed')
       return
     }
-    if (d.progress !== undefined) setProgress(d.progress)
+    if (d.progress !== undefined) {
+      setProgress(d.progress)
+      // Progress while the wizard is still showing (the page was recreated mid-install and
+      // restored late): move to the install screen instead of ignoring it
+      if (d.progress < 1) setPhase(p => (p === 'platform-select' || p === 'tool-select' ? 'installing' : p))
+    }
     if (d.message) setMessage(d.message)
     if (d.progress !== undefined && d.progress >= 1) {
       setPhase('done')
@@ -78,6 +101,24 @@ export function Setup({ onComplete }: Props) {
   }, [])
 
   useNativeEvent('setup_progress', onProgress)
+
+  // The state was first read while rendering (useState above); an event could land before the
+  // listener above existed. Registered now — read once more so nothing in that gap is missed.
+  useEffect(() => {
+    const now = readSetupState()
+    if (now.phase === 'running') {
+      // Existing pattern: one-shot read of native state on mount
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPhase('installing')
+      setProgress(now.progress ?? 0)
+      if (now.message) setMessage(now.message)
+    } else if (now.phase === 'failed') {
+      setErrorKind(now.errorKind ?? 'UNKNOWN')
+      setPhase('failed')
+    } else if (now.phase === 'done') {
+      setPhase('done')
+    }
+  }, [])
 
   function handleSelectPlatform(id: string) {
     setSelectedPlatform(id)

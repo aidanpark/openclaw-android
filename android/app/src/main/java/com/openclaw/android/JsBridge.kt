@@ -12,8 +12,13 @@ import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 
 /**
  * WebView → Kotlin bridge via @JavascriptInterface (§2.6).
@@ -34,9 +39,20 @@ class JsBridge(
 
         private const val SHELL_INIT_DELAY_MS = 500L
         private const val API_TIMEOUT_MS = 5000
+        private const val MILLIS_PER_SECOND = 1000L
+        private const val LONG_RUNNING_MS = 30L * 60 * 1000
+        private const val CANCEL_RETRY_MS = 1_000L
+        private const val VERIFY_TIMEOUT_MS = 10_000L
+        private const val EMIT_INTERVAL_MS = 200L
+        private const val MAX_LINE_CHARS = 300
+
+        /** Tool installs have their own event, so the OpenClaw platform/update screens never see them. */
+        private const val TOOL_EVENT = "tool_progress"
+        private val ansiPattern = Regex("\u001B\\[[0-9;?]*[A-Za-z]")
+        private const val LIST_TIMEOUT_MS = 15_000L
+        private const val PROGRESS_PREPARE = 0.05f
         private const val PROGRESS_START = 0f
         private const val PROGRESS_HALF = 0.5f
-        private const val PROGRESS_DONE = 1f
     }
 
     /**
@@ -141,6 +157,17 @@ class JsBridge(
         // A second tap or a retry racing the first would run two installs over the same prefix
         if (!SetupGuard.tryStart()) {
             AppLogger.w(TAG, "startSetup ignored: an install is already running")
+            // Answer with where the running install is, so a page created after an Activity
+            // recreation picks it up instead of staying at 0%
+            val now = SetupGuard.snapshot()
+            val state = mutableMapOf<String, Any?>("progress" to now.progress, "message" to now.message)
+            if (now.errorKind != null) {
+                // A failure that is not yet cleared: same shape the failure event has, so the page
+                // shows the failure screen instead of a stuck 0%
+                state["error"] = now.error
+                state["errorKind"] = now.errorKind
+            }
+            eventBridge.emit("setup_progress", state)
             return
         }
         launchWithErrorHandling(
@@ -149,6 +176,7 @@ class JsBridge(
         ) {
             try {
                 bootstrapManager.startSetup { progress, message ->
+                    SetupGuard.progress(progress, message)
                     eventBridge.emit(
                         "setup_progress",
                         mapOf("progress" to progress, "message" to message),
@@ -158,6 +186,7 @@ class JsBridge(
                 // Expected refusals (network, missing file, checksum): the WebView shows a
                 // translated message for errorKind; `usr` was not touched, so retrying is safe
                 AppLogger.w(TAG, "Bootstrap download refused: ${e.kind}", e)
+                SetupGuard.failed(e.kind.name, e.message ?: e.kind.name)
                 eventBridge.emit(
                     "setup_progress",
                     mapOf(
@@ -167,10 +196,36 @@ class JsBridge(
                         "message" to (e.message ?: e.kind.name),
                     ),
                 )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancellation is not a failure to remember or report
+                throw e
+            } catch (e: Exception) {
+                // Anything else: remember it for a page created later, then let the handler report it
+                SetupGuard.failed("UNKNOWN", e.message ?: "Unknown error")
+                throw e
             } finally {
                 SetupGuard.finish()
             }
         }
+    }
+
+    /**
+     * Where the install is — for a page that was created while one runs (Activity recreation)
+     * and missed the progress events. phase: idle | running | done | failed.
+     */
+    @JavascriptInterface
+    fun getSetupState(): String {
+        val now = SetupGuard.snapshot()
+        return gson.toJson(
+            mapOf(
+                "phase" to now.phase,
+                "running" to now.running,
+                "progress" to now.progress,
+                "message" to now.message,
+                "errorKind" to now.errorKind,
+                "error" to now.error,
+            ),
+        )
     }
 
     @JavascriptInterface
@@ -263,162 +318,310 @@ class JsBridge(
 
     @JavascriptInterface
     fun getInstalledTools(): String {
-        val env = EnvironmentBuilder.build(activity)
-        val prefix = bootstrapManager.prefixDir.absolutePath
-        val tools = mutableListOf<Map<String, String>>()
-
-        // Termux packages - check binary path
-        val pkgChecks =
-            mapOf(
-                "tmux" to "$prefix/bin/tmux",
-                "ttyd" to "$prefix/bin/ttyd",
-                "dufs" to "$prefix/bin/dufs",
-                "openssh-server" to "$prefix/bin/sshd",
-                "android-tools" to "$prefix/bin/adb",
-                "code-server" to "$prefix/bin/code-server",
-            )
-        for ((id, path) in pkgChecks) {
-            if (java.io.File(path).exists()) {
-                tools.add(mapOf("id" to id, "name" to id, "version" to "installed"))
-            }
-        }
-
-        // Chromium - check multiple possible paths
-        if (java.io.File("$prefix/bin/chromium-browser").exists() || java.io.File("$prefix/bin/chromium").exists()) {
-            tools.add(mapOf("id" to "chromium", "name" to "chromium", "version" to "installed"))
-        }
-
-        // npm global packages - check binary file in node bin
-        for (id in BridgeGuard.npmToolBinaries.keys) {
-            if (isNpmToolInstalled(id)) {
-                tools.add(mapOf("id" to id, "name" to id, "version" to "installed"))
-            }
-        }
-
+        // Files are there, but the last install of the tool ended "does not work": say so, not "installed"
+        val onDisk = BridgeGuard.toolIds.filter { toolOnDisk(it) }
+        runCatching { toolOutcomes.prune(onDisk.toSet()) }
+        val brokenTools = toolOutcomes.load().keys
+        val tools =
+            onDisk
+                .map { mapOf("id" to it, "name" to it, "version" to "installed", "broken" to (it in brokenTools)) }
         return gson.toJson(tools)
     }
 
+    /**
+     * Does each installed tool actually run? One `tools_check` event per tool
+     * (`status` = ok | failed | unknown) and a last one with `done`. Skipped while an install is
+     * running (a tool half-written by it would read as broken). Only the `--version` style checks in
+     * [BridgeGuard.toolVerifyCommands] run — nothing the page can choose.
+     */
+    @JavascriptInterface
+    fun checkInstalledToolsAsync(callbackId: String) {
+        launchWithErrorHandling(
+            errorEventType = "tools_check",
+            errorContext = mapOf("callbackId" to callbackId, "done" to true),
+        ) {
+            if (!ToolInstallGuard.isRunning()) {
+                val env = probeEnvironment()
+                coroutineScope {
+                    BridgeGuard.toolVerifyCommands
+                        .filterKeys { toolOnDisk(it) }
+                        .map { (id, cmd) ->
+                            async {
+                                val result =
+                                    ProbeLimiter.semaphore.withPermit {
+                                        CommandRunner.runExecutable(
+                                            cmd.executable,
+                                            cmd.args,
+                                            env,
+                                            bootstrapManager.homeDir,
+                                            VERIFY_TIMEOUT_MS,
+                                        )
+                                    }
+                                eventBridge.emit(
+                                    "tools_check",
+                                    mapOf(
+                                        "callbackId" to callbackId,
+                                        "target" to id,
+                                        "status" to
+                                            ToolProbe.status(
+                                                result.exitCode,
+                                                result.stderr.startsWith(CommandRunner.TIMEOUT_PREFIX),
+                                            ),
+                                    ),
+                                )
+                            }
+                        }.awaitAll()
+                }
+            }
+            eventBridge.emit("tools_check", mapOf("callbackId" to callbackId, "done" to true))
+        }
+    }
+
+    @JavascriptInterface
+    fun isToolInstalled(id: String): String =
+        gson.toJson(
+            mapOf(
+                "installed" to (id in BridgeGuard.toolIds && toolOnDisk(id)),
+            ),
+        )
+
+    private val toolOutcomes by lazy { ToolOutcomeStore(java.io.File(activity.filesDir, "tool-outcomes.conf")) }
+
+    private fun toolOnDisk(id: String): Boolean =
+        ToolDetection.isInstalled(id, bootstrapManager.prefixDir, bootstrapManager.homeDir)
+
+    /**
+     * Install one tool through `post-setup.sh --tools-only` — the same signed package chain the
+     * first install uses. The app builds no install command of its own. What it reports is not
+     * the exit code: success needs this run's result file to say `ok` AND the files to be there.
+     */
+    @Suppress("TooGenericExceptionCaught") // the outcome record is a display aid: nothing it throws may escape
     @JavascriptInterface
     fun installTool(id: String) {
         if (id !in BridgeGuard.toolIds) return
+        if (id in BridgeGuard.terminalOnlyTools) {
+            return emitNotSupported(id, "TERMINAL_ONLY", "$id cannot be installed from the app yet")
+        }
+        val scriptId = BridgeGuard.toolInstallIds[id] ?: return
+        val startedAtSec = System.currentTimeMillis() / MILLIS_PER_SECOND
+        if (!ToolInstallGuard.tryStart(id, startedAtSec)) {
+            AppLogger.w(TAG, "installTool ignored: another tool install is running")
+            emitToolState() // tell the page what is running instead of staying silent
+            return
+        }
         launchWithErrorHandling(
-            errorEventType = "install_progress",
-            errorContext = mapOf("target" to id),
+            errorEventType = TOOL_EVENT,
+            errorContext =
+                mapOf(
+                    "target" to id,
+                    "phase" to ToolInstallGuard.FAILED,
+                    "errorKind" to "TOOL_INSTALL_FAILED",
+                    "reason" to ToolFailure.UNKNOWN.name,
+                ),
         ) {
-            val env = EnvironmentBuilder.build(activity)
-            val prefix = bootstrapManager.prefixDir.absolutePath
-            val aptGet =
-                "DEBIAN_FRONTEND=noninteractive $prefix/bin/apt-get" +
-                    " -y -o Acquire::AllowInsecureRepositories=true" +
-                    " -o APT::Get::AllowUnauthenticated=true"
-            val cmd =
-                when (id) {
-                    // Termux packages (apt-get)
-                    "tmux", "ttyd", "dufs", "openssh-server", "android-tools" ->
-                        "$aptGet install ${if (id == "openssh-server") "openssh" else id}"
-                    // Chromium (from x11-repo)
-                    "chromium" ->
-                        "$aptGet install chromium"
-                    // code-server (custom)
-                    "code-server" ->
-                        "npm install -g code-server"
-                    // npm-based AI CLI tools
-                    "claude-code" ->
-                        "npm install -g @anthropic-ai/claude-code"
-                    "gemini-cli" ->
-                        "npm install -g @google/gemini-cli"
-                    "codex-cli" ->
-                        "npm install -g @mmmbuto/codex-cli-termux"
-                    // OpenCode (Bun-based) — requires proot + ld.so concatenation
-                    "opencode" ->
-                        "curl -fsSL https://raw.githubusercontent.com/" +
-                            "AidanPark/openclaw-android/main/scripts/install-opencode.sh | bash"
-                    else -> return@launchWithErrorHandling
+            var verdict: ToolVerdict = ToolVerdict.Failure(ToolFailure.UNKNOWN)
+            val longRunning =
+                launch {
+                    delay(LONG_RUNNING_MS)
+                    ToolInstallGuard.markLongRunning()
+                    emitToolState()
                 }
-            eventBridge.emit(
-                "install_progress",
-                mapOf("target" to id, "progress" to PROGRESS_START, "message" to "Installing $id..."),
-            )
-            CommandRunner.runStreaming(cmd, env, bootstrapManager.homeDir) { output ->
-                eventBridge.emit(
-                    "install_progress",
-                    mapOf("target" to id, "progress" to PROGRESS_HALF, "message" to output),
-                )
+            // A cancel asked for before the script had written its pid is delivered as soon as it can be
+            val cancelPump =
+                launch {
+                    while (true) {
+                        delay(CANCEL_RETRY_MS)
+                        ToolInstallGuard.retryCancel(::sendCancelSignal)
+                        emitToolState() // lines merged away by the 200ms limit still reach the page
+                    }
+                }
+            try {
+                emitToolState()
+                verdict = runToolInstall(id, scriptId, startedAtSec)
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "Tool install failed unexpectedly: $id", e)
+            } finally {
+                longRunning.cancel()
+                cancelPump.cancel()
+                try {
+                    // A display aid only: nothing that goes wrong here may keep the guard held
+                    try {
+                        toolOutcomes.record(id, verdict)
+                    } catch (e: Throwable) {
+                        // Even an Error stops here: escaping would make the error handler tell the page
+                        // "failed" about an install that did finish
+                        AppLogger.w(TAG, "Could not record the tool outcome: $id", e)
+                    } finally {
+                        ToolInstallGuard.finish(verdict)
+                    }
+                } finally {
+                    // The page gets the real end state even if the record threw something worse than an Exception
+                    emitToolState()
+                }
             }
-            eventBridge.emit(
-                "install_progress",
-                mapOf("target" to id, "progress" to PROGRESS_DONE, "message" to "$id installed"),
-            )
         }
     }
 
+    /** The whole install, in the order that keeps an older script from doing harm. */
+    private suspend fun runToolInstall(
+        id: String,
+        scriptId: String,
+        startedAtSec: Long,
+    ): ToolVerdict {
+        val home = bootstrapManager.homeDir
+        val ocaDir = java.io.File(home, ".openclaw-android")
+        val script = bootstrapManager.postSetupScript.absolutePath
+        val env = EnvironmentBuilder.build(activity)
+        val notReady = prepareInstaller(ocaDir, script, env, scriptId)
+        if (notReady != null) return notReady
+        var hint: ToolFailure? = null
+        var lastEmitMs = 0L
+        val exitCode =
+            CommandRunner.streamLong(
+                listOf("bash", script, "--tools-only", scriptId),
+                env + (ToolSignal.ENV_NAME to ToolInstallGuard.runToken),
+                home,
+                ToolInstallGuard.process,
+            ) { raw ->
+                val full = ansiPattern.replace(raw, "")
+                val line = full.takeLast(MAX_LINE_CHARS)
+                hint = ToolInstallVerdict.hintFromOutput(full) ?: hint
+                ToolInstallGuard.progress(PROGRESS_HALF, line)
+                // npm prints thousands of lines: the page gets at most a few updates per second
+                val nowMs = System.currentTimeMillis()
+                if (nowMs - lastEmitMs >= EMIT_INTERVAL_MS) {
+                    lastEmitMs = nowMs
+                    emitToolState()
+                }
+                ToolInstallGuard.retryCancel(::sendCancelSignal)
+            }
+        val facts = ToolRunFacts(startedAtSec, scriptId, exitCode, toolOnDisk(id), hint)
+        return ToolInstallVerdict.decide(readToolResult(ocaDir), facts)
+    }
+
+    /** Marker, updated installer, `--tools-only` support — each step may be cut short by a cancel. */
+    private suspend fun prepareInstaller(
+        ocaDir: java.io.File,
+        script: String,
+        env: Map<String, String>,
+        scriptId: String,
+    ): ToolVerdict.Failure? =
+        markerFailure(ocaDir)
+            ?: cancelFailure()
+            ?: refreshInstaller()
+            ?: checkListing(script, env, scriptId)
+
+    private fun cancelFailure(): ToolVerdict.Failure? =
+        if (ToolInstallGuard.cancelRequested()) ToolVerdict.Failure(ToolFailure.NOT_RUN) else null
+
+    // An older script with no marker would start a FULL install for any argument
+    private fun markerFailure(ocaDir: java.io.File): ToolVerdict.Failure? =
+        if (java.io
+                .File(
+                    ocaDir,
+                    ".post-setup-done",
+                ).exists()
+        ) {
+            null
+        } else {
+            ToolVerdict.Failure(ToolFailure.SETUP_INCOMPLETE)
+        }
+
+    private suspend fun refreshInstaller(): ToolVerdict.Failure? {
+        ToolInstallGuard.progress(PROGRESS_PREPARE, "Updating the installer...")
+        emitToolState()
+        withContext(Dispatchers.IO) { bootstrapManager.refreshPostSetupScript() }
+        return cancelFailure()
+    }
+
+    /** Only a script that lists its tools understands --tools-only; "already complete" means it does not. */
+    private suspend fun checkListing(
+        script: String,
+        env: Map<String, String>,
+        scriptId: String,
+    ): ToolVerdict.Failure? {
+        val list =
+            withContext(Dispatchers.IO) {
+                CommandRunner.runExecutable(
+                    "bash",
+                    listOf(script, "--tools-only", "--list"),
+                    env,
+                    bootstrapManager.homeDir,
+                    LIST_TIMEOUT_MS,
+                )
+            }
+        return cancelFailure()
+            ?: when {
+                ToolListCheck.supports(list.stdout, list.exitCode, scriptId) -> null
+                // -1: the check itself could not run or timed out — a connection/launch problem, not an old script
+                list.exitCode == -1 -> ToolVerdict.Failure(ToolFailure.NOT_RUN)
+                else -> ToolVerdict.Failure(ToolFailure.SCRIPT_OUTDATED)
+            }
+    }
+
+    private fun readToolResult(ocaDir: java.io.File): ToolResultFile? {
+        val file = java.io.File(ocaDir, "tools-result.conf")
+        if (!file.isFile || file.length() > ToolResultParser.MAX_CHARS) return null
+        return ToolResultParser.parse(file.readText())
+    }
+
+    /** Ask the running install to stop. The script only stops after its current step (SIGTERM). */
+    @JavascriptInterface
+    fun cancelToolInstall() {
+        if (ToolInstallGuard.requestCancel(::sendCancelSignal)) emitToolState()
+    }
+
+    private fun sendCancelSignal(): Boolean =
+        try {
+            ToolSignal.sendTerm(
+                java.io.File(bootstrapManager.homeDir, ".openclaw-android/.tools.lock/pid"),
+                ToolInstallGuard.runToken,
+            )
+        } catch (e: SecurityException) {
+            AppLogger.w(TAG, "Cancel signal was refused", e)
+            false // retried by the pump; the page keeps saying "cancel requested" until the run ends
+        }
+
+    /** Where the tool install is — for a page created while one runs, or after it ended. */
+    @JavascriptInterface
+    fun getToolInstallState(): String = gson.toJson(toolStateEvent(ToolInstallGuard.snapshot()))
+
+    private fun toolStateEvent(now: ToolInstallGuard.State): Map<String, Any?> =
+        mapOf(
+            "target" to now.tool,
+            "phase" to now.phase,
+            "progress" to now.progress,
+            "message" to now.message,
+            "cancelRequested" to now.cancelRequested,
+            "longRunning" to now.longRunning,
+            "reason" to now.reason,
+        )
+
+    private fun emitToolState() = eventBridge.emit(TOOL_EVENT, toolStateEvent(ToolInstallGuard.snapshot()))
+
+    /** No work is done: a plain, honest "not from the app" for a tool or action with no safe path. */
+    private fun emitNotSupported(
+        id: String,
+        errorKind: String,
+        message: String,
+    ) {
+        eventBridge.emit(
+            TOOL_EVENT,
+            mapOf(
+                "target" to id,
+                "phase" to "unsupported",
+                "progress" to PROGRESS_START,
+                "errorKind" to errorKind,
+                "message" to message,
+            ),
+        )
+    }
+
+    /** Removing needs a record of what was installed (the script keeps none yet): not offered. */
     @JavascriptInterface
     fun uninstallTool(id: String) {
         if (id !in BridgeGuard.toolIds) return
-        launchWithErrorHandling(
-            errorEventType = "install_progress",
-            errorContext = mapOf("target" to id),
-        ) {
-            val env = EnvironmentBuilder.build(activity)
-            val cmd =
-                when (id) {
-                    "tmux", "ttyd", "dufs", "openssh-server", "android-tools", "chromium" -> {
-                        val pkg = if (id == "openssh-server") "openssh" else id
-                        "${bootstrapManager.prefixDir.absolutePath}/bin/apt-get remove -y $pkg"
-                    }
-                    "code-server" ->
-                        "npm uninstall -g code-server"
-                    "claude-code" ->
-                        "npm uninstall -g @anthropic-ai/claude-code"
-                    "gemini-cli" ->
-                        "npm uninstall -g @google/gemini-cli"
-                    "codex-cli" ->
-                        "npm uninstall -g @mmmbuto/codex-cli-termux"
-                    "opencode" ->
-                        "rm -f \$PREFIX/bin/opencode" +
-                            " \$HOME/.openclaw-android/bin/ld.so.opencode" +
-                            " \$PREFIX/tmp/ld.so.opencode" +
-                            " && rm -rf \$HOME/.config/opencode"
-                    else -> return@launchWithErrorHandling
-                }
-            CommandRunner.runSync(cmd, env, bootstrapManager.homeDir)
-        }
-    }
-
-    @JavascriptInterface
-    fun isToolInstalled(id: String): String {
-        val prefix = bootstrapManager.prefixDir.absolutePath
-        val exists =
-            when (id) {
-                "openssh-server" -> java.io.File("$prefix/bin/sshd").exists()
-                "tmux", "ttyd", "dufs", "android-tools" -> {
-                    val bin = if (id == "android-tools") "adb" else id
-                    java.io.File("$prefix/bin/$bin").exists()
-                }
-                "chromium" -> {
-                    java.io.File("$prefix/bin/chromium-browser").exists() ||
-                        java.io.File("$prefix/bin/chromium").exists()
-                }
-                "code-server" -> java.io.File("$prefix/bin/code-server").exists()
-                else -> isNpmToolInstalled(id)
-            }
-        return gson.toJson(mapOf("installed" to exists))
-    }
-
-    /**
-     * npm global installs land under the Termux prefix (`$PREFIX/bin`), some tools drop a launcher
-     * in `~/.local/bin`, and the node directory is on the PATH too — so look in all of them, the
-     * same places `command -v` would. Unknown ids are never "installed".
-     */
-    private fun isNpmToolInstalled(id: String): Boolean {
-        val bin = BridgeGuard.npmToolBinaries[id] ?: return false
-        val dirs =
-            listOf(
-                "${bootstrapManager.prefixDir.absolutePath}/bin",
-                "${bootstrapManager.homeDir.absolutePath}/.local/bin",
-                "${bootstrapManager.homeDir.absolutePath}/.openclaw-android/node/bin",
-            )
-        return dirs.any { java.io.File(it, bin).exists() }
+        emitNotSupported(id, "UNINSTALL_UNSUPPORTED", "Removing $id is not supported from the app yet")
     }
 
     // ═══════════════════════════════════════════

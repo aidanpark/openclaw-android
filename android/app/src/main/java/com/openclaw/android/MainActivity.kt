@@ -74,7 +74,11 @@ class MainActivity : AppCompatActivity() {
         sessionManager.onSessionsChanged = { updateSessionTabs() }
         startService(Intent(this, OpenClawService::class.java))
 
-        val isInstalled = bootstrapManager.isInstalled()
+        // The prefix already exists near the end of an install (and all through a reinstall), but
+        // the install coroutine is still working in it: this Activity was recreated mid-install.
+        // Treat it as "not ready" — no terminal, no script update, no www sync — and let the setup
+        // page pick the running install up (getSetupState).
+        val isInstalled = bootstrapManager.isInstalled() && !SetupGuard.isRunning()
         AppLogger.i(TAG, "Bootstrap installed: $isInstalled, needsPostSetup: ${bootstrapManager.needsPostSetup()}")
 
         // Sync www assets and check for APK version upgrade
@@ -141,6 +145,12 @@ class MainActivity : AppCompatActivity() {
             AppLogger.i(TAG, "Boot launch \u2014 auto-starting $platformId gateway")
             binding.terminalView.post { session.write("$platformId gateway\n") }
         }
+    }
+
+    override fun onDestroy() {
+        // Events must stop going to this page — unless a newer Activity already took over
+        EventBridge.detach(binding.webView)
+        super.onDestroy()
     }
 
     // --- Terminal setup ---

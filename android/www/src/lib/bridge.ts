@@ -14,6 +14,7 @@ interface OpenClawBridge {
   getSetupStatus(): string
   getBootstrapStatus(): string
   startSetup(): void
+  getSetupState(): string
   saveToolSelections(json: string): void
   getAvailablePlatforms(): string
   installPlatform(id: string): void
@@ -22,6 +23,9 @@ interface OpenClawBridge {
   getActivePlatform(): string
   getInstalledTools(): string
   installTool(id: string): void
+  cancelToolInstall(): void
+  getToolInstallState(): string
+  checkInstalledToolsAsync(callbackId: string): void
   uninstallTool(id: string): void
   isToolInstalled(id: string): string
   runProbeAsync(callbackId: string, commandId: string): void

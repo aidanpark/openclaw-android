@@ -11,7 +11,7 @@ if [ -f "$HOME/.openclaw-android/scripts/lib.sh" ]; then
         source "$HOME/.openclaw-android/scripts/backup.sh"
     fi
 else
-    OA_VERSION="1.1.3"
+    OA_VERSION="1.1.4"
     RED='\033[0;31m'
     GREEN='\033[0;32m'
     YELLOW='\033[1;33m'
@@ -59,7 +59,7 @@ show_help() {
     echo "  --install      Install optional tools (tmux, code-server, AI CLIs, etc.)"
     echo "  --uninstall    Remove OpenClaw on Android"
     echo "  --backup       Create a full backup of OpenClaw data"
-    echo "  --restore      Restore from a backup"
+    echo "  --restore      Restore from a backup (--force-no-safety: even if the safety backup fails)"
     echo "  --status       Show installation status and all components"
     echo "  --version, -v  Show version"
     echo "  --help, -h     Show this help message"
@@ -227,7 +227,7 @@ case "${1:-}" in
         ;;
     --restore)
         if declare -f cmd_restore > /dev/null 2>&1; then
-            cmd_restore
+            cmd_restore "${2:-}"
         else
             echo -e "${RED}[FAIL]${NC} backup.sh not found. Run: oa --update"
             exit 1

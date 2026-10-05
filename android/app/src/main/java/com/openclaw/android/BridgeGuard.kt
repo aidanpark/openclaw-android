@@ -25,6 +25,25 @@ internal object BridgeGuard {
             "oaVersion" to Executable("oa", listOf("--version"), firstLineOnly = true),
         )
 
+    /**
+     * Read-only "does it run" check per installed tool (`--version` style). The file being on disk
+     * proves nothing: a launcher can stay after a broken install, or break later outside the app.
+     * `playwright` is a library (no launcher) and most terminal-only tools are not checked.
+     * `code-server` is terminal-only (its npm install fails here) but a copy installed from the
+     * terminal is checked like any other, so a broken one never reads as "installed".
+     */
+    val toolVerifyCommands: Map<String, Executable> =
+        mapOf(
+            "tmux" to Executable("tmux", listOf("-V")),
+            "ttyd" to Executable("ttyd", listOf("--version")),
+            "dufs" to Executable("dufs", listOf("--version")),
+            "android-tools" to Executable("adb", listOf("--version")),
+            "code-server" to Executable("code-server", listOf("--version")),
+            "claude-code" to Executable("claude", listOf("--version")),
+            "gemini-cli" to Executable("gemini", listOf("--version")),
+            "codex-cli" to Executable("codex", listOf("--version")),
+        )
+
     /** Commands the dashboard may type into the terminal (no newline — the user presses Enter). */
     val terminalCommands: Map<String, String> =
         mapOf(
@@ -48,12 +67,36 @@ internal object BridgeGuard {
             "openssh-server",
             "android-tools",
             "chromium",
+            "playwright",
             "code-server",
             "claude-code",
             "gemini-cli",
             "codex-cli",
             "opencode",
         )
+
+    /**
+     * Tools the app cannot install itself yet: they have no signed install chain, and the
+     * apt route is dead (dpkg's hardcoded paths — it reports success without installing). The
+     * UI shows them as "can't be installed from the app yet" instead of a false "installed".
+     */
+    val terminalOnlyTools: Set<String> = setOf("openssh-server", "opencode", "chromium", "code-server")
+
+    /**
+     * App tool id → the id `post-setup.sh --tools-only` takes (its `OA_TOOL_IDS`). Every tool the
+     * app can install is here; anything else is [terminalOnlyTools] or unknown.
+     */
+    val toolInstallIds: Map<String, String> =
+        listOf(
+            "tmux",
+            "ttyd",
+            "dufs",
+            "android-tools",
+            "playwright",
+            "claude-code",
+            "gemini-cli",
+            "codex-cli",
+        ).associateWith { it }
 
     /**
      * Keys the setup wizard may save: exactly the variables `post-setup.sh` reads from
@@ -63,15 +106,6 @@ internal object BridgeGuard {
      */
     val toolSelectionIds: Set<String> =
         setOf("tmux", "ttyd", "dufs", "code-server", "playwright", "claude-code", "gemini-cli", "codex-cli")
-
-    /** npm-installed tool id → binary name in the node bin directory. */
-    val npmToolBinaries: Map<String, String> =
-        mapOf(
-            "claude-code" to "claude",
-            "gemini-cli" to "gemini",
-            "codex-cli" to "codex",
-            "opencode" to "opencode",
-        )
 
     /** Fixed texts the UI may copy to the clipboard, by ID. */
     val clipboardTexts: Map<String, String> =

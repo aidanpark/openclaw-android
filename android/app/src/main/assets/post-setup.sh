@@ -39,6 +39,26 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# Mode: a normal run installs everything. "--tools-only <tool>..." (used by the app's
+# tools screen) only installs the listed optional tools: see run_tools_only below.
+OA_MODE="full"
+OA_TOOL_ARGS=()
+OA_TOOL_IDS="tmux ttyd dufs android-tools playwright claude-code gemini-cli codex-cli"
+if [ "${1:-}" = "--tools-only" ]; then
+    OA_MODE="tools"
+    shift
+    # "--tools-only --list": print the supported ids, one per line, and stop (no lock,
+    # no network, no result file). An older copy of this script ignores the arguments
+    # (it prints "Post-setup already completed." or starts a full install), so the
+    # caller must accept only lines that are known ids and must call it only once
+    # the post-setup marker exists.
+    if [ "${1:-}" = "--list" ] && [ "$#" -eq 1 ]; then
+        for _oa_id in $OA_TOOL_IDS; do echo "$_oa_id"; done
+        exit 0
+    fi
+    OA_TOOL_ARGS=("$@")
+fi
+
 # ─── npm version-pin guard ────────────────────
 # Fallback pin for the guard in the npm wrapper (the guard reads config.env at
 # run time once it exists; a first install has none yet).
@@ -337,18 +357,25 @@ export GIT_EXEC_PATH="$PREFIX/libexec/git-core"
 # Git template dir (hardcoded /data/data/com.termux path workaround)
 export GIT_TEMPLATE_DIR="$PREFIX/share/git-core/templates"
 
-if [ -f "$MARKER" ]; then
-    echo -e "${GREEN}Post-setup already completed.${NC}"
-    exit 0
+if [ "$OA_MODE" = "full" ]; then
+    if [ -f "$MARKER" ]; then
+        echo -e "${GREEN}Post-setup already completed.${NC}"
+        exit 0
+    fi
+
+    echo ""
+    echo "══════════════════════════════════════════════"
+    echo "  OpenClaw Android — Installing components"
+    echo "══════════════════════════════════════════════"
+    echo ""
 fi
 
-echo ""
-echo "══════════════════════════════════════════════"
-echo "  OpenClaw Android — Installing components"
-echo "══════════════════════════════════════════════"
-echo ""
-
-mkdir -p "$OCA_DIR" "$OCA_DIR/patches" "$TMPDIR"
+if [ "$OA_MODE" = tools ]; then
+    # exit code 2 + no result file: the app reads it as "did not run"
+    mkdir -p "$OCA_DIR" "$OCA_DIR/patches" "$TMPDIR" || { echo "Cannot create $OCA_DIR (error=env)." >&2; exit 2; }
+else
+    mkdir -p "$OCA_DIR" "$OCA_DIR/patches" "$TMPDIR"
+fi
 
 TERMUX_DEB_REPO="https://packages-cf.termux.dev/apt/termux-main"
 # termux-pacman primary + officially recognized mirrors (https://termux-pacman.dev/mirrors/).
@@ -602,23 +629,22 @@ install_pacman_pkg() {
     rm -rf "$EXTRACT_DIR"
 }
 
-# ─── [1/7] Install essential packages ─────────
-echo -e "▸ ${YELLOW}[1/7]${NC} Installing essential packages..."
-mkdir -p "$DEB_DIR" "$PKG_DIR"
-
-# Download the Packages index to resolve .deb filenames, and prove it is the one
-# Termux signed:  InRelease (signed)  →  size + sha256 of Packages  →  Packages
-# →  sha256 of each .deb (checked in install_deb). There is no unsigned fallback:
-# if the list cannot be verified, the installation stops here.
-echo "  Fetching package index..."
+# ─── Termux package list: signed index, checksums, dependency helpers ─────────
+# The Packages index is proven to be the one Termux signed:
+#   InRelease (signed)  →  size + sha256 of Packages  →  Packages
+#   →  sha256 of each .deb (checked in install_deb).
+# There is no unsigned fallback: if the list cannot be verified, the run stops.
 PACKAGES_FILE="$TMPDIR/Packages"
 OA_INRELEASE="$TMPDIR/InRelease"
 OA_RELEASE_VERIFIED="$TMPDIR/Release.verified"
 OA_DEB_KEYRING="$OA_KEYRING_DIR/termux-autobuilds.gpg"
+OA_INDEX_FAIL_EXIT=1     # --tools-only uses 2 (the app tells "could not verify" apart)
+OA_TOOLS_ERROR=""        # --tools-only: why the run could not start/finish (result file)
 
 # oa_fail_index <reason|helper code>: say what went wrong and what to do, then stop
 oa_fail_index() {
     rm -f "$OA_INRELEASE" "$OA_RELEASE_VERIFIED" "$PACKAGES_FILE"
+    OA_TOOLS_ERROR="index-$1"
     echo -e "  ${RED}✗${NC} Could not verify the Termux package list."
     case "$1" in
         download)
@@ -643,38 +669,41 @@ oa_fail_index() {
             echo "    The signature check did not give a clear answer (error code $1). Restart the app to retry; if it keeps failing, report this." ;;
     esac
     echo "    Installation was stopped for safety: nothing from the unverified package list was installed."
-    exit 1
+    exit "$OA_INDEX_FAIL_EXIT"
 }
 
-_idx_rc=0
-oa_gpgv_check_tools "$OA_DEB_KEYRING" || _idx_rc=$?
-[ "$_idx_rc" -eq 0 ] || oa_fail_index "$_idx_rc"
-curl -fsSL --max-time 60 -o "$OA_INRELEASE" \
-    "${TERMUX_DEB_REPO}/dists/stable/InRelease" || oa_fail_index download
-oa_gpgv_clearsigned "$OA_DEB_KEYRING" "$OA_INRELEASE" "$OA_RELEASE_VERIFIED" || _idx_rc=$?
-[ "$_idx_rc" -eq 0 ] || oa_fail_index "$_idx_rc"
-echo -e "  ${GREEN}✓${NC} Package list signature verified"
+# Download the Packages index and verify it (see above); stops the run on any failure
+fetch_verified_index() {
+    local _idx_rc=0 _want_sha="" _want_size="" _rel_line _got_sha _got_size
+    echo "  Fetching package index..."
+    oa_gpgv_check_tools "$OA_DEB_KEYRING" || _idx_rc=$?
+    [ "$_idx_rc" -eq 0 ] || oa_fail_index "$_idx_rc"
+    curl -fsSL --max-time 60 -o "$OA_INRELEASE" \
+        "${TERMUX_DEB_REPO}/dists/stable/InRelease" || oa_fail_index download
+    oa_gpgv_clearsigned "$OA_DEB_KEYRING" "$OA_INRELEASE" "$OA_RELEASE_VERIFIED" || _idx_rc=$?
+    [ "$_idx_rc" -eq 0 ] || oa_fail_index "$_idx_rc"
+    echo -e "  ${GREEN}✓${NC} Package list signature verified"
 
-# Size and sha256 of Packages as stated in the signed Release (its SHA256: block)
-_want_sha="" _want_size=""
-_rel_line=$(awk '
-    /^SHA256:/ { f = 1; next }
-    /^[^ ]/ { f = 0 }
-    f && $3 == "main/binary-aarch64/Packages" { print $1, $2; exit }
-' "$OA_RELEASE_VERIFIED") || _rel_line=""
-read -r _want_sha _want_size <<< "$_rel_line" || true
-if [ "${#_want_sha}" -ne 64 ] || [[ "$_want_sha" == *[!0-9a-f]* ]] || [[ "$_want_size" == *[!0-9]* ]] || [ -z "$_want_size" ]; then
-    oa_fail_index noentry
-fi
-curl -fsSL --max-time 60 -o "$PACKAGES_FILE" \
-    "${TERMUX_DEB_REPO}/dists/stable/main/binary-aarch64/Packages" || oa_fail_index download
-_got_sha=$(sha256sum "$PACKAGES_FILE" | awk '{ print $1 }')
-_got_size=$(wc -c < "$PACKAGES_FILE" | tr -d ' ')
-if [ "$_got_sha" != "$_want_sha" ] || [ "$_got_size" != "$_want_size" ]; then
-    oa_fail_index mismatch
-fi
-rm -f "$OA_INRELEASE" "$OA_RELEASE_VERIFIED"
-echo -e "  ${GREEN}✓${NC} Package list matches the signed checksum"
+    # Size and sha256 of Packages as stated in the signed Release (its SHA256: block)
+    _rel_line=$(awk '
+        /^SHA256:/ { f = 1; next }
+        /^[^ ]/ { f = 0 }
+        f && $3 == "main/binary-aarch64/Packages" { print $1, $2; exit }
+    ' "$OA_RELEASE_VERIFIED") || _rel_line=""
+    read -r _want_sha _want_size <<< "$_rel_line" || true
+    if [ "${#_want_sha}" -ne 64 ] || [[ "$_want_sha" == *[!0-9a-f]* ]] || [[ "$_want_size" == *[!0-9]* ]] || [ -z "$_want_size" ]; then
+        oa_fail_index noentry
+    fi
+    curl -fsSL --max-time 60 -o "$PACKAGES_FILE" \
+        "${TERMUX_DEB_REPO}/dists/stable/main/binary-aarch64/Packages" || oa_fail_index download
+    _got_sha=$(sha256sum "$PACKAGES_FILE" | awk '{ print $1 }')
+    _got_size=$(wc -c < "$PACKAGES_FILE" | tr -d ' ')
+    if [ "$_got_sha" != "$_want_sha" ] || [ "$_got_size" != "$_want_size" ]; then
+        oa_fail_index mismatch
+    fi
+    rm -f "$OA_INRELEASE" "$OA_RELEASE_VERIFIED"
+    echo -e "  ${GREEN}✓${NC} Package list matches the signed checksum"
+}
 
 # sha256 of the .deb whose "Filename:" is $1, from the (verified) Packages index
 get_deb_sha256() {
@@ -725,6 +754,505 @@ dpkg_has() {
         END { exit !ok }
     ' "$PREFIX/var/lib/dpkg/status" 2>/dev/null
 }
+
+# Packages handled so far / that failed, space-delimited (guard against cycles
+# and repeats; a package that failed stays failed for every later dependent)
+DEB_SEEN=" "
+DEB_FAILED=" "
+
+# Helper: install a .deb after all of its dependencies, recursively.
+# Packages already listed as installed in the bootstrap's dpkg status are
+# neither extracted nor followed: the tool runs against the bootstrap's copies
+# of them, and the closure does not grow into base packages.
+# Fails if the package or any dependency could not be installed.
+install_with_deps() {
+    local pkg="$1"
+    case "$DEB_FAILED" in *" $pkg "*) return 1 ;; esac
+    case "$DEB_SEEN" in *" $pkg "*) return 0 ;; esac
+    DEB_SEEN="$DEB_SEEN$pkg "
+
+    local filename
+    filename=$(get_deb_filename "$pkg")
+    if [ -z "$filename" ]; then
+        DEB_FAILED="$DEB_FAILED$pkg "
+        return 1
+    fi
+
+    local deps dep rc=0
+    deps=$(get_deb_depends "$pkg")
+    while IFS= read -r dep; do
+        [ -z "$dep" ] && continue
+        dpkg_has "$dep" && continue
+        # Not in the index = virtual package: nothing to install
+        [ -n "$(get_deb_filename "$dep")" ] || continue
+        if ! install_with_deps "$dep"; then
+            echo -e "    ${YELLOW}[WARN]${NC} dependency $dep of $pkg could not be installed"
+            rc=1
+        fi
+    done <<< "$deps"
+
+    # A tool whose dependencies could not be installed would be unpacked but
+    # could not run (missing libraries): leave it out instead of leaving a
+    # broken tool behind.
+    if [ "$rc" -ne 0 ]; then
+        echo -e "    ${YELLOW}[WARN]${NC} $pkg was not installed because a dependency could not be installed"
+        DEB_FAILED="$DEB_FAILED$pkg "
+        return 1
+    fi
+
+    install_deb "$filename" || rc=1
+    [ "$rc" -eq 0 ] || DEB_FAILED="$DEB_FAILED$pkg "
+    return $rc
+}
+
+# Remove everything downloaded for this run
+cleanup_downloads() {
+    rm -rf "$DEB_DIR" "$PKG_DIR" "$PACKAGES_FILE" "$OA_INRELEASE" "$OA_RELEASE_VERIFIED" "$TMPDIR/gpkg.db" "$TMPDIR/gpkg.db.sig" "$TMPDIR/gnupg" 2>/dev/null || true
+}
+
+# ─── Optional tools: one installer per tool ───────────────────
+# Each prints its own progress lines and returns 0 on success, 1 on failure (the
+# normal run ignores the code; --tools-only reports it). Same text as always.
+tool_install_tmux() {
+    echo "  Installing tmux..."
+    if install_with_deps tmux; then
+        echo -e "  ${GREEN}✓${NC} tmux"
+    else
+        echo -e "  ${YELLOW}[WARN]${NC} tmux installation failed (non-critical) — skipped"
+        return 1
+    fi
+}
+tool_install_ttyd() {
+    echo "  Installing ttyd..."
+    if install_with_deps ttyd; then
+        echo -e "  ${GREEN}✓${NC} ttyd"
+    else
+        echo -e "  ${YELLOW}[WARN]${NC} ttyd installation failed (non-critical) — skipped"
+        return 1
+    fi
+}
+tool_install_dufs() {
+    echo "  Installing dufs..."
+    if install_with_deps dufs; then
+        echo -e "  ${GREEN}✓${NC} dufs"
+    else
+        echo -e "  ${YELLOW}[WARN]${NC} dufs installation failed (non-critical) — skipped"
+        return 1
+    fi
+}
+tool_install_android_tools() {
+    echo "  Installing android-tools (adb, fastboot)..."
+    # The repository builds it against a newer libc++ than the one in the app's
+    # bootstrap (adb: cannot locate symbol std::__ndk1::__hash_memory), and the
+    # dependency walk skips libc++ because the bootstrap already has it: refresh it.
+    local _libcxx _lib="$PREFIX/lib/libc++_shared.so" _bak="$TMPDIR/libc++_shared.so.orig" _had=false
+    _libcxx=$(get_deb_filename libc++)
+    if [ -n "$_libcxx" ]; then
+        DEB_SEEN="$DEB_SEEN""libc++ "
+        # Keep the current library: if the replacement does not end up as a usable
+        # file (install_deb ignores copy errors, e.g. a full disk), put it back, so a
+        # failed refresh never leaves the shared C++ runtime missing or truncated.
+        if [ -f "$_lib" ] && cp -p "$_lib" "$_bak" 2>/dev/null; then _had=true; fi
+        if ! install_deb "$_libcxx" || [ ! -s "$_lib" ] || [ "$(head -c 4 "$_lib" 2>/dev/null | od -An -c | tr -d ' ')" != '177ELF' ]; then
+            [ "$_had" = true ] && cp -p --remove-destination "$_bak" "$_lib" 2>/dev/null
+            rm -f "$_bak"
+            echo -e "  ${YELLOW}[WARN]${NC} android-tools installation failed (non-critical) — skipped"
+            return 1
+        fi
+        rm -f "$_bak"
+    fi
+    if install_with_deps android-tools; then
+        echo -e "  ${GREEN}✓${NC} android-tools"
+    else
+        echo -e "  ${YELLOW}[WARN]${NC} android-tools installation failed (non-critical) — skipped"
+        return 1
+    fi
+}
+tool_install_code_server() {
+    # Only the old tool-selections.conf can reach this. The npm install of code-server
+    # fails everywhere (its postinstall runs a nested npm install that breaks), so it is
+    # not tried: the standalone release is installed by `oa --install` (Termux terminal).
+    echo -e "  ${YELLOW}[WARN]${NC} code-server cannot be installed here yet — run 'oa --install' in the terminal to install it"
+    return 1
+}
+tool_install_playwright() {
+    local rc=0 bin CHROMIUM_BIN=""
+    echo "  Installing Playwright (playwright-core)..."
+    if ! npm install -g playwright-core 2>&1; then
+        echo -e "  ${YELLOW}[WARN]${NC} playwright-core installation failed (non-critical)"
+        rc=1
+    fi
+    # Set Playwright environment variables if Chromium is available
+    for bin in "$PREFIX/bin/chromium-browser" "$PREFIX/bin/chromium"; do
+        [ -x "$bin" ] && CHROMIUM_BIN="$bin" && break
+    done
+    if [ -n "$CHROMIUM_BIN" ]; then
+        local PW_MARKER_START="# >>> Playwright >>>"
+        local PW_MARKER_END="# <<< Playwright <<<"
+        # --tools-only never edits ~/.bashrc
+        if [ "$OA_MODE" = full ] && ! grep -qF "$PW_MARKER_START" "$HOME/.bashrc" 2>/dev/null; then
+            cat >> "$HOME/.bashrc" << PWENV
+
+${PW_MARKER_START}
+export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="$CHROMIUM_BIN"
+export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+${PW_MARKER_END}
+PWENV
+        fi
+        echo -e "  ${GREEN}✓${NC} Playwright (env: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROMIUM_BIN)"
+    else
+        echo -e "  ${GREEN}✓${NC} Playwright (install Chromium later via 'oa --install' for full setup)"
+    fi
+    return $rc
+}
+tool_install_claude_code() {
+    echo "  Installing Claude Code..."
+    if npm install -g @anthropic-ai/claude-code 2>&1; then
+        # The native build is a glibc binary: Android has no /lib/ld-linux-aarch64.so.1,
+        # so run it through the glibc loader of this setup (LD_PRELOAD, i.e. termux-exec, must
+        # not be inherited by the glibc process).
+        local _cc_exe _cc_ld="$PREFIX/glibc/lib/ld-linux-aarch64.so.1"
+        _cc_exe="$(npm root -g)/@anthropic-ai/claude-code/bin/claude.exe"
+        if ! timeout 30 claude --version >/dev/null 2>&1 && [ -f "$_cc_exe" ] && [ -x "$_cc_ld" ]; then
+            printf '#!%s/bin/bash\nexec env -u LD_PRELOAD "%s" --library-path "%s" "%s" "$@"\n' \
+                "$PREFIX" "$_cc_ld" "$PREFIX/glibc/lib" "$_cc_exe" > "$PREFIX/bin/claude.tmp" \
+                && chmod +x "$PREFIX/bin/claude.tmp" && mv -f "$PREFIX/bin/claude.tmp" "$PREFIX/bin/claude"
+        fi
+        if timeout 30 claude --version >/dev/null 2>&1; then
+            echo -e "  ${GREEN}✓${NC} Claude Code"
+        else
+            echo -e "  ${YELLOW}[WARN]${NC} Claude Code installed, but its native binary does not run on this setup yet (support is planned)"
+            # installed, but not usable: --tools-only reports this as "verify" (tool_verify decides)
+            return 0
+        fi
+    else
+        echo -e "  ${YELLOW}[WARN]${NC} Claude Code installation failed (non-critical) — skipped"
+        return 1
+    fi
+}
+tool_install_gemini_cli() {
+    echo "  Installing Gemini CLI..."
+    if npm install -g @google/gemini-cli 2>&1; then
+        echo -e "  ${GREEN}✓${NC} Gemini CLI"
+    else
+        echo -e "  ${YELLOW}[WARN]${NC} Gemini CLI installation failed (non-critical) — skipped"
+        return 1
+    fi
+}
+tool_install_codex_cli() {
+    echo "  Installing Codex CLI (Termux)..."
+    # The package declares os=android, but this setup's glibc Node reports "linux", so
+    # npm refuses it (EBADPLATFORM). The binary inside is a bionic build for this
+    # prefix: retry with --force for this one package only.
+    local _codex_out _codex_ok=false
+    if _codex_out=$(npm install -g @mmmbuto/codex-cli-termux 2>&1); then
+        printf '%s\n' "$_codex_out"
+        _codex_ok=true
+    elif printf '%s' "$_codex_out" | grep -q EBADPLATFORM; then
+        npm install -g --force @mmmbuto/codex-cli-termux 2>&1 && _codex_ok=true
+    else
+        printf '%s\n' "$_codex_out"
+    fi
+    if [ "$_codex_ok" = true ]; then
+        # Create codex CLI wrapper (DioNanos fork launcher fix)
+        local _codex_bin="$PREFIX/bin/codex"
+        local _codex_pkg="$PREFIX/lib/node_modules/@mmmbuto/codex-cli-termux/bin"
+        if [ -f "$_codex_pkg/codex.bin" ]; then
+            [ -L "$_codex_bin" ] && rm -f "$_codex_bin"
+            printf '#!%s/bin/bash\nPKG_BIN="%s"\nexport LD_LIBRARY_PATH="$PKG_BIN:${LD_LIBRARY_PATH:-}"\nexec "$PKG_BIN/codex.bin" "$@"\n' \
+                "$PREFIX" "$_codex_pkg" > "$_codex_bin"
+            chmod +x "$_codex_bin"
+        fi
+        echo -e "  ${GREEN}✓${NC} Codex CLI (Termux)"
+    else
+        echo -e "  ${YELLOW}[WARN]${NC} Codex CLI (Termux) installation failed (non-critical) — skipped"
+        echo "         The package targets Termux's Android Node.js; support for this setup is planned."
+        return 1
+    fi
+}
+
+# Fix shebangs in npm global CLIs (kept in sync with scripts/lib.sh fix_npm_global_shebangs())
+fix_npm_shebangs() {
+    local _js
+    for _js in "$PREFIX/lib/node_modules"/*/bin/*.js \
+               "$PREFIX/lib/node_modules"/@*/*/bin/*.js; do
+        [ -f "$_js" ] || continue
+        head -1 "$_js" | grep -q '^#!/usr/bin/env node$' || continue
+        sed -i "1s|#!/usr/bin/env node|#!$BIN_DIR/node|" "$_js"
+    done
+}
+
+# ─── --tools-only: the app's tools screen installs tools through the same code ───
+# Usage: post-setup.sh --tools-only <tool>...   (ids: see OA_TOOL_IDS)
+# Output: progress lines, then one "TOOL_RESULT <id> ok" or "TOOL_RESULT <id> fail <reason>"
+# per tool. Result file (the source of truth for the app; an older bundled copy of this
+# script does not know this mode): $OCA_DIR/tools-result.conf, KEY=VALUE lines, never
+# executed — schema, run (start time), <id>=ok|failed:<reason>, error=<reason> when the run
+# could not start or finish, exit=<code>. "ok" means the tool ran (<tool> --version), not
+# just that its files were unpacked. Exit code: 0 all ok, 1 some failed, 2 usage / package
+# list could not be verified / another run is active. Asks no questions.
+OA_TOOLS_RESULTS=""
+OA_TOOLS_RUN=""
+OA_TOOLS_LOCK_OWNED=false
+OA_TOOLS_SIGNAL_CODE=""
+OA_TOOLS_CURRENT=""      # id being installed (its leftover links are cleaned if the run is interrupted)
+
+# An interrupted or failed `npm install -g` can leave the tool's bin link behind with
+# no package behind it. Remove such a link, and only such a link: it must be one of the
+# tool's own bin names, a symlink, broken, and point into the tool's own package folder.
+# A regular file, a working link or another tool's link is never touched.
+clean_broken_npm_links() {
+    local entries e bin pkg link target
+    case "$1" in
+        code-server) entries="code-server|code-server" ;;
+        playwright) entries="playwright-core|playwright-core" ;;
+        claude-code) entries="claude|@anthropic-ai/claude-code" ;;
+        gemini-cli) entries="gemini|@google/gemini-cli" ;;
+        codex-cli) entries="codex|@mmmbuto/codex-cli-termux codex-exec|@mmmbuto/codex-cli-termux" ;;
+        *) return 0 ;;
+    esac
+    for e in $entries; do
+        bin=${e%%|*}
+        pkg=${e#*|}
+        link="$PREFIX/bin/$bin"
+        { [ -L "$link" ] && [ ! -e "$link" ]; } || continue
+        target=$(readlink "$link" 2>/dev/null) || continue
+        case "$target" in
+            */node_modules/"$pkg"/*)
+                rm -f "$link" 2>/dev/null && echo "  Removed a leftover link from an interrupted install: $link" ;;
+        esac
+    done
+    return 0
+}
+
+tool_install() {
+    local rc=0
+    clean_broken_npm_links "$1"      # leftovers of an earlier interrupted run
+    case "$1" in
+        tmux) tool_install_tmux || rc=$? ;;
+        ttyd) tool_install_ttyd || rc=$? ;;
+        dufs) tool_install_dufs || rc=$? ;;
+        android-tools) tool_install_android_tools || rc=$? ;;
+        playwright) tool_install_playwright || rc=$? ;;
+        claude-code) tool_install_claude_code || rc=$? ;;
+        gemini-cli) tool_install_gemini_cli || rc=$? ;;
+        codex-cli) tool_install_codex_cli || rc=$? ;;
+        *) return 1 ;;
+    esac
+    [ "$rc" -eq 0 ] || clean_broken_npm_links "$1"
+    return "$rc"
+}
+
+# 0 when the tool runs (or, for playwright-core, is installed as a library)
+tool_verify() {
+    case "$1" in
+        tmux) timeout 10 tmux -V ;;
+        ttyd) timeout 10 ttyd --version ;;
+        dufs) timeout 10 dufs --version ;;
+        android-tools) timeout 10 adb version ;;
+        code-server) timeout 60 code-server --version ;;
+        playwright) [ -f "$(npm root -g)/playwright-core/package.json" ] ;;
+        claude-code) timeout 30 claude --version ;;
+        gemini-cli) timeout 30 gemini --version ;;
+        codex-cli) timeout 30 codex --version ;;
+        *) return 1 ;;
+    esac >/dev/null 2>&1
+}
+
+# Take $OCA_DIR/.tools.lock (mkdir is atomic); the lock holds the owner's pid. A lock
+# whose owner is gone (SIGKILL cannot be trapped) is stale and is taken over; a lock
+# with no pid (owner died between mkdir and the pid write) is stale after a minute.
+# Takeovers are serialized by a second mkdir lock so two runs cannot both take over.
+# Taking over and releasing both happen under that second lock (the "guard"): while a
+# taker holds it, the owner it is judging cannot release, so the lock it removes is the
+# lock it judged.
+# Returns 1 when another run holds the lock, 2 when the pid cannot be recorded.
+acquire_tools_lock() {
+    local lk="$OCA_DIR/.tools.lock" tk="$OCA_DIR/.tools.lock.takeover" owner="" stale=false rc=1
+    if mkdir "$lk" 2>/dev/null; then
+        if { echo "$$" > "$lk/pid"; } 2>/dev/null; then
+            return 0
+        fi
+        rm -f "$lk/pid" 2>/dev/null || true
+        rmdir "$lk" 2>/dev/null || true
+        return 2
+    fi
+    # a taker that was killed leaves its guard behind: drop it after a minute
+    if [ -d "$tk" ] && [ -n "$(find "$tk" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+        rmdir "$tk" 2>/dev/null || true
+    fi
+    mkdir "$tk" 2>/dev/null || return 1
+    owner=$(cat "$lk/pid" 2>/dev/null) || owner=""
+    if [ -n "$owner" ]; then
+        kill -0 "$owner" 2>/dev/null || stale=true
+    elif [ -d "$lk" ] && [ -n "$(find "$lk" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+        stale=true
+    elif [ -e "$lk" ] && [ ! -d "$lk" ]; then
+        stale=true      # a plain file in the lock's place
+    fi
+    # Only a lock judged stale is removed; a lock that vanished meanwhile is just retaken
+    [ "$stale" = false ] || rm -rf "$lk" 2>/dev/null || true
+    if mkdir "$lk" 2>/dev/null; then
+        if { echo "$$" > "$lk/pid"; } 2>/dev/null; then
+            rc=0
+        else
+            # only our own, still empty lock
+            rm -f "$lk/pid" 2>/dev/null || true
+            rmdir "$lk" 2>/dev/null || true
+            rc=2
+        fi
+    fi
+    rmdir "$tk" 2>/dev/null || true
+    return "$rc"
+}
+
+# Free our lock under the guard (waits about 5.5 s at most). Without the guard nothing is removed: our
+# pid is dead once we exit, so the next call takes the lock over.
+release_tools_lock() {
+    local lk="$OCA_DIR/.tools.lock" tk="$OCA_DIR/.tools.lock.takeover" tries=0 held=""
+    while [ "$tries" -lt 50 ]; do
+        if mkdir "$tk" 2>/dev/null; then
+            held=$(cat "$lk/pid" 2>/dev/null) || held=""
+            if [ "$held" = "$$" ]; then
+                rm -f "$lk/pid" 2>/dev/null || true
+                rmdir "$lk" 2>/dev/null || true
+            fi
+            rmdir "$tk" 2>/dev/null || true
+            return 0
+        fi
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+    return 0
+}
+
+# Runs when --tools-only ends, however it ends: write the result file, free the lock
+tools_finish() {
+    local code=$?
+    trap '' TERM HUP INT    # a second signal must not cut the result file short
+    trap - EXIT
+    [ -z "$OA_TOOLS_SIGNAL_CODE" ] || code=$OA_TOOLS_SIGNAL_CODE
+    if [ "$OA_TOOLS_LOCK_OWNED" = true ]; then
+        local f="$OCA_DIR/tools-result.conf"
+        rm -rf "$f.tmp" 2>/dev/null || true
+        {
+            printf 'schema=1\nrun=%s\n' "$OA_TOOLS_RUN"
+            [ -z "$OA_TOOLS_ERROR" ] || printf 'error=%s\n' "$OA_TOOLS_ERROR"
+            printf '%s' "$OA_TOOLS_RESULTS"
+            printf 'exit=%s\n' "$code"
+        } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
+        [ -z "$OA_TOOLS_CURRENT" ] || clean_broken_npm_links "$OA_TOOLS_CURRENT"
+        cleanup_downloads
+        release_tools_lock
+    fi
+    exit "$code"
+}
+
+run_tools_only() {
+    local id ids=() inst_rc ok_count=0 fail_count=0 index_ready=false npm_ready=false
+    OA_INDEX_FAIL_EXIT=2
+
+    # A signal before the lock exists just ends the run (no result file to write yet)
+    trap 'OA_TOOLS_ERROR=interrupted; OA_TOOLS_SIGNAL_CODE=143; exit 143' TERM
+    trap 'OA_TOOLS_ERROR=interrupted; OA_TOOLS_SIGNAL_CODE=129; exit 129' HUP
+    trap 'OA_TOOLS_ERROR=interrupted; OA_TOOLS_SIGNAL_CODE=130; exit 130' INT
+    # One run at a time; a busy run leaves the other run's result alone
+    local _lock_rc=0
+    acquire_tools_lock || _lock_rc=$?
+    if [ "$_lock_rc" -eq 1 ]; then
+        echo "Another tools run is in progress. Try again when it has finished." >&2
+        exit 2
+    elif [ "$_lock_rc" -ne 0 ]; then
+        echo "Could not create the tools lock in $OCA_DIR (error=lock)." >&2
+        exit 2
+    fi
+    OA_TOOLS_LOCK_OWNED=true
+    trap tools_finish EXIT
+    OA_TOOLS_RUN=$(date +%s)
+    rm -f "$OCA_DIR/tools-result.conf"
+
+    # From here every outcome, including a bad call, leaves a fresh result file
+    if [ "${#OA_TOOL_ARGS[@]}" -eq 0 ]; then
+        echo "Usage: post-setup.sh --tools-only <tool>...   (tools: $OA_TOOL_IDS)" >&2
+        OA_TOOLS_ERROR="usage"
+        exit 2
+    fi
+    for id in "${OA_TOOL_ARGS[@]}"; do
+        local _known=false _k
+        for _k in $OA_TOOL_IDS; do [ "$_k" = "$id" ] && _known=true; done
+        if [ "$_known" = false ]; then
+            echo "Unknown tool: $id (tools: $OA_TOOL_IDS)" >&2; OA_TOOLS_ERROR="usage"; exit 2
+        fi
+        case " ${ids[*]:-} " in *" $id "*) ;; *) ids+=("$id") ;; esac
+    done
+
+    mkdir -p "$DEB_DIR" "$PKG_DIR" || { OA_TOOLS_ERROR="env"; exit 2; }
+    export PATH="$BIN_DIR:$NODE_DIR/bin:$PATH"
+    echo -e "▸ ${YELLOW}Installing tools${NC}: ${ids[*]}"
+    # Verify the package list before any result line when a package tool still has to be
+    # installed, so a failed signature chain ends the run with exit 2 and no TOOL_RESULT
+    for id in "${ids[@]}"; do
+        case "$id" in
+            tmux|ttyd|dufs|android-tools)
+                if [ "$index_ready" = false ] && ! tool_verify "$id"; then
+                    fetch_verified_index
+                    index_ready=true
+                fi
+                ;;
+        esac
+    done
+    for id in "${ids[@]}"; do
+        if tool_verify "$id"; then
+            echo "  $id is already installed and runs"
+            echo "TOOL_RESULT $id ok"
+            OA_TOOLS_RESULTS="${OA_TOOLS_RESULTS}${id}=ok"$'\n'
+            ok_count=$((ok_count + 1))
+            continue
+        fi
+        case "$id" in
+            tmux|ttyd|dufs|android-tools)
+                if [ "$index_ready" = false ]; then
+                    fetch_verified_index
+                    index_ready=true
+                fi
+                ;;
+            *)
+                if [ "$npm_ready" = false ]; then
+                    resolve_npm_registry || true
+                    npm_ready=true
+                fi
+                ;;
+        esac
+        inst_rc=0
+        OA_TOOLS_CURRENT="$id"
+        tool_install "$id" || inst_rc=1
+        OA_TOOLS_CURRENT=""
+        if tool_verify "$id"; then
+            echo "TOOL_RESULT $id ok"
+            OA_TOOLS_RESULTS="${OA_TOOLS_RESULTS}${id}=ok"$'\n'
+            ok_count=$((ok_count + 1))
+        else
+            local reason="verify"
+            [ "$inst_rc" -eq 0 ] || reason="install"
+            echo "TOOL_RESULT $id fail $reason"
+            OA_TOOLS_RESULTS="${OA_TOOLS_RESULTS}${id}=failed:${reason}"$'\n'
+            fail_count=$((fail_count + 1))
+        fi
+    done
+    fix_npm_shebangs || true      # tools mode: a failing sed -i must not change the exit code
+    echo "  Done: $ok_count ok, $fail_count failed"
+    [ "$fail_count" -eq 0 ] || exit 1
+    exit 0
+}
+
+if [ "$OA_MODE" = "tools" ]; then
+    run_tools_only
+fi
+
+# ─── [1/7] Install essential packages ─────────
+echo -e "▸ ${YELLOW}[1/7]${NC} Installing essential packages..."
+mkdir -p "$DEB_DIR" "$PKG_DIR"
+fetch_verified_index
 
 # Packages to install via dpkg-deb (dependency order, only those missing from bootstrap)
 DEB_PACKAGES=(
@@ -881,6 +1409,18 @@ case "\$*" in *codex-cli-termux*)
         [ -L "\$_codex_bin" ] && rm -f "\$_codex_bin"
         printf '#!$PREFIX/bin/bash\nPKG_BIN="%s"\nexport LD_LIBRARY_PATH="\$PKG_BIN:\${LD_LIBRARY_PATH:-}"\nexec "\$PKG_BIN/codex.bin" "\$@"\n' "\$_codex_pkg" > "\$_codex_bin"
         chmod +x "\$_codex_bin"
+    fi
+    ;;
+esac
+# Re-patch Claude Code launcher after global install/update: its native binary is a glibc
+# build that Android cannot exec directly, so run it through the glibc loader
+case "\$*" in *claude-code*)
+    _cc_bin="$PREFIX/bin/claude"
+    _cc_exe="$PREFIX/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+    _cc_ld="$PREFIX/glibc/lib/ld-linux-aarch64.so.1"
+    if [ -L "\$_cc_bin" ] && [ -f "\$_cc_exe" ] && [ -x "\$_cc_ld" ]; then
+        printf '#!$PREFIX/bin/bash\nexec env -u LD_PRELOAD "%s" --library-path "%s" "%s" "\$@"\n' "\$_cc_ld" "$PREFIX/glibc/lib" "\$_cc_exe" > "\$_cc_bin.tmp" \
+            && chmod +x "\$_cc_bin.tmp" && mv -f "\$_cc_bin.tmp" "\$_cc_bin"
     fi
     ;;
 esac
@@ -1044,6 +1584,18 @@ case "\$*" in *codex-cli-termux*)
         [ -L "\$_codex_bin" ] && rm -f "\$_codex_bin"
         printf '#!$PREFIX/bin/bash\nPKG_BIN="%s"\nexport LD_LIBRARY_PATH="\$PKG_BIN:\${LD_LIBRARY_PATH:-}"\nexec "\$PKG_BIN/codex.bin" "\$@"\n' "\$_codex_pkg" > "\$_codex_bin"
         chmod +x "\$_codex_bin"
+    fi
+    ;;
+esac
+# Re-patch Claude Code launcher after global install/update: its native binary is a glibc
+# build that Android cannot exec directly, so run it through the glibc loader
+case "\$*" in *claude-code*)
+    _cc_bin="$PREFIX/bin/claude"
+    _cc_exe="$PREFIX/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+    _cc_ld="$PREFIX/glibc/lib/ld-linux-aarch64.so.1"
+    if [ -L "\$_cc_bin" ] && [ -f "\$_cc_exe" ] && [ -x "\$_cc_ld" ]; then
+        printf '#!$PREFIX/bin/bash\nexec env -u LD_PRELOAD "%s" --library-path "%s" "%s" "\$@"\n' "\$_cc_ld" "$PREFIX/glibc/lib" "\$_cc_exe" > "\$_cc_bin.tmp" \
+            && chmod +x "\$_cc_bin.tmp" && mv -f "\$_cc_bin.tmp" "\$_cc_bin"
     fi
     ;;
 esac
@@ -1582,154 +2134,18 @@ if [ -f "$TOOL_CONF" ]; then
     if $HAS_TOOLS; then
         echo -e "▸ ${YELLOW}[7/7]${NC} Installing optional tools..."
 
-        # Packages handled so far / that failed, space-delimited (guard against cycles
-        # and repeats; a package that failed stays failed for every later dependent)
-        DEB_SEEN=" "
-        DEB_FAILED=" "
+        # Termux packages, then npm packages (the installers are defined above; a
+        # failed tool is a warning, never fatal)
+        [ "${INSTALL_TMUX:-false}" = "true" ] && { tool_install_tmux || true; }
+        [ "${INSTALL_TTYD:-false}" = "true" ] && { tool_install_ttyd || true; }
+        [ "${INSTALL_DUFS:-false}" = "true" ] && { tool_install_dufs || true; }
+        [ "${INSTALL_CODE_SERVER:-false}" = "true" ] && { tool_install_code_server || true; }
+        [ "${INSTALL_PLAYWRIGHT:-false}" = "true" ] && { tool_install_playwright || true; }
+        [ "${INSTALL_CLAUDE_CODE:-false}" = "true" ] && { tool_install_claude_code || true; }
+        [ "${INSTALL_GEMINI_CLI:-false}" = "true" ] && { tool_install_gemini_cli || true; }
+        [ "${INSTALL_CODEX_CLI:-false}" = "true" ] && { tool_install_codex_cli || true; }
 
-        # Helper: install a .deb after all of its dependencies, recursively.
-        # Packages already listed as installed in the bootstrap's dpkg status are
-        # neither extracted nor followed: the tool runs against the bootstrap's copies
-        # of them, and the closure does not grow into base packages.
-        # Fails if the package or any dependency could not be installed.
-        install_with_deps() {
-            local pkg="$1"
-            case "$DEB_FAILED" in *" $pkg "*) return 1 ;; esac
-            case "$DEB_SEEN" in *" $pkg "*) return 0 ;; esac
-            DEB_SEEN="$DEB_SEEN$pkg "
-
-            local filename
-            filename=$(get_deb_filename "$pkg")
-            if [ -z "$filename" ]; then
-                DEB_FAILED="$DEB_FAILED$pkg "
-                return 1
-            fi
-
-            local deps dep rc=0
-            deps=$(get_deb_depends "$pkg")
-            while IFS= read -r dep; do
-                [ -z "$dep" ] && continue
-                dpkg_has "$dep" && continue
-                # Not in the index = virtual package: nothing to install
-                [ -n "$(get_deb_filename "$dep")" ] || continue
-                if ! install_with_deps "$dep"; then
-                    echo -e "    ${YELLOW}[WARN]${NC} dependency $dep of $pkg could not be installed"
-                    rc=1
-                fi
-            done <<< "$deps"
-
-            install_deb "$filename" || rc=1
-            [ "$rc" -eq 0 ] || DEB_FAILED="$DEB_FAILED$pkg "
-            return $rc
-        }
-
-        # Termux packages
-        [ "${INSTALL_TMUX:-false}" = "true" ] && {
-            echo "  Installing tmux..."
-            if install_with_deps tmux; then
-                echo -e "  ${GREEN}✓${NC} tmux"
-            else
-                echo -e "  ${YELLOW}[WARN]${NC} tmux installation failed (non-critical) — skipped"
-            fi
-        }
-        [ "${INSTALL_TTYD:-false}" = "true" ] && {
-            echo "  Installing ttyd..."
-            if install_with_deps ttyd; then
-                echo -e "  ${GREEN}✓${NC} ttyd"
-            else
-                echo -e "  ${YELLOW}[WARN]${NC} ttyd installation failed (non-critical) — skipped"
-            fi
-        }
-        [ "${INSTALL_DUFS:-false}" = "true" ] && {
-            echo "  Installing dufs..."
-            if install_with_deps dufs; then
-                echo -e "  ${GREEN}✓${NC} dufs"
-            else
-                echo -e "  ${YELLOW}[WARN]${NC} dufs installation failed (non-critical) — skipped"
-            fi
-        }
-
-        # npm packages
-        [ "${INSTALL_CODE_SERVER:-false}" = "true" ] && {
-            echo "  Installing code-server (this may take a while)..."
-            # Pinned: 4.133.0+ require Node.js 24. Same version as scripts/install-code-server.sh.
-            if npm install -g code-server@4.117.0 2>&1; then
-                echo -e "  ${GREEN}✓${NC} code-server 4.117.0"
-            else
-                echo -e "  ${YELLOW}[WARN]${NC} code-server installation failed (non-critical) — skipped"
-            fi
-        }
-        [ "${INSTALL_PLAYWRIGHT:-false}" = "true" ] && {
-            echo "  Installing Playwright (playwright-core)..."
-            npm install -g playwright-core 2>&1 || echo -e "  ${YELLOW}[WARN]${NC} playwright-core installation failed (non-critical)"
-            # Set Playwright environment variables if Chromium is available
-            CHROMIUM_BIN=""
-            for bin in "$PREFIX/bin/chromium-browser" "$PREFIX/bin/chromium"; do
-                [ -x "$bin" ] && CHROMIUM_BIN="$bin" && break
-            done
-            if [ -n "$CHROMIUM_BIN" ]; then
-                PW_MARKER_START="# >>> Playwright >>>"
-                PW_MARKER_END="# <<< Playwright <<<"
-                if ! grep -qF "$PW_MARKER_START" "$HOME/.bashrc"; then
-                    cat >> "$HOME/.bashrc" << PWENV
-
-${PW_MARKER_START}
-export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="$CHROMIUM_BIN"
-export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-${PW_MARKER_END}
-PWENV
-                fi
-                echo -e "  ${GREEN}✓${NC} Playwright (env: PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$CHROMIUM_BIN)"
-            else
-                echo -e "  ${GREEN}✓${NC} Playwright (install Chromium later via 'oa --install' for full setup)"
-            fi
-        }
-        [ "${INSTALL_CLAUDE_CODE:-false}" = "true" ] && {
-            echo "  Installing Claude Code..."
-            if npm install -g @anthropic-ai/claude-code 2>&1; then
-                if timeout 30 claude --version >/dev/null 2>&1; then
-                    echo -e "  ${GREEN}✓${NC} Claude Code"
-                else
-                    echo -e "  ${YELLOW}[WARN]${NC} Claude Code installed, but its native binary does not run on this setup yet (support is planned)"
-                fi
-            else
-                echo -e "  ${YELLOW}[WARN]${NC} Claude Code installation failed (non-critical) — skipped"
-            fi
-        }
-        [ "${INSTALL_GEMINI_CLI:-false}" = "true" ] && {
-            echo "  Installing Gemini CLI..."
-            if npm install -g @google/gemini-cli 2>&1; then
-                echo -e "  ${GREEN}✓${NC} Gemini CLI"
-            else
-                echo -e "  ${YELLOW}[WARN]${NC} Gemini CLI installation failed (non-critical) — skipped"
-            fi
-        }
-        [ "${INSTALL_CODEX_CLI:-false}" = "true" ] && {
-            echo "  Installing Codex CLI (Termux)..."
-            if npm install -g @mmmbuto/codex-cli-termux 2>&1; then
-                # Create codex CLI wrapper (DioNanos fork launcher fix)
-                _codex_bin="$PREFIX/bin/codex"
-                _codex_pkg="$PREFIX/lib/node_modules/@mmmbuto/codex-cli-termux/bin"
-                if [ -f "$_codex_pkg/codex.bin" ]; then
-                    [ -L "$_codex_bin" ] && rm -f "$_codex_bin"
-                    printf '#!%s/bin/bash\nPKG_BIN="%s"\nexport LD_LIBRARY_PATH="$PKG_BIN:${LD_LIBRARY_PATH:-}"\nexec "$PKG_BIN/codex.bin" "$@"\n' \
-                        "$PREFIX" "$_codex_pkg" > "$_codex_bin"
-                    chmod +x "$_codex_bin"
-                fi
-                echo -e "  ${GREEN}✓${NC} Codex CLI (Termux)"
-            else
-                echo -e "  ${YELLOW}[WARN]${NC} Codex CLI (Termux) installation failed (non-critical) — skipped"
-                echo "         The package targets Termux's Android Node.js; support for this setup is planned."
-            fi
-        }
-
-        # Fix shebangs in npm global CLIs (kept in sync with scripts/lib.sh fix_npm_global_shebangs())
-        for _js in "$PREFIX/lib/node_modules"/*/bin/*.js \
-                   "$PREFIX/lib/node_modules"/@*/*/bin/*.js; do
-            [ -f "$_js" ] || continue
-            head -1 "$_js" | grep -q '^#!/usr/bin/env node$' || continue
-            sed -i "1s|#!/usr/bin/env node|#!$BIN_DIR/node|" "$_js"
-        done
+        fix_npm_shebangs
     else
         echo -e "▸ ${YELLOW}[7/7]${NC} No optional tools selected"
     fi
@@ -1738,7 +2154,7 @@ else
 fi
 
 # ─── Cleanup ────────────────────────────────
-rm -rf "$DEB_DIR" "$PKG_DIR" "$PACKAGES_FILE" "$OA_INRELEASE" "$OA_RELEASE_VERIFIED" "$TMPDIR/gpkg.db" "$TMPDIR/gpkg.db.sig" "$TMPDIR/gnupg" 2>/dev/null || true
+cleanup_downloads
 
 # ─── Done ────────────────────────────────────
 touch "$MARKER"

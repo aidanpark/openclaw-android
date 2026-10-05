@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [App v0.4.3 / Script v1.1.4] - 2026-10-05
+
+### Added
+
+- App: **Settings → Additional Tools** is back. tmux, ttyd, dufs, Android Tools, Playwright, Claude Code, Gemini CLI and Codex CLI can be installed from the app without the terminal. Installs run through the setup script (`post-setup.sh --tools-only`) instead of commands the app builds itself: tmux, ttyd, dufs and Android Tools are checked against the signed Termux package list, and the npm-based tools come from the npm registry as before. An install counts as successful only when the script records it as successful and the tool's files are present. A tool whose last install failed, or whose startup check (`--version`) fails, is shown as "installed but not working" with a Reinstall button, also after the app is restarted. Claude Code and Codex CLI are marked experimental. Installing can be cancelled; the current step finishes first.
+- App: code-server, OpenCode, the SSH server and Chromium cannot be installed from the app yet, and their cards say so. code-server can be installed from the app's terminal with `oa --install`.
+- `post-setup.sh --tools-only <id>…` installs selected optional tools on an existing installation and writes a result file (used by the app). Only one run at a time; `--list` prints the supported tools.
+
+### Fixed
+
+- App: if the screen is recreated during setup (for example after changing the font size), the setup screen continues showing the running install, or the failure with its Retry button, instead of starting over at 0%.
+- Claw app: Android Tools now runs `adb` (it failed with a missing `libc++` symbol); a newer, signature-checked `libc++` is installed with it, and the original is put back if that fails.
+- Claw app: Claude Code now runs (its native binary is started through the glibc loader), and Codex CLI installs (its package is marked for Android while this Node.js reports Linux). After `npm install -g` reinstalls Claude Code, the npm wrapper restores the launcher; installs made before this release get the new wrapper with `oa --update`.
+- When a dependency of an optional tool fails to install, the tool itself is no longer extracted half-working.
+- Tools screen: after a cancelled or failed npm tool install, a dangling command link left by npm is removed (only a broken link that points into that tool's own package).
+- `oa --backup` and `oa --restore` find Node.js through the OpenClaw on Android wrapper, so they work in a non-interactive shell.
+
+### Changed
+
+- `oa --restore` stops without changing anything if it cannot first save a safety backup of the current data (including when the backup folder cannot be created). `oa --restore --force-no-safety` restores anyway.
+- App: code-server is no longer offered in the setup wizard; it is installed from the terminal with `oa --install`. An older tool selection that still asks for code-server shows a one-line notice instead of a long failing npm install.
+- App: the app no longer builds its own `apt-get`/`npm`/`curl` install commands for tools. New installs no longer get the unauthenticated-repository options or the https→http downgrade in the app's apt configuration, and existing installs have the two unauthenticated-repository options removed (an existing `sources.list` keeps its current address).
+
 ## [App v0.4.2 / Script v1.1.3] - 2026-10-04
 
 ### Security

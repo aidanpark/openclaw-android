@@ -9,7 +9,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.1.3"
+OA_VERSION="1.1.4"
 
 echo ""
 echo -e "${BOLD}========================================${NC}"
@@ -335,7 +335,13 @@ update_ai_tool() {
     elif [ -n "$latest_ver" ]; then
         echo "Updating $label... ($current_ver -> $latest_ver)"
         echo "  (This may take a few minutes depending on network speed)"
-        if npm install -g "$pkg@latest" --no-fund --no-audit --ignore-scripts; then
+        # --ignore-scripts keeps native builds (keytar, node-pty) from failing the update,
+        # but Claude Code's launcher is a placeholder that its postinstall replaces with
+        # the native binary: without the script the update leaves `claude` broken.
+        local scripts_flag="--ignore-scripts"
+        [ "$pkg" = "@anthropic-ai/claude-code" ] && scripts_flag=""
+        # shellcheck disable=SC2086
+        if npm install -g "$pkg@latest" --no-fund --no-audit $scripts_flag; then
             echo -e "${GREEN}[OK]${NC}   $label $latest_ver updated"
         else
             echo -e "${YELLOW}[WARN]${NC} $label update failed (non-critical)"

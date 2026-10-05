@@ -174,7 +174,7 @@ class BridgeGuardTest {
                     .findAll(tsx.readText())
                     .map { it.groupValues[1] }
                     .toList()
-            assertEquals(11, ids.size, ids.toString())
+            assertEquals(12, ids.size, ids.toString())
             assertEquals(ids.toSet(), BridgeGuard.toolIds)
         }
 
@@ -209,12 +209,6 @@ class BridgeGuardTest {
         @Test
         fun `toolIds are plain tokens`() {
             BridgeGuard.toolIds.forEach { assertTrue(safeToken.matches(it), it) }
-        }
-
-        @Test
-        fun `every npm tool binary belongs to a known tool and is a plain name`() {
-            assertTrue(BridgeGuard.toolIds.containsAll(BridgeGuard.npmToolBinaries.keys))
-            BridgeGuard.npmToolBinaries.values.forEach { assertTrue(safeToken.matches(it), it) }
         }
 
         @Test

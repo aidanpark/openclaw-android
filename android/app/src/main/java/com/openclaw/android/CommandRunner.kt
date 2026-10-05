@@ -11,6 +11,9 @@ import java.util.concurrent.TimeUnit
  * Uses Termux bootstrap environment for all commands.
  */
 object CommandRunner {
+    /** Start of the `stderr` of a result that ended because the time limit passed. */
+    const val TIMEOUT_PREFIX = "Command timed out after "
+
     data class CommandResult(
         val exitCode: Int,
         val stdout: String,
@@ -90,6 +93,34 @@ object CommandRunner {
         }
     }
 
+    /**
+     * Run a fixed executable to completion with no time limit (a tool install takes minutes) and
+     * return its exit code. [holder] receives the live process so a cancel can reach it. Arguments
+     * are positional — no shell parsing. If the coroutine ends first, the child is not left running.
+     */
+    suspend fun streamLong(
+        command: List<String>,
+        env: Map<String, String>,
+        workDir: File,
+        holder: java.util.concurrent.atomic.AtomicReference<Process?>,
+        onOutput: (String) -> Unit,
+    ): Int =
+        withContext(Dispatchers.IO) {
+            val process = executableBuilder(command.first(), command.drop(1), env, workDir, mergeErrors = true).start()
+            closeStdin(process)
+            holder.set(process)
+            try {
+                try {
+                    process.inputStream.bufferedReader().forEachLine { line -> onOutput(line) }
+                } catch (_: java.io.IOException) {
+                    // The stream broke while the child may still run: wait for its real end below
+                }
+                process.waitFor()
+            } finally {
+                if (process.isAlive) process.destroyForcibly()
+            }
+        }
+
     private fun shellBuilder(
         command: String,
         env: Map<String, String>,
@@ -155,7 +186,7 @@ object CommandRunner {
             process.destroyForcibly()
             outReader.join(READER_JOIN_MS)
             errReader.join(READER_JOIN_MS)
-            return CommandResult(-1, stdout.toString(), "Command timed out after ${timeoutMs}ms")
+            return CommandResult(-1, stdout.toString(), "$TIMEOUT_PREFIX${timeoutMs}ms")
         }
         // A grandchild can keep a pipe open after the child exits — never wait on it unbounded
         outReader.join(READER_JOIN_MS)

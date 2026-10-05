@@ -11,6 +11,7 @@ import { SettingsStorage } from './screens/SettingsStorage'
 import { SettingsAbout } from './screens/SettingsAbout'
 import { SettingsUpdates } from './screens/SettingsUpdates'
 import { SettingsPlatforms } from './screens/SettingsPlatforms'
+import { SettingsTools } from './screens/SettingsTools'
 
 type Tab = 'terminal' | 'dashboard' | 'settings'
 
@@ -25,7 +26,12 @@ export function App() {
     const status = bridge.callJson<{ bootstrapInstalled?: boolean; platformInstalled?: string }>(
       'getSetupStatus'
     )
-    if (status) {
+    const setupState = bridge.callJson<{ running?: boolean }>('getSetupState')
+    if (status && setupState?.running) {
+      // Existing pattern: one-shot read of native state on mount
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSetupDone(false)
+    } else if (status) {
       setSetupDone(!!status.bootstrapInstalled && !!status.platformInstalled)
     } else {
       // Bridge not available (dev mode) — assume setup done
@@ -41,6 +47,14 @@ export function App() {
     setHasUpdates(true)
   }, [])
   useNativeEvent('update_available', onUpdateAvailable)
+
+  // An install is running (the page was recreated mid-install, or it started elsewhere): show it,
+  // whichever tab this page happens to open on
+  const onSetupProgress = useCallback((data: unknown) => {
+    const d = data as { progress?: number; error?: string; errorKind?: string }
+    if (d.error === undefined && !d.errorKind && d.progress !== undefined && d.progress < 1) setSetupDone(false)
+  }, [])
+  useNativeEvent('setup_progress', onSetupProgress)
 
   // Determine active tab from path
   const activeTab: Tab = path.startsWith('/settings')
@@ -108,6 +122,7 @@ function SettingsRouter() {
   const { path } = useRoute()
   if (path === '/settings') return <Settings />
   if (path === '/settings/keep-alive') return <SettingsKeepAlive />
+  if (path === '/settings/tools') return <SettingsTools />
   if (path === '/settings/storage') return <SettingsStorage />
   if (path === '/settings/about') return <SettingsAbout />
   if (path === '/settings/updates') return <SettingsUpdates />

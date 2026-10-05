@@ -338,6 +338,18 @@ case "$*" in *codex-cli-termux*)
     fi
     ;;
 esac
+# Re-patch Claude Code launcher after global install/update: its native binary is a glibc
+# build that Android cannot exec directly, so run it through the glibc loader
+case "$*" in *claude-code*)
+    _cc_bin="__PREFIX__/bin/claude"
+    _cc_exe="__PREFIX__/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+    _cc_ld="__PREFIX__/glibc/lib/ld-linux-aarch64.so.1"
+    if [ -L "$_cc_bin" ] && [ -f "$_cc_exe" ] && [ -x "$_cc_ld" ]; then
+        printf '#!__PREFIX__/bin/bash\nexec env -u LD_PRELOAD "%s" --library-path "%s" "%s" "$@"\n' "$_cc_ld" "__PREFIX__/glibc/lib" "$_cc_exe" > "$_cc_bin.tmp" \
+            && chmod +x "$_cc_bin.tmp" && mv -f "$_cc_bin.tmp" "$_cc_bin"
+    fi
+    ;;
+esac
 # Fix shebangs in npm global CLI entry points after global install
 case "$*" in *-g*|*--global*)
     for _js in __PREFIX__/lib/node_modules/*/bin/*.js \

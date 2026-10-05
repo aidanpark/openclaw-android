@@ -62,6 +62,7 @@
 
 - 원탭 설치: 앱 안에서 부트스트랩, Node.js, OpenClaw 자동 설치
 - 내장 대시보드: 게이트웨이 제어, 런타임 정보, 도구 관리
+- 도구 설치: 설정 → 추가 도구(Settings → Additional Tools) 화면에서 tmux, ttyd, dufs, Android Tools, Playwright, Claude Code, Gemini CLI, Codex CLI를 설치 스크립트(`post-setup.sh --tools-only`)로 설치합니다. tmux, ttyd, dufs, Android Tools는 서명된 Termux 패키지 목록으로 검증합니다. 설치에 실패했거나 `--version` 확인이 실패한 도구는 「동작하지 않음」과 다시 설치 버튼으로 표시합니다. code-server, OpenCode, SSH 서버, Chromium은 아직 앱에서 설치할 수 없으며, code-server는 앱 터미널에서 `oa --install` 로 설치할 수 있습니다
 - Termux와 독립 실행 — 앱 설치가 기존 Termux + `oa` 환경에 영향을 주지 않음
 
 [Releases](https://github.com/AidanPark/openclaw-android/releases) 페이지에서 APK를 다운로드하세요.
@@ -197,7 +198,7 @@ node -p "require(process.env.HOME + '/.openclaw/openclaw.json').gateway.auth.tok
 | `oa --install` | 선택적 도구 설치 (tmux, code-server, AI CLI 등) |
 | `oa --uninstall` | OpenClaw on Android 제거 |
 | `oa --backup` | OpenClaw 데이터 전체 백업 생성 |
-| `oa --restore` | 백업에서 복구 |
+| `oa --restore` | 백업에서 복구 (`--force-no-safety`: 안전 백업을 저장하지 못해도 진행) |
 | `oa --status` | 설치 상태 및 모든 설치된 컴포넌트 정보 표시 |
 | `oa --version` | 버전 표시 |
 | `oa --help` | 사용 가능한 옵션 표시 |
@@ -245,7 +246,7 @@ oa --backup
 ```bash
 oa --restore
 ```
-이 명령어를 실행하면 기본 백업 폴더에 있는 사용 가능한 백업 목록이 표시됩니다. 복구하려는 백업의 번호를 선택하면 됩니다. 도구가 백업 매니페스트에서 플랫폼을 자동으로 감지하여 이 기기의 `~/.openclaw/` 경로로 복구합니다(다른 기기에서 만든 백업도 복구할 수 있습니다). 먼저 OpenClaw 게이트웨이를 중지하세요. 게이트웨이가 실행 중이면 복구를 거부합니다. 덮어쓰기 전에 현재 데이터를 `~/.openclaw-android/backup/pre-restore/`에 안전 백업으로 저장합니다. 백업 이후에 만든 파일은 그대로 남습니다. 실행 전 확인 절차가 진행됩니다.
+이 명령어를 실행하면 기본 백업 폴더에 있는 사용 가능한 백업 목록이 표시됩니다. 복구하려는 백업의 번호를 선택하면 됩니다. 도구가 백업 매니페스트에서 플랫폼을 자동으로 감지하여 이 기기의 `~/.openclaw/` 경로로 복구합니다(다른 기기에서 만든 백업도 복구할 수 있습니다). 먼저 OpenClaw 게이트웨이를 중지하세요. 게이트웨이가 실행 중이면 복구를 거부합니다. 덮어쓰기 전에 현재 데이터를 `~/.openclaw-android/backup/pre-restore/`에 안전 백업으로 저장합니다. 백업 이후에 만든 파일은 그대로 남습니다. 실행 전 확인 절차가 진행됩니다. 안전 백업을 저장하지 못하면(예: 저장 공간 부족) 아무것도 바꾸지 않고 복구를 중단합니다. 공간을 확보한 뒤 다시 시도하거나, 안전 백업 없이 복구하려면 `oa --restore --force-no-safety`를 실행하세요.
 
 ## 문제 해결
 
@@ -324,7 +325,7 @@ OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통
 | [OpenCode](https://opencode.ai/) | AI 코딩 어시스턴트 (TUI). [Bun](https://bun.sh/)과 [proot](https://proot-me.github.io/)을 의존성으로 자동 설치 | `bun install -g` |
 | [Chromium](https://www.chromium.org/) | OpenClaw 브라우저 자동화 (~400MB) | 전용 설치 스크립트 |
 | [Playwright](https://playwright.dev/) | 브라우저 자동화 라이브러리 (Chromium 필요). `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 자동 설정 | 전용 설치 스크립트 |
-| [Claude Code](https://github.com/anthropics/claude-code) (Anthropic) | AI CLI 도구 (설치는 되지만 이 환경에서 네이티브 바이너리가 아직 실행되지 않을 수 있음 — 지원 예정) | `npm install -g` |
+| [Claude Code](https://github.com/anthropics/claude-code) (Anthropic) | AI CLI 도구 — 네이티브 바이너리는 번들된 glibc 로더를 통해 실행되며, `npm install -g` 로 업데이트된 뒤에는 npm 래퍼가 그 런처를 복원함 (Claw 앱에서 확인) | `npm install -g` |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) (Google) | AI CLI 도구 | `npm install -g` |
 | [Codex CLI](https://github.com/DioNanos/codex-termux) (OpenAI Codex의 Termux 포크) | AI CLI 도구 | `npm install -g` |
 
@@ -517,7 +518,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - **OpenCode**: AI 코딩 어시스턴트. proot + ld.so 결합 방식으로 Bun 독립 실행 바이너리 지원
 - **Chromium**: OpenClaw 브라우저 자동화 지원 (~400MB)
 - **Playwright**: 브라우저 자동화 라이브러리 (`playwright-core` npm 설치). `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 및 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` 환경변수 자동 설정. Chromium 미설치 시 자동 설치
-- **AI CLI 도구**: Claude Code, Gemini CLI, Codex CLI (Termux) — `npm install -g`로 설치. 설치 실패 시 경고만 표시하고 건너뛰며 설치 전체를 중단하지 않음 (Claude Code는 설치는 되지만 이 환경에서 아직 실행되지 않을 수 있음 — 지원 예정)
+- **AI CLI 도구**: Claude Code, Gemini CLI, Codex CLI (Termux) — `npm install -g`로 설치. 설치 실패 시 경고만 표시하고 건너뛰며 설치 전체를 중단하지 않음 (Claude Code는 glibc 로더를 통해 실행됩니다. Codex CLI는 패키지가 `os: android` 를 선언하는데 이 Node.js는 `linux` 를 보고하므로 Claw 앱에서는 `--force` 로 설치합니다. Termux에서는 여전히 경고와 함께 건너뛸 수 있습니다)
 
 ### [8/8] 검증 — `tests/verify-install.sh`
 

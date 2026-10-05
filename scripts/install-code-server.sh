@@ -51,8 +51,9 @@ fi
 
 # ── Determine target version ──────────────────
 # Pinned: v4.132.0+ require Node.js 24 (engines "24"). 4.117.0 is the last
-# release published to BOTH GitHub and npm with engines "22" — post-setup.sh
-# (App Install) installs the same version from npm. Keep the two in sync.
+# release published to BOTH GitHub and npm with engines "22". This script is the
+# only place that pins the code-server version: App Install (post-setup.sh) no
+# longer installs code-server, it points to `oa --install` (run in the terminal).
 
 CODE_SERVER_VERSION="4.117.0"
 

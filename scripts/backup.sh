@@ -61,6 +61,33 @@ _ask_yn_default_no() {
     [[ "${reply:-}" =~ ^[Yy]$ ]]
 }
 
+# node: from PATH, else the wrapper the installer puts in ~/.openclaw-android/bin (a shell
+# without the oa PATH, e.g. non-interactive SSH, does not see it). The real binary in
+# node/bin is not tried: it cannot run without the wrapper's glibc loader.
+_oa_find_node() {
+    local c
+    if c=$(command -v node 2>/dev/null) && [ -n "$c" ]; then
+        printf '%s' "$c"
+        return 0
+    fi
+    c="$HOME/.openclaw-android/bin/node"
+    if [ -x "$c" ] && "$c" --version &>/dev/null; then
+        printf '%s' "$c"
+        return 0
+    fi
+    return 1
+}
+# Resolved on first use, not when this file is sourced: oa.sh sources it for every
+# command, and starting node just to look for it would slow all of them down.
+OA_NODE=""
+OA_NODE_RESOLVED=false
+_oa_resolve_node() {
+    if [ "$OA_NODE_RESOLVED" = false ]; then
+        OA_NODE="$(_oa_find_node || true)"
+        OA_NODE_RESOLVED=true
+    fi
+}
+
 # True if GNU tar (needed for --transform / --strip-components / --wildcards).
 _have_gnu_tar() {
     tar --version 2>/dev/null | head -1 | grep -q "GNU tar"
@@ -68,7 +95,7 @@ _have_gnu_tar() {
 
 # True if node can load node:sqlite (SQLite snapshots need it).
 _have_node_sqlite() {
-    command -v node &>/dev/null && node -e 'require("node:sqlite")' &>/dev/null
+    [ -n "$OA_NODE" ] && "$OA_NODE" -e 'require("node:sqlite")' &>/dev/null
 }
 
 # True if the OpenClaw gateway looks like it is running.
@@ -86,8 +113,8 @@ _gateway_running() {
 _backup_runtime_version() {
     local pkg
     pkg="$(npm root -g 2>/dev/null || true)/openclaw/package.json"
-    if [ -f "$pkg" ] && command -v node &>/dev/null; then
-        node -p "require('$pkg').version" 2>/dev/null && return 0
+    if [ -f "$pkg" ] && [ -n "$OA_NODE" ]; then
+        "$OA_NODE" -p "require('$pkg').version" 2>/dev/null && return 0
     fi
     echo "unknown"
 }
@@ -155,7 +182,7 @@ _restore_root_for_platform() {
 # Usage: _restore_rewrite_paths <state dir> <old state dir> <new state dir>
 _restore_rewrite_paths() {
     local root="$1" from="$2" to="$3"
-    if ! command -v node &>/dev/null; then
+    if [ -z "$OA_NODE" ]; then
         echo -e "${YELLOW}[WARN]${NC} node not found — session paths from $from were not updated."
         return 0
     fi
@@ -184,7 +211,7 @@ _restore_rewrite_paths() {
         });'
     local changed
     if ! changed=$({ find "$root/agents" -type f \( -name 'sessions.json' -o -name '*.trajectory-path.json' \) -print0 2>/dev/null || true; } \
-            | node -e "$js" "$from" "$to" 2>/dev/null); then
+            | "$OA_NODE" -e "$js" "$from" "$to" 2>/dev/null); then
         echo -e "${YELLOW}[WARN]${NC} Could not update the session paths from $from — restored sessions may point to the other device."
         return 0
     fi
@@ -204,8 +231,8 @@ _backup_manifest_info() {
     manifest=$(gzip -dc "$archive" 2>/dev/null | tar -xf - --wildcards --no-wildcards-match-slash "*/manifest.json" -O 2>/dev/null | head -c 1048576)
     [ -n "$manifest" ] || return 1
 
-    if command -v node &>/dev/null; then
-        printf '%s' "$manifest" | node -e '
+    if [ -n "$OA_NODE" ]; then
+        printf '%s' "$manifest" | "$OA_NODE" -e '
             let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
                 let m; try { m = JSON.parse(s); } catch (e) { process.exit(1); }
                 const assets = Array.isArray(m.assets) ? m.assets : [];
@@ -270,7 +297,7 @@ _backup_create() (
 
         failed=""
         if [ ${#pairs[@]} -gt 0 ]; then
-            failed=$(NODE_NO_WARNINGS=1 node -e '
+            failed=$(NODE_NO_WARNINGS=1 "$OA_NODE" -e '
                 const { DatabaseSync } = require("node:sqlite");
                 const fs = require("node:fs");
                 const a = process.argv.slice(1);
@@ -335,7 +362,7 @@ _backup_create() (
 
     # ── Manifest ──
     runtime_version="$(_backup_runtime_version)"
-    node_version="$(node --version 2>/dev/null || echo unknown)"
+    node_version="$("$OA_NODE" --version 2>/dev/null || echo unknown)"
     assets_json="    {
       \"kind\": \"state\",
       \"sourcePath\": \"$(_json_escape "$data_dir")\",
@@ -410,6 +437,7 @@ MANIFEST_EOF
 # ── cmd_backup ──────────────────────────────────────────────────────────────
 
 cmd_backup() {
+    _oa_resolve_node
     if ! command -v gzip &>/dev/null; then
         echo "  Installing gzip..."
         pkg install -y gzip 2>/dev/null || { echo -e "${RED}[FAIL]${NC} gzip not found and could not be installed"; exit 1; }
@@ -508,6 +536,17 @@ cmd_backup() {
 # ── cmd_restore ─────────────────────────────────────────────────────────────
 
 cmd_restore() {
+    _oa_resolve_node
+    local force_no_safety=false
+    case "${1:-}" in
+        --force-no-safety) force_no_safety=true ;;
+        "") ;;
+        *)
+            echo -e "${RED}[FAIL]${NC} Unknown option for --restore: $1"
+            echo "       Usage: oa --restore [--force-no-safety]"
+            exit 1
+            ;;
+    esac
     if ! command -v gzip &>/dev/null; then
         echo "  Installing gzip..."
         pkg install -y gzip 2>/dev/null || { echo -e "${RED}[FAIL]${NC} gzip not found and could not be installed"; exit 1; }
@@ -647,19 +686,21 @@ cmd_restore() {
         pre_dir="$BACKUP_DIR/pre-restore"
         pre_root="$(_backup_timestamp)-openclaw-backup"
         pre_archive="$pre_dir/${pre_root}.tar.gz"
-        mkdir -p "$pre_dir"
+        local pre_ready=true
+        mkdir -p "$pre_dir" 2>/dev/null || pre_ready=false
         echo ""
         echo -e "Saving a safety backup of the current data…"
-        if _backup_create "$restore_root" "$pre_archive" "$pre_root"; then
+        if [ "$pre_ready" = true ] && _backup_create "$restore_root" "$pre_archive" "$pre_root"; then
             echo -e "${GREEN}[OK]${NC}   Safety backup: $pre_archive"
             echo "       To undo this restore, run oa --restore again and pick it (it is listed as pre-restore/…)."
 
+        elif [ "$force_no_safety" = true ]; then
+            echo -e "${YELLOW}[WARN]${NC} Could not save a safety backup of the current data — continuing because you asked for --force-no-safety."
         else
-            echo -e "${YELLOW}[WARN]${NC} Could not save a safety backup of the current data."
-            if ! _ask_yn_default_no "Restore anyway? The current data cannot be recovered afterwards."; then
-                echo -e "Restore cancelled."
-                exit 0
-            fi
+            echo -e "${RED}[FAIL]${NC} Could not save a safety backup of the current data, so nothing was restored."
+            echo "       Free some space or check that the temporary folder and the backup folder can be written, then run oa --restore again."
+            echo "       To restore without a safety backup (the current data cannot be recovered afterwards): oa --restore --force-no-safety"
+            exit 1
         fi
     fi
 

@@ -62,6 +62,7 @@ Android 也配拥有一个 Shell。
 
 - 一键安装：在应用内完成 bootstrap、Node.js 和 OpenClaw 的安装
 - 内置仪表盘：控制网关、查看运行状态、管理工具
+- 工具安装：在应用的“设置 → 附加工具”（Settings → Additional Tools）页面，通过安装脚本（`post-setup.sh --tools-only`）安装 tmux、ttyd、dufs、Android Tools、Playwright、Claude Code、Gemini CLI 和 Codex CLI；其中 tmux、ttyd、dufs 和 Android Tools 会对照已签名的 Termux 软件包列表进行验证。安装失败或 `--version` 检查失败的工具会显示为“无法运行”，并提供重新安装按钮。code-server、OpenCode、SSH 服务器和 Chromium 暂时无法在应用中安装；code-server 可在应用的终端中使用 `oa --install` 安装
 - 独立于 Termux 运行 — 安装此应用不会影响已有的 Termux + `oa` 环境
 
 前往 [Releases](https://github.com/AidanPark/openclaw-android/releases) 页面下载 APK。
@@ -202,7 +203,7 @@ node -p "require(process.env.HOME + '/.openclaw/openclaw.json').gateway.auth.tok
 | `oa --install` | 安装可选工具（tmux、code-server、AI CLI 等） |
 | `oa --uninstall` | 卸载 OpenClaw on Android |
 | `oa --backup` | 创建 OpenClaw 数据的完整备份 |
-| `oa --restore` | 从备份恢复 |
+| `oa --restore` | 从备份恢复（`--force-no-safety`：即使无法保存安全备份也继续） |
 | `oa --status` | 显示安装状态和所有已安装组件 |
 | `oa --version` | 显示版本 |
 | `oa --help` | 显示可用选项 |
@@ -250,7 +251,7 @@ oa --backup
 ```bash
 oa --restore
 ```
-此命令会列出默认备份目录中所有可用的备份。只需选择你要恢复的备份编号即可。工具会自动从备份清单中检测平台，并将数据恢复到本设备的 `~/.openclaw/`（在其他设备上创建的备份也可以恢复）。请先停止 OpenClaw 网关；网关运行时该命令会拒绝执行。覆盖之前，它会把当前数据保存为安全备份，位于 `~/.openclaw-android/backup/pre-restore/`。备份之后新建的文件会保留。需要确认后才会执行。
+此命令会列出默认备份目录中所有可用的备份。只需选择你要恢复的备份编号即可。工具会自动从备份清单中检测平台，并将数据恢复到本设备的 `~/.openclaw/`（在其他设备上创建的备份也可以恢复）。请先停止 OpenClaw 网关；网关运行时该命令会拒绝执行。覆盖之前，它会把当前数据保存为安全备份，位于 `~/.openclaw-android/backup/pre-restore/`。备份之后新建的文件会保留。需要确认后才会执行。如果无法保存安全备份（例如没有可用空间），恢复会在不做任何更改的情况下中止；请腾出空间后重试，或运行 `oa --restore --force-no-safety` 在没有安全备份的情况下恢复。
 
 ## 故障排除
 
@@ -329,7 +330,7 @@ OpenClaw 通过 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp) �
 | [OpenCode](https://opencode.ai/) | AI 编程助手 (TUI)。自动安装 [Bun](https://bun.sh/) 和 [proot](https://proot-me.github.io/) 作为依赖 | `bun install -g` |
 | [Chromium](https://www.chromium.org/) | OpenClaw 的浏览器自动化支持（约 400MB） | 自定义安装脚本 |
 | [Playwright](https://playwright.dev/) | 浏览器自动化库（需要 Chromium）。自动配置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` | 自定义安装脚本 |
-| [Claude Code](https://github.com/anthropics/claude-code) (Anthropic) | AI CLI 工具（可以安装，但在此环境下原生二进制文件可能尚无法运行 — 支持计划中） | `npm install -g` |
+| [Claude Code](https://github.com/anthropics/claude-code) (Anthropic) | AI CLI 工具 — 其原生二进制文件通过内置的 glibc 加载器启动，`npm install -g` 更新后，npm 包装器会恢复该启动器（已在 Claw 应用中验证） | `npm install -g` |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) (Google) | AI CLI 工具 | `npm install -g` |
 | [Codex CLI](https://github.com/DioNanos/codex-termux)（OpenAI Codex 的 Termux 分支） | AI CLI 工具 | `npm install -g` |
 
@@ -522,7 +523,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - **OpenCode**：AI 编程助手，使用 proot + ld.so 拼接方式运行 Bun 独立二进制文件
 - **Chromium**：OpenClaw 的浏览器自动化支持（约 400MB）
 - **Playwright**：浏览器自动化库（通过 npm 安装 `playwright-core`）。自动设置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 和 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` 环境变量。如果未安装 Chromium 则自动安装
-- **AI CLI 工具**：Claude Code、Gemini CLI、Codex CLI (Termux) — 通过 `npm install -g` 安装；安装失败时只会提示警告并跳过，不会中止整个安装（Claude Code 可能已安装但在此环境下尚无法运行 — 支持计划中）
+- **AI CLI 工具**：Claude Code、Gemini CLI、Codex CLI (Termux) — 通过 `npm install -g` 安装；安装失败时只会提示警告并跳过，不会中止整个安装（Claude Code 通过 glibc 加载器运行。Codex CLI 的软件包声明了 `os: android`，而此 Node.js 报告的是 `linux`，因此在 Claw 应用中使用 `--force` 安装；在 Termux 中仍可能带警告被跳过）
 
 ### [8/8] 验证 — `tests/verify-install.sh`
 

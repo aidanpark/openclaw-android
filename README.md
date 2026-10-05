@@ -62,6 +62,7 @@ A standalone Android app is also available. It bundles a terminal emulator and a
 
 - One-tap setup: bootstrap, Node.js, and OpenClaw installed from within the app
 - Built-in dashboard for gateway control, runtime info, and tool management
+- Tool installation: Settings → Additional Tools installs tmux, ttyd, dufs, Android Tools, Playwright, Claude Code, Gemini CLI, and Codex CLI through the setup script (`post-setup.sh --tools-only`); tmux, ttyd, dufs, and Android Tools are checked against the signed Termux package list. A tool whose install failed or whose `--version` check fails is shown as not working, with a Reinstall button. code-server, OpenCode, the SSH server, and Chromium cannot be installed from the app yet; code-server can be installed in the app's terminal with `oa --install`
 - Works independently of Termux — installing the app does not affect an existing Termux + `oa` setup
 
 Download the APK from the [Releases](https://github.com/AidanPark/openclaw-android/releases) page.
@@ -197,7 +198,7 @@ After installation, the `oa` command is available for managing your installation
 | `oa --install` | Install optional tools (tmux, code-server, AI CLIs, etc.) |
 | `oa --uninstall` | Remove OpenClaw on Android |
 | `oa --backup` | Create a full backup of OpenClaw data |
-| `oa --restore` | Restore from a backup |
+| `oa --restore` | Restore from a backup (`--force-no-safety`: even if the safety backup cannot be saved) |
 | `oa --status` | Show installation status and all installed components |
 | `oa --version` | Show version |
 | `oa --help` | Show available options |
@@ -245,7 +246,7 @@ To restore from a backup:
 ```bash
 oa --restore
 ```
-This command lists all available backups in the default backup directory. Simply select the number of the backup you wish to restore. The tool automatically detects the platform from the backup manifest and restores into `~/.openclaw/` on this device (backups made on another device work too). Stop the OpenClaw gateway first; the command refuses to run while it is up. Before overwriting anything, it saves a safety backup of your current data in `~/.openclaw-android/backup/pre-restore/`. Files created after the backup was made are kept. A confirmation is required.
+This command lists all available backups in the default backup directory. Simply select the number of the backup you wish to restore. The tool automatically detects the platform from the backup manifest and restores into `~/.openclaw/` on this device (backups made on another device work too). Stop the OpenClaw gateway first; the command refuses to run while it is up. Before overwriting anything, it saves a safety backup of your current data in `~/.openclaw-android/backup/pre-restore/`. Files created after the backup was made are kept. A confirmation is required. If the safety backup cannot be saved (for example, no free space), the restore stops without changing anything; free some space and try again, or run `oa --restore --force-no-safety` to restore without one.
 
 ## Troubleshooting
 
@@ -324,7 +325,7 @@ Each tool is offered via an individual Y/n prompt. You choose which ones to inst
 | [OpenCode](https://opencode.ai/) | AI coding assistant (TUI). Auto-installs [Bun](https://bun.sh/) and [proot](https://proot-me.github.io/) as dependencies | `bun install -g` |
 | [Chromium](https://www.chromium.org/) | Browser automation for OpenClaw (~400MB) | Custom install script |
 | [Playwright](https://playwright.dev/) | Browser automation library (requires Chromium). Auto-configures `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` | Custom install script |
-| [Claude Code](https://github.com/anthropics/claude-code) (Anthropic) | AI CLI tool (installs, but its native binary may not run on this setup yet — support planned) | `npm install -g` |
+| [Claude Code](https://github.com/anthropics/claude-code) (Anthropic) | AI CLI tool — its native binary is started through the bundled glibc loader, and the npm wrapper restores that launcher after `npm install -g` updates it (verified in the Claw app) | `npm install -g` |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) (Google) | AI CLI tool | `npm install -g` |
 | [Codex CLI](https://github.com/DioNanos/codex-termux) (Termux fork of OpenAI Codex) | AI CLI tool | `npm install -g` |
 
@@ -517,7 +518,7 @@ Installs the tools selected in Step 3:
 - **OpenCode**: AI coding assistant using proot + ld.so concatenation for Bun standalone binaries
 - **Chromium**: Browser automation support for OpenClaw (~400MB)
 - **Playwright**: Browser automation library (`playwright-core` via npm). Auto-sets `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` and `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` environment variables. Installs Chromium automatically if not already present
-- **AI CLI tools**: Claude Code, Gemini CLI, Codex CLI (Termux) — installed via `npm install -g`; a failed install is reported and skipped rather than aborting setup (Claude Code may install but not run yet on this setup — support planned)
+- **AI CLI tools**: Claude Code, Gemini CLI, Codex CLI (Termux) — installed via `npm install -g`; a failed install is reported and skipped rather than aborting setup (Claude Code runs through the glibc loader. Codex CLI is installed with `--force` in the Claw app because its package declares `os: android` while this Node.js reports `linux`; in Termux it may still be skipped with a warning)
 
 ### [8/8] Verification — `tests/verify-install.sh`
 

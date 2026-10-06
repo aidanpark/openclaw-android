@@ -70,7 +70,7 @@ Download the APK from the [Releases](https://github.com/AidanPark/openclaw-andro
 ## Requirements
 
 - Android 7.0 or higher (Android 10+ recommended)
-- ~1GB free storage
+- ~2GB free storage (2000 MB; checked before a new install and before an update that changes the pinned versions)
 - Wi-Fi or mobile data connection
 
 ## What It Does
@@ -199,7 +199,7 @@ After installation, the `oa` command is available for managing your installation
 | `oa --uninstall` | Remove OpenClaw on Android |
 | `oa --backup` | Create a full backup of OpenClaw data |
 | `oa --restore` | Restore from a backup (`--force-no-safety`: even if the safety backup cannot be saved) |
-| `oa --status` | Show installation status and all installed components |
+| `oa --status` | Show installation status and all installed components (including the state of the hard-link patch) |
 | `oa --version` | Show version |
 | `oa --help` | Show available options |
 
@@ -211,7 +211,7 @@ oa --update && source ~/.bashrc
 
 This single command updates all installed components at once:
 
-- **OpenClaw** — Core package, kept at the pinned, verified version (currently 2026.7.35 — not always the newest release)
+- **OpenClaw** — Core package, kept at the pinned, verified version (currently 2026.9.8 — not always the newest release)
 - **code-server** — Browser IDE
 - **OpenCode** — AI coding assistant
 - **AI CLI tools** — Claude Code, Gemini CLI, Codex CLI (Termux)
@@ -221,7 +221,18 @@ Already up-to-date components are skipped. Components you haven't installed are 
 
 If the gateway was running during the update, restart it afterwards (stop it and run `openclaw gateway` again, or restart the app) so it picks up the updated runtime.
 
-**Note**: `openclaw update` (and `openclaw --update`) is intentionally blocked — a guard keeps OpenClaw pinned to the version verified by this project. The gateway's "update available" notice is turned off for you (`update.checkOnStart=false`; if you turned it back on, it may print something like `update available … Run: openclaw update` — use `oa --update` instead). `openclaw update status` (read-only) still works.
+**When an update changes the pinned versions** (for example the move to Node.js 24.21.0 and OpenClaw 2026.9.8 in Script v1.2.0), `oa --update` adds these safeguards:
+
+- It needs 2000 MB of free space. If there is not enough, it stops before changing anything and shows the space needed and the space left.
+- If the OpenClaw gateway is running, it stops without changing anything. Stop the gateway (Ctrl+C) and run `oa --update` again.
+- It first creates a data backup in `~/.openclaw-android/backup/pre-update/` (only the latest 3 are kept).
+- After the install, it checks the OpenClaw configuration and data. If a data migration is needed and this run made the backup, it runs `openclaw doctor --fix` once automatically (up to 2 minutes). If that fails, it shows the backup location and the manual steps (stop the gateway, then run `openclaw doctor --fix`) and ends as a failure.
+
+Set `OA_SKIP_AUTO_DOCTOR=1` to turn off the automatic migration, or `OA_SKIP_PRE_UPDATE_BACKUP=1` to skip the automatic backup.
+
+`oa --update` never moves Node.js or OpenClaw to a lower version (for example when an older file is served right after a release). To lower them on purpose, set both `OA_ALLOW_OPENCLAW_DOWNGRADE=1` and `OA_ALLOW_NODE_DOWNGRADE=1`. `oa --restore` restores data only, not the programs.
+
+**Note**: `openclaw update` (and `openclaw --update`) is intentionally blocked — a guard keeps OpenClaw pinned to the version verified by this project. The gateway's "update available" notice is turned off for you (`update.checkOnStart=false`; if you turned it back on, it may print something like `update available … Run: openclaw update` — use `oa --update` instead). `openclaw update status` (read-only) still works. OpenClaw 2026.9.8 can also start its own update from the dashboard's Update button, from the agent's gateway tool, and from `openclaw gateway call update.run`; these paths do not go through the `openclaw` command guard, so the Node.js wrapper blocks OpenClaw's own update as well (`[BLOCKED]`). Its messages may suggest `openclaw update --yes` or `openclaw update repair`; both are blocked, so use `oa --update`.
 
 > If the `oa` command is not available (older installations), run it with curl:
 > ```bash
@@ -230,7 +241,7 @@ If the gateway was running during the update, restart it afterwards (stop it and
 
 ## Backup & Restore
 
-OpenClaw's built-in backup command (`openclaw backup create`) fails on Android because it relies on hardlinks, which are blocked in Android's app-private storage, and it also leaves out your conversation history. The `oa --backup` command works around both: it archives your whole OpenClaw data folder (`~/.openclaw`) with `tar`, takes consistent snapshots of the SQLite databases, and writes an archive that `openclaw backup verify` accepts.
+OpenClaw's built-in backup command (`openclaw backup create`) relies on hardlinks, which Android blocks in app-private storage; the hard-link patch that OpenClaw on Android applies lets it copy instead (see the hard-link patch paragraph below). The `oa --backup` command archives your whole OpenClaw data folder (`~/.openclaw`) with `tar` and takes consistent snapshots of the SQLite databases. It then checks the archive with `openclaw backup verify` when OpenClaw accepts it, and otherwise with a structural `tar` check (OpenClaw 2026.9 rejects archives that contain its absolute `plugin-skills` link; restoring them works normally).
 
 To create a backup:
 ```bash
@@ -242,11 +253,15 @@ Backups are stored in `~/.openclaw-android/backup/` with a timestamped filename 
 >
 > **Claw app:** if `oa --backup` says `backup.sh not found` (apps installed before this feature), run `oa --update` once.
 
+Before an update that changes the pinned versions, `oa --update` also creates a backup in `~/.openclaw-android/backup/pre-update/` automatically (the latest 3 are kept). See [Update](#update).
+
 To restore from a backup:
 ```bash
 oa --restore
 ```
-This command lists all available backups in the default backup directory. Simply select the number of the backup you wish to restore. The tool automatically detects the platform from the backup manifest and restores into `~/.openclaw/` on this device (backups made on another device work too). Stop the OpenClaw gateway first; the command refuses to run while it is up. Before overwriting anything, it saves a safety backup of your current data in `~/.openclaw-android/backup/pre-restore/`. Files created after the backup was made are kept. A confirmation is required. If the safety backup cannot be saved (for example, no free space), the restore stops without changing anything; free some space and try again, or run `oa --restore --force-no-safety` to restore without one.
+This command lists all available backups in the default backup directory, including the `pre-update/` ones. Simply select the number of the backup you wish to restore. The tool automatically detects the platform from the backup manifest and restores into `~/.openclaw/` on this device (backups made on another device work too). Stop the OpenClaw gateway first; the command refuses to run while it is up. Before overwriting anything, it saves a safety backup of your current data in `~/.openclaw-android/backup/pre-restore/`. Files created after the backup was made are kept. A confirmation is required. If the backup was made with a newer OpenClaw version than the one installed, it warns you and asks for confirmation (the default is No). If the backup was made with an older OpenClaw version, it tells you to run `openclaw doctor --fix` after the restore. `oa --restore` restores data only, not the programs. If the safety backup cannot be saved (for example, no free space), the restore stops without changing anything; free some space and try again, or run `oa --restore --force-no-safety` to restore without one.
+
+**Data moved from another environment.** After a move between the Claw app and Termux, between a debug and a release app, or a restore of a backup from another device, OpenClaw's data can still contain the home path of the other app (`/data/data/<other package>/files/home/...`). Android answers an access to another app's folder with a permission error (EACCES), and OpenClaw 2026.9's data migration stops there. `oa --update` (just before the configuration check) and every `oa --restore` (a restore on the same environment included) now rewrite those paths in the agent database registrations and stale lease rows of OpenClaw's state database and in the agent `workspace` and `agentDir` values of `openclaw.json`. Before changing anything, they save copies named `~/.openclaw/state/openclaw.sqlite.oa-before-repair-<timestamp>` and `~/.openclaw/openclaw.json.oa-before-repair-<timestamp>` (the latest 3 are kept). If a value cannot be repaired automatically, a warning says so; edit that path in `openclaw.json` to a location under your current home (`$HOME`). See the [Troubleshooting Guide](docs/troubleshooting.md).
 
 ## Troubleshooting
 
@@ -273,7 +288,7 @@ However, there are practical constraints:
 
 For experimentation, small models like TinyLlama 1.1B (Q4, ~670MB) can run on the phone. For production use, cloud LLM providers are recommended.
 
-> **Why `--ignore-scripts`?** The installer uses `npm install -g openclaw@2026.7.35 --ignore-scripts` (the pinned version) because node-llama-cpp's postinstall script attempts to compile llama.cpp from source via cmake — a process that takes 30+ minutes on a phone and fails due to toolchain incompatibilities. The prebuilt binaries work without this compilation step, so the postinstall is safely skipped.
+> **Why `--ignore-scripts`?** The installer uses `npm install -g openclaw@2026.9.8 --ignore-scripts` (the pinned version) because node-llama-cpp's postinstall script attempts to compile llama.cpp from source via cmake — a process that takes 30+ minutes on a phone and fails due to toolchain incompatibilities. The prebuilt binaries work without this compilation step, so the postinstall is safely skipped.
 
 <details>
 <summary>Technical Documentation for Developers</summary>
@@ -296,7 +311,7 @@ These are controlled by the platform's `config.env` flags. For OpenClaw, all are
 |-----------|------|----------------|
 | [pacman](https://wiki.archlinux.org/title/Pacman) | Package manager for glibc packages | `pkg install` |
 | [glibc-runner](https://github.com/termux-pacman/glibc-packages) | glibc dynamic linker — enables standard Linux binaries on Android | `pacman -Sy` |
-| [Node.js](https://nodejs.org/) 22.23.3 (linux-arm64) | JavaScript runtime for OpenClaw, pinned version verified via sha256 | Direct download from nodejs.org |
+| [Node.js](https://nodejs.org/) 24.21.0 (linux-arm64) | JavaScript runtime for OpenClaw, pinned version verified via sha256 | Direct download from nodejs.org |
 | python | Build scripts for native C/C++ addons (node-gyp) | `pkg install` |
 | make | Makefile execution for native modules | `pkg install` |
 | cmake | CMake-based native module builds | `pkg install` |
@@ -307,7 +322,7 @@ These are controlled by the platform's `config.env` flags. For OpenClaw, all are
 
 | Component | Role | Install Method |
 |-----------|------|----------------|
-| [OpenClaw](https://github.com/openclaw/openclaw) | AI agent platform (core), pinned to a verified version (2026.7.35) | `npm install -g` |
+| [OpenClaw](https://github.com/openclaw/openclaw) | AI agent platform (core), pinned to a verified version (2026.9.8) | `npm install -g` |
 | [clawdhub](https://github.com/AidanPark/clawdhub) | Skill manager for OpenClaw | `npm install -g` |
 | [PyYAML](https://pyyaml.org/) | YAML parser for `.skill` packaging | `pip install` |
 
@@ -321,7 +336,7 @@ Each tool is offered via an individual Y/n prompt. You choose which ones to inst
 | [ttyd](https://github.com/tsl0922/ttyd) | Web terminal — access Termux from a browser | `pkg install` |
 | [dufs](https://github.com/sigoden/dufs) | HTTP/WebDAV file server for browser-based file transfer | `pkg install` |
 | [android-tools](https://developer.android.com/tools/adb) | ADB for disabling Phantom Process Killer | `pkg install` |
-| [code-server](https://github.com/coder/code-server) | Browser-based VS Code IDE, pinned to 4.117.0 (newer releases require Node.js 24) | Direct download from GitHub |
+| [code-server](https://github.com/coder/code-server) | Browser-based VS Code IDE, pinned to 4.117.0 (verified with this setup) | Direct download from GitHub |
 | [OpenCode](https://opencode.ai/) | AI coding assistant (TUI). Auto-installs [Bun](https://bun.sh/) and [proot](https://proot-me.github.io/) as dependencies | `bun install -g` |
 | [Chromium](https://www.chromium.org/) | Browser automation for OpenClaw (~400MB) | Custom install script |
 | [Playwright](https://playwright.dev/) | Browser automation library (requires Chromium). Auto-configures `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` | Custom install script |
@@ -376,6 +391,7 @@ openclaw-android/
 │   │   └── patches/            # Platform-specific patches
 │   │       ├── openclaw-apply-patches.sh
 │   │       ├── openclaw-patch-paths.sh
+│   │       ├── openclaw-patch-hardlink.sh  # Android hard-link/reflink fallback for OpenClaw
 │   │       └── openclaw-build-sharp.sh
 ├── tests/
 │   └── verify-install.sh       # Post-install verification (orchestrator + platform)
@@ -439,9 +455,9 @@ Validates that the current environment is suitable before starting installation.
 
 - **Termux detection**: Checks for the `$PREFIX` environment variable. Exits immediately if not in Termux
 - **Architecture check**: Runs `uname -m` to verify CPU architecture (aarch64 recommended, armv7l supported, x86_64 treated as emulator)
-- **Disk space**: Ensures at least 1000MB free on the `$PREFIX` partition. Errors if insufficient
+- **Disk space**: Ensures at least 2000MB free on the `$PREFIX` partition. Errors if insufficient, showing the space needed and the space left
 - **Existing installation**: If `openclaw` command already exists, shows current version and notes this is a reinstall/upgrade
-- **Node.js pre-check**: If Node.js is already installed, shows version and warns if below 22
+- **Node.js pre-check**: If Node.js is already installed, shows version and warns if below 24
 - **Phantom Process Killer** (Android 12+): Shows an informational note about the Phantom Process Killer with a link to the [disable guide](docs/disable-phantom-process-killer.md)
 
 ### [2/8] Platform Selection
@@ -480,10 +496,16 @@ Conditionally installs runtime dependencies based on the platform's `config.env`
 | Flag | Script | What it installs |
 |------|--------|-----------------|
 | `PLATFORM_NEEDS_GLIBC=true` | `scripts/install-glibc.sh` | pacman, glibc-runner (provides `ld-linux-aarch64.so.1`) |
-| `PLATFORM_NEEDS_NODEJS=true` | `scripts/install-nodejs.sh` | Node.js 22.23.3 linux-arm64 (sha256-verified), grun-style wrapper scripts |
+| `PLATFORM_NEEDS_NODEJS=true` | `scripts/install-nodejs.sh` | Node.js 24.21.0 linux-arm64 (sha256-verified), grun-style wrapper scripts |
 | `PLATFORM_NEEDS_BUILD_TOOLS=true` | `scripts/install-build-tools.sh` | python, make, cmake, clang, binutils |
 
 Each script is self-contained with pre-checks and idempotent behavior (skips if already installed).
+
+**Node.js wrapper defaults:** OpenClaw 2026.9.x requires Node.js 24.16 or newer. Its file-safety module (`@openclaw/fs-safe`) has a native helper that uses the `openat2` system call, and Android's app seccomp policy kills the process with SIGSYS (Bad system call) on that call. The wrapper therefore sets `FS_SAFE_TEST_NO_OPENAT2=1` by default, which keeps the native helper but stops it from using `openat2` (only the exact value `1` is recognized). Setting `FS_SAFE_NATIVE_MODE=off` turns the native helper off entirely, but then some OpenClaw data migrations may be refused. The wrapper also sets `OPENCLAW_NO_AUTO_UPDATE=1` and blocks OpenClaw's own update (see [Update](#update)).
+
+**Hard-link patch:** Android blocks hardlinks and reflink (`FICLONE`) copies in app data storage, in the app and in Termux alike (error `EACCES`). OpenClaw 2026.9.8 tries a hardlink first and moves on to copying only on a "not supported" error, which `EACCES` is not. It also uses only a hardlink when it moves the original chat history to the archive folder after migrating it. Without a fix, the data migration of a user coming from 7.35 would fail. Every time OpenClaw is installed or updated (app install, Termux install, `oa --update`, and a reinstall with `npm install -g openclaw@<pinned version>`), `platforms/openclaw/patches/openclaw-patch-hardlink.sh` patches that part of OpenClaw: `EACCES` now leads to a copy, and the archive move falls back to a rename within the same file system when the hardlink is refused. `openclaw backup create` can then copy instead of linking as well. `oa --status` shows a `Hard-link patch: applied (…)` or `not complete (…)` line. If a 7.35 user with saved chat history runs an update that changes the pinned version, the update first checks that the patch fits the OpenClaw it is about to install, and stops without changing anything if it does not (see [Troubleshooting](docs/troubleshooting.md)).
+
+**Known limitation:** OpenClaw's desktop automation tool (`@trycua/cua-driver`) may not work on Android 10 or lower (API 29 or lower), because some of the system calls it needs are blocked there.
 
 ### [6/8] Platform Package Install (L2) — `platforms/<platform>/install.sh`
 
@@ -493,7 +515,7 @@ Delegates to the platform's own install script. For OpenClaw, this:
 2. Installs PyYAML via pip (for `.skill` packaging)
 3. Copies `glibc-compat.js` to `~/.openclaw-android/patches/` (the Node.js wrapper loads its own copy from `~/.openclaw-android/lib/`, installed with Node.js — the app never overwrites that one)
 4. Installs `systemctl` stub to `$PREFIX/bin/`
-5. Runs `npm install -g openclaw@2026.7.35 --ignore-scripts` (the pinned version in `config.env`)
+5. Runs `npm install -g openclaw@2026.9.8 --ignore-scripts` (the pinned version in `config.env`)
 6. Runs OpenClaw's own postinstall script (`postinstall-bundled-plugins.mjs`), which `--ignore-scripts` skipped
 7. Applies platform-specific patches via `openclaw-apply-patches.sh`
 8. Installs the `openclaw update` guard (`openclaw-shim.sh`) so the pinned version holds
@@ -585,15 +607,16 @@ Downloads the full repository tarball from GitHub and extracts to a temp directo
 
 ### [3/5] Update Core Infrastructure
 
-Updates shared files used by the updater, uninstaller, and CLI:
+Updates shared files used by the updater, uninstaller, and CLI. If this update changes the pinned Node.js or OpenClaw, three safeguards run first, before anything is changed: the free-space check (2000 MB), the check that the OpenClaw gateway is not running, and the data backup in `~/.openclaw-android/backup/pre-update/` (details in [Update](#update)).
 
+- Checks that the update script itself is the latest. If an old cached copy was downloaded (possible for a few minutes after a release), the update stops before changing anything; run `oa --update` again after a few minutes
 - Copies the latest platform directory to `~/.openclaw-android/platforms/`
 - Updates `lib.sh` and `setup-env.sh` in `~/.openclaw-android/scripts/`
 - Updates patch files (`glibc-compat.js`, `argon2-stub.js`, `spawn.h`, `systemctl`)
 - Updates `oa` CLI and `oaupdate` wrapper in `$PREFIX/bin/`
 - Updates `uninstall.sh` in `~/.openclaw-android/`
 - If Bionic architecture detected, performs automatic glibc migration
-- Converges Node.js to the pinned version (sha256-verified download, atomic swap — the previous install is restored if anything fails)
+- Converges Node.js to the pinned version (sha256-verified download, atomic swap — the previous install is restored if anything fails). It never moves Node.js to a lower version unless `OA_ALLOW_NODE_DOWNGRADE=1` is set
 - Runs `setup-env.sh` to refresh `.bashrc` environment block
 - **Node gate**: if Node.js isn't at the pinned version afterward, the update stops here — OpenClaw ([4/5]) is not touched. Run `oa --update` again
 
@@ -601,11 +624,13 @@ Updates shared files used by the updater, uninstaller, and CLI:
 
 Delegates to `platforms/<platform>/update.sh`. For OpenClaw, this:
 
+- If the pinned versions changed: after the install, checks the OpenClaw configuration and data, and runs `openclaw doctor --fix` once when a data migration is needed and this run made the backup (details in [Update](#update))
+- Repairs paths that point into another app's folder, after the install and just before the configuration check (details in [Backup & Restore](#backup--restore))
 - Installs `binutils` (for native module builds)
 - Re-checks the Node.js pin as a safety net (defense in depth — [3/5] already gates on this)
-- Converges `openclaw` to the pinned version — installs it whenever the installed version differs, in either direction (a newer version gets moved back to the pin)
+- Converges `openclaw` to the pinned version — installs it when the installed version is lower. It never moves OpenClaw to a lower version unless `OA_ALLOW_OPENCLAW_DOWNGRADE=1` is set
 - Re-applies platform-specific patches
-- Refreshes the `openclaw update` guard (`openclaw-shim.sh`) so `openclaw update`/`--update` stay blocked
+- Refreshes the `openclaw update` guard (`openclaw-shim.sh`) so `openclaw update`/`--update` stay blocked (the Node.js wrapper blocks OpenClaw's own update paths as well)
 - Updates/installs `clawdhub` (skill manager)
 - Installs `undici` for clawdhub if needed (Node.js v24+)
 - Turns off the gateway's "update available" notice (`update.checkOnStart=false`) if you have not set that value yourself

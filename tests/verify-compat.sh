@@ -267,6 +267,44 @@ else
     fail "8b: lib/glibc-compat.js not in NODE_OPTIONS ($NODE_OPTS)"
 fi
 
+# 8c-8e: OpenClaw 2026.9.x's native fs-safe helper probes openat2, which Android's app
+# sandbox answers with SIGSYS; the wrapper turns that one probe off (everything else
+# stays native) and leaves the user's own FS_SAFE_NATIVE_MODE alone.
+HOOK=$(env -u FS_SAFE_TEST_NO_OPENAT2 node -e "process.stdout.write(process.env.FS_SAFE_TEST_NO_OPENAT2||'')" 2>/dev/null)
+if [ "$HOOK" = "1" ]; then
+    pass "8c: wrapper sets FS_SAFE_TEST_NO_OPENAT2=1 by default"
+else
+    fail "8c: FS_SAFE_TEST_NO_OPENAT2 is '$HOOK' without a user setting (want '1')"
+fi
+HOOK=$(FS_SAFE_TEST_NO_OPENAT2=0 node -e "process.stdout.write(process.env.FS_SAFE_TEST_NO_OPENAT2||'')" 2>/dev/null)
+if [ "$HOOK" = "0" ]; then
+    pass "8d: wrapper keeps a FS_SAFE_TEST_NO_OPENAT2 the user set"
+else
+    fail "8d: user-set FS_SAFE_TEST_NO_OPENAT2=0 became '$HOOK'"
+fi
+FS_MODE=$(FS_SAFE_NATIVE_MODE=require node -e "process.stdout.write(process.env.FS_SAFE_NATIVE_MODE||'')" 2>/dev/null)
+if [ "$FS_MODE" = "require" ]; then
+    pass "8e: wrapper leaves the user's FS_SAFE_NATIVE_MODE alone"
+else
+    fail "8e: user-set FS_SAFE_NATIVE_MODE=require became '$FS_MODE'"
+fi
+
+# 8f/8g: OpenClaw's gateway starts a self-update as '<node wrapper> <openclaw>/dist/index.js
+# update --yes --json', which bypasses the openclaw command's own guard; the wrapper blocks it.
+# (-e 0 keeps OpenClaw itself from running if the guard ever stops working: the wrapper only looks at the path)
+UPD_OUT=$(node -e 0 "$PREFIX/lib/node_modules/openclaw/dist/index.js" update --yes --json 2>&1); UPD_RC=$?
+if [ "$UPD_RC" -eq 1 ] && echo "$UPD_OUT" | grep -q '^\[BLOCKED\]'; then
+    pass "8f: wrapper blocks an OpenClaw self-update started through node"
+else
+    fail "8f: 'node …/openclaw/dist/index.js update' was not blocked (rc=$UPD_RC)"
+fi
+UPD_OUT=$(node -e 0 "$PREFIX/lib/node_modules/openclaw/dist/index.js" update status 2>&1 || true)
+if echo "$UPD_OUT" | grep -q '^\[BLOCKED\]'; then
+    fail "8g: 'update status' (read-only) must not be blocked"
+else
+    pass "8g: wrapper lets 'update status' through"
+fi
+
 # ─────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────

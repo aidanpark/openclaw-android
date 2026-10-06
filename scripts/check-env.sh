@@ -29,9 +29,9 @@ else
     echo -e " ${YELLOW}(unknown, may not work)${NC}"
 fi
 
-AVAILABLE_MB=$(df "$PREFIX" 2>/dev/null | awk 'NR==2 {print int($4/1024)}')
-if [ -n "$AVAILABLE_MB" ] && [ "$AVAILABLE_MB" -lt 1000 ]; then
-    echo -e "${RED}[FAIL]${NC} Insufficient disk space: ${AVAILABLE_MB}MB available (need 1000MB+)"
+AVAILABLE_MB=$(oa_free_mb "$PREFIX")
+if [ -n "$AVAILABLE_MB" ] && [ "$AVAILABLE_MB" -lt "$OA_MIN_FREE_INSTALL_MB" ]; then
+    echo -e "${RED}[FAIL]${NC} Insufficient disk space: ${AVAILABLE_MB}MB available (need ${OA_MIN_FREE_INSTALL_MB}MB+)"
     ERRORS=$((ERRORS + 1))
 else
     echo -e "${GREEN}[OK]${NC}   Disk space: ${AVAILABLE_MB:-unknown}MB available"
@@ -42,8 +42,8 @@ if command -v node &>/dev/null; then
     echo -e "${GREEN}[OK]${NC}   Node.js found: $NODE_VER"
     NODE_MAJOR="${NODE_VER%%.*}"
     NODE_MAJOR="${NODE_MAJOR#v}"
-    if [ "$NODE_MAJOR" -lt 22 ] 2>/dev/null; then
-        echo -e "${YELLOW}[WARN]${NC} Node.js >= 22 required. Will be upgraded during install."
+    if [ "$NODE_MAJOR" -lt 24 ] 2>/dev/null; then
+        echo -e "${YELLOW}[WARN]${NC} Node.js >= 24 required. Will be upgraded to the pinned version during install."
     fi
 else
     echo -e "${YELLOW}[INFO]${NC} Node.js not found. Will be installed via glibc environment."

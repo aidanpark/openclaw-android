@@ -184,6 +184,28 @@ if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$SHIM_SRC" -e "$PIN_COPY"; then
     fi
 fi
 
+# --- hard-link patch: platforms script == copy embedded in post-setup.sh ---
+# (OpenClaw is patched on every path; post-setup.sh is a single file, so it carries a copy.)
+
+HL_SRC="platforms/openclaw/patches/openclaw-patch-hardlink.sh"
+if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$HL_SRC" -e "$PIN_COPY"; then
+    HL_EMBEDDED=$(git show ":$PIN_COPY" 2>/dev/null \
+        | awk "/<< 'OPENCLAW_HARDLINK_SH'/{f=1;next} /^OPENCLAW_HARDLINK_SH\$/{f=0} f")
+    if git cat-file -e ":$HL_SRC" 2>/dev/null; then
+        if [ "$HL_EMBEDDED" != "$(git show ":$HL_SRC" 2>/dev/null)" ]; then
+            echo ""
+            echo "ERROR: hard-link patch mismatch"
+            echo "  $HL_SRC and the OPENCLAW_HARDLINK_SH heredoc in $PIN_COPY must be identical."
+            exit 1
+        fi
+    elif [ -n "$HL_EMBEDDED" ]; then
+        echo ""
+        echo "ERROR: $PIN_COPY embeds the hard-link patch but $HL_SRC is not in the commit."
+        echo "  git add $HL_SRC (mode 100755)"
+        exit 1
+    fi
+fi
+
 # --- npm guard function: install-nodejs.sh == post-setup.sh (same function, two generators) ---
 
 GUARD_A="scripts/install-nodejs.sh"
@@ -219,6 +241,33 @@ if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$GW_A" -e "$GW_B"; then
         echo "ERROR: git wrapper block mismatch"
         echo "  The block between '# ─── git wrapper functions' and '# ─── end git wrapper functions'"
         echo "  in $GW_A and $GW_B must be identical."
+        exit 1
+    fi
+fi
+
+# --- node wrapper heredoc: install-nodejs.sh == post-setup.sh (same text, two generators) ---
+
+NW_A="scripts/install-nodejs.sh"
+NW_B="post-setup.sh"
+if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$NW_A" -e "$NW_B"; then
+    nw_body() {
+        git show ":$1" 2>/dev/null | awk '
+            /^[[:space:]]*# ─── node wrapper ───$/      {m=1; next}
+            /^[[:space:]]*# ─── end node wrapper ───$/  {m=0}
+            m && /<< WRAPPER$/                            {h=1; next}
+            m && h && /^WRAPPER$/                         {h=0; next}
+            m && h                                        {print}'
+    }
+    nw_has_end() {
+        git show ":$1" 2>/dev/null | grep -qE '^[[:space:]]*# ─── end node wrapper ───$'
+    }
+    NA=$(nw_body "$NW_A")
+    NB=$(nw_body "$NW_B")
+    if [ -z "$NA" ] || [ -z "$NB" ] || [ "$NA" != "$NB" ] || ! nw_has_end "$NW_A" || ! nw_has_end "$NW_B"; then
+        echo ""
+        echo "ERROR: node wrapper mismatch"
+        echo "  The node wrapper heredoc between the '# ─── node wrapper ───' and"
+        echo "  '# ─── end node wrapper ───' markers in $NW_A and $NW_B must be identical and non-empty."
         exit 1
     fi
 fi

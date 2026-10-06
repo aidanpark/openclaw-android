@@ -223,7 +223,7 @@ If the gateway was already running before the update, you may need to stop the o
 
 ### Cause
 
-This project pins OpenClaw and Node.js to a verified, tested pair (see `platforms/openclaw/config.env`). `openclaw update` (and `openclaw --update`) would install the latest npm release, which can require a newer Node.js than the pinned one and then fail to start — so a guard installed at `$PREFIX/bin/openclaw` blocks both. The gateway's own auto-updater is also disabled (`OPENCLAW_NO_AUTO_UPDATE=1`), but it may still print something like `update available … Run: openclaw update` — that's the command being blocked.
+This project pins OpenClaw and Node.js to a verified, tested pair (see `platforms/openclaw/config.env`). `openclaw update` (and `openclaw --update`) would install the latest npm release, which can require a newer Node.js than the pinned one and then fail to start — so a guard installed at `$PREFIX/bin/openclaw` blocks both. The gateway's own auto-updater is also disabled (the Node.js wrapper sets `OPENCLAW_NO_AUTO_UPDATE=1` by default), but it may still print something like `update available … Run: openclaw update` — that's the command being blocked.
 
 ### Solution
 
@@ -234,6 +234,242 @@ oa --update && source ~/.bashrc
 ```
 
 `openclaw update status` (read-only) still works and is not blocked.
+
+## The dashboard's Update button, or an `openclaw update` command OpenClaw suggests, shows [BLOCKED]
+
+```
+[BLOCKED] OpenClaw is pinned to the version verified by OpenClaw on Android.
+          Run 'oa --update' to update safely. ('openclaw update status' is allowed.)
+```
+
+### Cause
+
+OpenClaw 2026.9.8 can start its own update from the dashboard's Update button, from the agent's gateway tool, and from `openclaw gateway call update.run`. These paths do not go through the `openclaw` command guard, so the Node.js wrapper blocks OpenClaw's own update as well. Some OpenClaw messages also suggest `openclaw update --yes` or `openclaw update repair`; these commands are blocked too. This is intended: the pinned Node.js and OpenClaw versions are verified as a pair.
+
+### Solution
+
+Do not use the Update button or those commands. Update with:
+
+```bash
+oa --update && source ~/.bashrc
+```
+
+`openclaw update status` (read-only) is allowed.
+
+## "Bad system call" (SIGSYS) when OpenClaw runs
+
+```
+Bad system call
+```
+
+### Cause
+
+OpenClaw 2026.9.x's file-safety module (`@openclaw/fs-safe`) has a native helper that uses the `openat2` system call. Android's app seccomp policy kills the process with SIGSYS (Bad system call) on that call. The Node.js wrapper therefore sets `FS_SAFE_TEST_NO_OPENAT2=1` by default, which keeps the native helper but stops it from using `openat2`. Only the exact value `1` is recognized.
+
+### Solution
+
+Normally nothing needs to be done. If you still see this error, check that the value is exactly `1`:
+
+```bash
+echo "$FS_SAFE_TEST_NO_OPENAT2"
+```
+
+If it prints something else, set it to `1`. As a last resort you can turn off the native helper itself:
+
+```bash
+export FS_SAFE_NATIVE_MODE=off
+```
+
+The cost: with the native helper off, OpenClaw may refuse some of its data migrations.
+
+## `oa --update` stops with "The OpenClaw gateway is running"
+
+```
+[FAIL] The OpenClaw gateway is running.
+       This update replaces OpenClaw and Node.js, which a running gateway cannot follow.
+```
+
+### Cause
+
+This update changes the pinned Node.js or OpenClaw version. A running gateway cannot follow the replacement, so `oa --update` stops without changing anything.
+
+### Solution
+
+In the Claw app, press Ctrl+C in the terminal tab where the gateway runs, or use Android Settings > Apps > Claw > Force stop. Swiping the app away from the recent apps list does not stop the gateway, because the app keeps a foreground service.
+
+Stop the gateway (press Ctrl+C in the terminal where it runs), then run the update again:
+
+```bash
+oa --update && source ~/.bashrc
+```
+
+If you cannot find where the gateway is running, see [Gateway won't start](#gateway-wont-start-gateway-already-running-or-port-is-already-in-use).
+
+The check looks for a process whose command line matches `openclaw.*gateway`, so a command such as `tail -f …gateway.log` can also trigger it. If you are sure no gateway is running, run `OA_SKIP_GATEWAY_CHECK=1 oa --update`.
+
+## "state database schema migration required", or the gateway does not start after an update
+
+```
+state database schema migration required
+```
+
+### Cause
+
+OpenClaw 2026.9.8 may need to migrate the data of an older OpenClaw version. When `oa --update` finds that a migration is needed, it runs `openclaw doctor --fix` once automatically, but only if that run created a backup in `~/.openclaw-android/backup/pre-update/`. If the migration fails, is skipped (`OA_SKIP_AUTO_DOCTOR=1`), or the backup was skipped, the data stays as it was and the gateway may refuse to start.
+
+### Solution
+
+Stop the gateway first, then run the migration by hand and start the gateway again:
+
+```bash
+openclaw doctor --fix
+openclaw gateway
+```
+
+If something went wrong, `oa --restore` lists the `pre-update/` backup (your data as it was before the update). It restores data only, not the programs.
+
+If `oa --update` ran the migration itself and it failed, the full output of `openclaw doctor --fix` is saved in `~/.openclaw-android/doctor-fix.log`.
+
+## `Hard-link patch: not complete`, `linkat … Permission denied`, or `FICLONE: Permission denied`
+
+```
+Hard-link patch: not complete (…)
+```
+
+### Cause
+
+Android blocks hardlinks and reflink (`FICLONE`) copies in the app data area, in the app and in Termux alike; they fail with `EACCES`. OpenClaw 2026.9.8 tries a hardlink first and falls back to copying only on a "not supported" error, which `EACCES` is not, and it moves the original chat history to its archive folder with a hardlink only. OpenClaw on Android therefore patches OpenClaw (`platforms/openclaw/patches/openclaw-patch-hardlink.sh`) every time it installs or updates it. `oa --status` shows `Hard-link patch: applied (…)` when the patch is in place and `not complete (…)` when it is not, for example after OpenClaw was reinstalled without the patch.
+
+### Solution
+
+Run the update again, or reinstall the pinned OpenClaw version, which applies the patch again:
+
+```bash
+oa --update && source ~/.bashrc
+# or
+npm install -g openclaw@2026.9.8
+```
+
+Then check `oa --status`. If the line still says `not complete`, or an automatic data migration failed, read `~/.openclaw-android/doctor-fix.log` (the full output of `openclaw doctor --fix`) and report it together with the output of `oa --status`.
+
+## `oa --update` stops with "Your OpenClaw has saved chat history, and the patch … does not fit"
+
+```
+[FAIL] Your OpenClaw has saved chat history, and the patch for moving chat history does not fit OpenClaw 2026.9.8.
+```
+
+### Cause
+
+You are updating from OpenClaw 2026.7.35 and have saved chat history, which the new OpenClaw must move into its database. That move needs the hard-link patch above. Before it changes anything, `oa --update` checks that the patch fits the OpenClaw version it is about to install. If it does not fit, the update would leave OpenClaw unable to start, so it stops.
+
+### Impact
+
+Nothing was changed. Node.js and OpenClaw stay as they were (Node.js 22 and OpenClaw 7.35), and your data is untouched.
+
+### Solution
+
+Keep the current state and wait for the next release of OpenClaw on Android, then run `oa --update` again. The message can also appear when the update scripts come from an old cached copy; running `oa --update` again after a few minutes fetches a fresh copy. If it keeps stopping, report it with the full message.
+
+## The update was interrupted during a data migration
+
+### Cause
+
+The update, or the data migration inside it, ended before it finished (for example, the app was force-stopped or the device ran out of power in the middle). Your data is still there, but the migration is incomplete. Running the same `oa --update` again does not start the automatic migration again, because that run creates no new backup and the automatic migration runs only when it made the backup itself.
+
+### Solution
+
+Stop the gateway first, then finish the migration by hand and start the gateway again:
+
+```bash
+openclaw doctor --fix
+openclaw gateway
+```
+
+If something went wrong, `oa --restore` lists the `pre-update/` backup (your data as it was before the update).
+
+## `EACCES: permission denied, realpath '/data/data/<other package>/...'`, or "... point into another app's folder"
+
+```
+EACCES: permission denied, realpath '/data/data/<other package>/files/home/.openclaw/...'
+```
+
+```
+[WARN] N path(s) point into another app's folder and could not be repaired automatically
+```
+
+### Cause
+
+After data is moved between the Claw app and Termux, between a debug and a release app, or restored from a backup made on another device, OpenClaw's data can still contain the home path of the other app (`/data/data/<other package>/files/home/...`). Android answers an access to another app's folder with a permission error (EACCES), and the data migration of OpenClaw 2026.9 stops there.
+
+`oa --update` (just before the configuration check) and every `oa --restore` (a restore on the same environment included) now repair these paths: the agent database registrations and stale lease rows in OpenClaw's state database, and the agent `workspace` and `agentDir` values in `openclaw.json` (also for several agents). When something was repaired, the output says `Repaired N path(s) …` (during a restore, `Updated N path(s) …`). If a value cannot be repaired automatically, the warning above is shown.
+
+### Solution
+
+If an earlier update stopped because of this problem, run the update again, then stop the gateway and run the migration by hand:
+
+```bash
+oa --update && source ~/.bashrc
+openclaw doctor --fix
+```
+
+If the warning `Could not fix the folder paths in your OpenClaw config … Nothing was changed.` appears, edit the path values in `~/.openclaw/openclaw.json` that name the other app's folder (the agent `workspace` and `agentDir`) so that they point to a location under your current home (`$HOME`), then run `openclaw doctor --fix` again.
+
+The warning `point into another app's folder and could not be repaired automatically` refers to entries in OpenClaw's state database that do not have the expected shape. If `openclaw doctor --fix` still stops with `EACCES … realpath` afterwards, please [open an issue](https://github.com/AidanPark/openclaw-android/issues) with the output of `oa --status` and `~/.openclaw-android/doctor-fix.log`; you can return to your data from before the update with `oa --restore` (the `pre-update/` backup).
+
+Before changing anything, the repair saves copies of the files it edits (the latest 3 of each are kept):
+
+- `~/.openclaw/state/openclaw.sqlite.oa-before-repair-<timestamp>`
+- `~/.openclaw/openclaw.json.oa-before-repair-<timestamp>`
+
+## `The updater downloaded an older copy of itself (cache)`
+
+```
+[FAIL] The updater downloaded an older copy of itself (cache). Nothing was changed.
+       Run 'oa --update' again in a few minutes.
+```
+
+### Cause
+
+For a few minutes after a new release, a cache can still serve an old copy of the update script. The updater checks that its own script is the latest; when it finds an old copy, it stops before it changes Node.js or OpenClaw.
+
+### Impact
+
+Nothing was changed. Node.js, OpenClaw, and your data stay as they were.
+
+### Solution
+
+Run `oa --update` again after a few minutes, which fetches a fresh copy:
+
+```bash
+oa --update && source ~/.bashrc
+```
+
+The environment variables `OA_ALLOW_UNMARKED_NODE_CHANGE=1` and `OA_ALLOW_UNMARKED_OPENCLAW_CHANGE=1` turn this check off for developers. Do not use them in normal use.
+
+## "Not enough free storage"
+
+```
+[FAIL] Not enough free storage to ...: 2000 MB needed, ... MB available.
+       Nothing was changed.
+```
+
+### Cause
+
+A new install, and an update that changes the pinned versions, both need 2000 MB of free space. If there is less, the script stops before changing anything and shows the space needed and the space left.
+
+### Solution
+
+Free some space (for example, clear other apps' caches, delete unused files, or remove `~/.npm/_cacache`) and run the command again. Nothing was changed, so it is safe to retry.
+
+## OpenClaw's desktop automation tool does not work on Android 10 or lower
+
+### Cause
+
+OpenClaw's desktop automation tool (`@trycua/cua-driver`) may not work on Android 10 or lower (API 29 or lower), because some of the system calls it needs are blocked there.
+
+### Solution
+
+This is a known limitation of this tool on those Android versions.
 
 ## sharp build fails during `openclaw update`
 

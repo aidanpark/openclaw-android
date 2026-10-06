@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.2.0] - 2026-10-06
+
+### Changed
+
+- OpenClaw on Android now installs **Node.js 24.21.0 with OpenClaw 2026.9.8** (previously Node.js 22.23.3 with OpenClaw 2026.7.35). OpenClaw 2026.9 needs Node.js 24.16 or newer. New installs get the new pair; run `oa --update` to move an existing installation (installing a tool from the Claw app does not change Node.js or OpenClaw).
+- New installs and updates that change the pinned versions need at least **2000 MB** of free storage, and stop before changing anything when there is less, telling you how much is needed.
+
+### Fixed
+
+- OpenClaw 2026.9 could not migrate data from 2026.7 on Android: Android blocks hard links and reflink copies in app data, and OpenClaw only falls back to copying for other error codes and archives migrated chat sessions with hard links. OpenClaw on Android now patches OpenClaw each time it is installed (including `npm install -g openclaw@<pinned version>`) so that these cases copy or rename within the same storage instead. `openclaw backup create` works on Android as well. `oa --status` shows whether the patch is in place.
+- Data restored from another environment (the Claw app to Termux or back, a debug build, or another device) could point OpenClaw at the other app's folder, which Android refuses, and stop the 2026.9 migration. `oa --update` and every `oa --restore` now repair those paths first: agent database registrations and stale leases in OpenClaw's state database, and agent `workspace`/`agentDir` values in `openclaw.json` (also with several agents). Copies are kept as `openclaw.sqlite.oa-before-repair-<time>` and `openclaw.json.oa-before-repair-<time>` (the newest three). This affects anyone who restored a backup from another environment with v1.1.2 to v1.1.4, including OpenClaw 2026.7 users who saved an API key. If an earlier update already stopped here, run `oa --update` again and then `openclaw doctor --fix`.
+- OpenClaw 2026.9 no longer dies with "Bad system call" on Android. Its file-safety helper used the `openat2` system call, which Android's app sandbox kills. The Node.js wrapper now sets `FS_SAFE_TEST_NO_OPENAT2=1` so the helper keeps working without that call. (`FS_SAFE_NATIVE_MODE=off` turns the helper off entirely, but then some OpenClaw data migrations refuse to run.)
+
+### Added
+
+- An update that changes the pinned versions first saves a backup of your OpenClaw data in `~/.openclaw-android/backup/pre-update/` (the newest three are kept). After installing, it checks that OpenClaw can use your existing data; if a data migration is needed and the backup was saved, it runs `openclaw doctor --fix` once for you. If that fails, it tells you where the backup is and how to finish by hand. Set `OA_SKIP_AUTO_DOCTOR=1` to skip the automatic migration, or `OA_SKIP_PRE_UPDATE_BACKUP=1` to skip the backup.
+- An update that changes the pinned versions stops without changing anything while the OpenClaw gateway is running. Stop the gateway (in the Claw app: Ctrl+C in its terminal tab, or Settings > Apps > Claw > Force stop), then run `oa --update` again.
+- If you have chat history, an update that changes the pinned versions first checks that the Android patch fits the OpenClaw version it is about to install, and stops without changing anything if it does not. When an automatic data migration fails, the full output is saved to `~/.openclaw-android/doctor-fix.log`.
+- Right after a release, the updater may download an older cached copy of itself for a few minutes. It now notices this and stops before changing Node.js or OpenClaw ("The updater downloaded an older copy of itself (cache). Nothing was changed."); run `oa --update` again a few minutes later.
+- `oa --update` never moves Node.js or OpenClaw to an older version (for example when a cached older release is downloaded right after a release). To roll back on purpose, set both `OA_ALLOW_OPENCLAW_DOWNGRADE=1` and `OA_ALLOW_NODE_DOWNGRADE=1`. `oa --restore` brings back data only, not the program.
+- `oa --restore` warns and asks before restoring a backup made by a newer OpenClaw, and after restoring a backup from an older OpenClaw it tells you to run `openclaw doctor --fix`. Pre-update backups appear in its list.
+
+### Security
+
+- OpenClaw 2026.9 can start its own updater from the dashboard's Update button, the agent's gateway tool or `openclaw gateway call update.run`, bypassing the `openclaw` command guard. The Node.js wrapper now blocks OpenClaw's self-update as well (`openclaw update status` still works); use `oa --update`. It also sets `OPENCLAW_NO_AUTO_UPDATE=1` unless you set it.
+
+### Known limitations
+
+- OpenClaw's desktop automation driver (`@trycua/cua-driver`) uses a system call that Android 10 and older block, so that feature may not work there.
+
 ## [App v0.4.3 / Script v1.1.4] - 2026-10-05
 
 ### Added

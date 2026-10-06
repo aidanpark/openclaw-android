@@ -89,11 +89,61 @@ fi
 # os.networkInterfaces() throws EACCES) that affect native module builds and runtime.
 write_node_wrapper() {
     _WRAPPER_CHANGED=true
+    # ─── node wrapper ───
     cat > "$BIN_DIR/node.tmp" << WRAPPER
 #!${PREFIX}/bin/bash
 [ -n "\$LD_PRELOAD" ] && export _OA_ORIG_LD_PRELOAD="\$LD_PRELOAD"
 unset LD_PRELOAD
 export _OA_WRAPPER_PATH="$BIN_DIR/node"
+# OpenClaw 2026.9.x's native fs-safe helper probes the openat2 system call, which
+# Android's app sandbox answers by killing the process (SIGSYS). This switch of the
+# helper makes it use its own fallback for that one call and keep everything else
+# native (no-clobber moves, state migrations). A mode the user set stays untouched.
+# (The helper only recognises the value 1 here; to turn native off use FS_SAFE_NATIVE_MODE=off.)
+export FS_SAFE_TEST_NO_OPENAT2="\${FS_SAFE_TEST_NO_OPENAT2:-1}"
+# OpenClaw's gateway can start a self-update through this wrapper (not through the
+# openclaw command), which would replace the version pair this app was verified with.
+export OPENCLAW_NO_AUTO_UPDATE="\${OPENCLAW_NO_AUTO_UPDATE:-1}"
+_oa_found=false
+_oa_rest=()
+for _oa_arg in "\$@"; do
+    if [ "\$_oa_found" = true ]; then
+        _oa_rest+=("\$_oa_arg")
+    else
+        case "\$_oa_arg" in
+            */openclaw/openclaw.mjs|*/openclaw/dist/index.js|*/openclaw/dist/index.mjs|*/openclaw/dist/entry.js|*/openclaw/dist/entry.mjs|*/bin/openclaw) _oa_found=true ;;
+        esac
+    fi
+done
+if [ "\$_oa_found" = true ]; then
+    _oa_block=false
+    for _oa_arg in "\${_oa_rest[@]}"; do
+        [ "\$_oa_arg" = "--update" ] && _oa_block=true && break
+    done
+    if [ "\$_oa_block" = false ]; then
+        _oa_skip=false
+        _oa_next=false
+        for _oa_arg in "\${_oa_rest[@]}"; do
+            if [ "\$_oa_next" = true ]; then
+                [ "\$_oa_arg" = "status" ] && _oa_block=false
+                break
+            fi
+            if [ "\$_oa_skip" = true ]; then _oa_skip=false; continue; fi
+            case "\$_oa_arg" in
+                --profile|--container|--log-level) _oa_skip=true ;;
+                -*) ;;
+                update) _oa_block=true; _oa_next=true ;;
+                *) break ;;
+            esac
+        done
+    fi
+    if [ "\$_oa_block" = true ]; then
+        echo "[BLOCKED] OpenClaw is pinned to the version verified by OpenClaw on Android." >&2
+        echo "          Run 'oa --update' to update safely. ('openclaw update status' is allowed.)" >&2
+        exit 1
+    fi
+fi
+unset _oa_found _oa_rest _oa_arg _oa_block _oa_skip _oa_next
 _OA_COMPAT="\$HOME/.openclaw-android/lib/glibc-compat.js"
 [ -s "\$_OA_COMPAT" ] || _OA_COMPAT="\$HOME/.openclaw-android/patches/glibc-compat.js"
 if [ -f "\$_OA_COMPAT" ]; then
@@ -118,6 +168,7 @@ if [ \$_COUNT -gt 0 ] && [ \$_COUNT -lt \$# ]; then
 fi
 exec "$GLIBC_LDSO" --library-path "$PREFIX/glibc/lib" "$NODE_DIR/bin/node.real" "\$@"
 WRAPPER
+    # ─── end node wrapper ───
     chmod +x "$BIN_DIR/node.tmp"
     # --if-changed: leave an identical wrapper alone (sets _WRAPPER_CHANGED=false).
     # Never signal "unchanged" through the return code: callers must run this as a
@@ -135,6 +186,23 @@ WRAPPER
 # writes. The app overwrites patches/glibc-compat.js with its bundled copy on
 # every APK upgrade, so the node wrapper reads lib/ first and only falls back
 # to patches/ when lib/ has no copy. Safe to call repeatedly.
+# A Node.js version change has to come from a current updater or installer (they export
+# OA_UPDATE_CORE_PROTOCOL=2). Right after a release the raw update-core.sh is cached for a few
+# minutes while the tarball is already new: that older update-core would swap Node.js without
+# the checks, the data backup and the migration of the new one. Stop before anything is changed,
+# so the working Node.js stays (the old updater then stops at its own Node.js gate).
+refuse_unmarked_node_change() {
+    local installed="$1" proto
+    [ -n "$installed" ] && [ "$installed" != "$NODE_VERSION" ] || return 0
+    [ "${OA_ALLOW_UNMARKED_NODE_CHANGE:-}" != "1" ] || return 0
+    case "${OA_UPDATE_CORE_PROTOCOL:-}" in ''|*[!0-9]*) proto=0 ;; *) proto="$OA_UPDATE_CORE_PROTOCOL" ;; esac
+    if [ "$proto" -lt 2 ]; then
+        echo -e "${RED}[FAIL]${NC} The updater downloaded an older copy of itself (cache). Nothing was changed."
+        echo "       Run 'oa --update' again in a few minutes."
+        exit 1
+    fi
+}
+
 install_compat_shim() {
     local src dest
     src="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/patches/glibc-compat.js"
@@ -325,6 +393,12 @@ case "$*" in *-g*openclaw*|*--global*openclaw*|*openclaw*-g*|*openclaw*--global*
             chmod +x "$_oc_bin"
         fi
     fi
+    # The install replaced the OpenClaw package, so the Android patches (hard links are refused
+    # here) are gone: apply them again (idempotent and quiet; the result is kept in hardlink-patch.state)
+    _oc_hl="$HOME/.openclaw-android/platforms/openclaw/patches/openclaw-patch-hardlink.sh"
+    if [ "$_oc_write" = true ] && [ -f "$_oc_mjs" ] && [ -f "$_oc_hl" ]; then
+        PATH="__BIN_DIR__:$PATH" "__PREFIX__/bin/bash" "$_oc_hl" "__PREFIX__/lib/node_modules/openclaw" >/dev/null 2>&1 || true
+    fi
     ;;
 esac
 # Re-patch codex CLI wrapper after global install/update (DioNanos fork launcher fix)
@@ -387,6 +461,17 @@ NPXWRAP
 
 # The wrapper (written below) loads this copy. Install it before anything that
 # can exit early (SKIP path, a failed Node.js download).
+# Refuse an unmarked version change before touching anything (the installed version is read
+# without side effects; the check runs again below after an interrupted update was restored)
+_oa_early=""
+for _oa_c in "$BIN_DIR/node" "$NODE_DIR/bin/node"; do
+    if [ -x "$_oa_c" ] && "$_oa_c" --version &>/dev/null; then
+        _oa_early=$("$_oa_c" --version 2>/dev/null | sed 's/^v//')
+        break
+    fi
+done
+refuse_unmarked_node_change "$_oa_early"
+
 install_compat_shim
 
 # ── Recover an unfinished swap ────────────────
@@ -415,6 +500,8 @@ INSTALLED_VER=""
 if [ -n "$_NODE_CMD" ] && "$_NODE_CMD" --version &>/dev/null; then
     INSTALLED_VER=$("$_NODE_CMD" --version 2>/dev/null | sed 's/^v//')
 fi
+
+refuse_unmarked_node_change "$INSTALLED_VER"
 
 if [ "$INSTALLED_VER" = "$NODE_VERSION" ]; then
     echo -e "${GREEN}[SKIP]${NC} Node.js already installed (v${INSTALLED_VER})"

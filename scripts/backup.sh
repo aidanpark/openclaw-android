@@ -239,6 +239,7 @@ _backup_manifest_info() {
                 const posix = assets.some(a => String(a.archivePath || "").includes("/payload/posix/"));
                 console.log("LAYOUT " + (posix ? "posix" : "legacy"));
                 console.log("ROOT " + (m.archiveRoot || ""));
+                console.log("RUNTIME " + (m.runtimeVersion || ""));
                 for (const a of assets) console.log("ASSET " + [a.kind, a.sourcePath, a.archivePath].join("\t"));
             });' 2>/dev/null
         return $?
@@ -250,6 +251,19 @@ _backup_manifest_info() {
     fi
     echo "LAYOUT legacy"
     echo "ROOT $(printf '%s' "$manifest" | grep '"archiveRoot"' | sed 's/.*"archiveRoot"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+    echo "RUNTIME $(printf '%s' "$manifest" | grep '"runtimeVersion"' | sed 's/.*"runtimeVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+}
+
+# Keep the newest <keep> archives in <dir> and delete the rest. Only ever used on the
+# folders that oa itself fills (pre-restore, pre-update), never on backups you made.
+# Usage: _backup_prune_dir <dir> <keep> [<archive to keep in any case>]
+_backup_prune_dir() {
+    local dir="$1" keep="$2" spare="${3:-}" old
+    # shellcheck disable=SC2012
+    # (|| true: with no archives ls fails, and that must not end the caller)
+    ls -t "$dir"/*.tar.gz 2>/dev/null | tail -n +"$((keep + 1))" \
+        | while IFS= read -r old; do [ "$old" = "$spare" ] || rm -f "$old"; done || true
+    return 0
 }
 
 # Create one backup archive. Runs in a subshell so temporary files are always
@@ -510,7 +524,7 @@ cmd_backup() {
     echo -e "Verifying integrity…"
 
     # Try openclaw backup verify first (preferred — full manifest check)
-    if command -v openclaw &>/dev/null && openclaw backup verify "$archive_path" &>/dev/null 2>&1; then
+    if command -v openclaw &>/dev/null && timeout 300 openclaw backup verify "$archive_path" &>/dev/null 2>&1; then
         echo -e "${GREEN}[OK]${NC}   Integrity check passed (openclaw backup verify)"
     else
         # Fallback: tar -tzf structural check
@@ -566,7 +580,7 @@ cmd_restore() {
     local -a backups=()
     while IFS= read -r f; do
         backups+=("$f")
-    done < <(ls -t "$BACKUP_DIR"/*.tar.gz 2>/dev/null || true; ls -t "$BACKUP_DIR"/pre-restore/*.tar.gz 2>/dev/null || true)
+    done < <(ls -t "$BACKUP_DIR"/*.tar.gz 2>/dev/null || true; ls -t "$BACKUP_DIR"/pre-update/*.tar.gz 2>/dev/null || true; ls -t "$BACKUP_DIR"/pre-restore/*.tar.gz 2>/dev/null || true)
 
     if [ ${#backups[@]} -eq 0 ]; then
         echo -e "${RED}[FAIL]${NC} No backup files found in $BACKUP_DIR"
@@ -628,7 +642,7 @@ cmd_restore() {
     fi
 
     # Read the manifest: archive layout, archive root and assets
-    local info layout="" archive_root=""
+    local info layout="" archive_root="" backup_runtime=""
     local -a asset_kinds=() asset_sources=() asset_paths=()
     info=$(_backup_manifest_info "$selected") || {
         echo -e "${RED}[FAIL]${NC} Could not read the backup manifest (this backup needs node to be read)."
@@ -638,6 +652,7 @@ cmd_restore() {
         case "$line" in
             "LAYOUT "*) layout="${line#LAYOUT }" ;;
             "ROOT "*) archive_root="${line#ROOT }" ;;
+            "RUNTIME "*) backup_runtime="${line#RUNTIME }" ;;
             "ASSET "*)
                 IFS=$'\t' read -r _k _s _p <<< "${line#ASSET }"
                 asset_kinds+=("$_k")
@@ -661,6 +676,25 @@ cmd_restore() {
         echo -e "${RED}[FAIL]${NC} The OpenClaw gateway appears to be running."
         echo -e "       Stop it first (Ctrl+C in its terminal, or: pkill -f 'openclaw.*gateway'), then run ${BOLD}oa --restore${NC} again."
         exit 1
+    fi
+
+    # A backup made with another OpenClaw version than the installed one
+    local installed_runtime restore_note=""
+    installed_runtime=$(_backup_runtime_version)
+    if [[ "$backup_runtime" =~ ^[0-9]+\.[0-9]+ ]] && [[ "$installed_runtime" =~ ^[0-9]+\.[0-9]+ ]] \
+        && declare -f oa_version_gt >/dev/null; then
+        if oa_version_gt "$backup_runtime" "$installed_runtime"; then
+            echo -e "${YELLOW}[WARN]${NC} This backup was made with a newer OpenClaw ($backup_runtime) than the one installed ($installed_runtime)."
+            echo "       The installed version may not be able to read its data, and this restore cannot be undone by"
+            echo "       reinstalling the program. Normally only restore backups made by the same or an older version."
+            if ! _ask_yn_default_no "Restore it anyway?"; then
+                echo -e "Restore cancelled."
+                exit 0
+            fi
+            echo ""
+        elif oa_version_gt "$installed_runtime" "$backup_runtime"; then
+            restore_note="This backup was made with an older OpenClaw ($backup_runtime). If the gateway says a state migration is required, run: openclaw doctor --fix"
+        fi
     fi
 
     # ── Warning ──
@@ -718,7 +752,7 @@ cmd_restore() {
         # ~/.openclaw (the backup may come from a device with another home path);
         # a workspace kept outside it goes back to where it was if that place
         # exists here, otherwise into ~/.openclaw/workspace.
-        local i restored=0 state_moved=false
+        local i restored=0 state_moved=false state_restored=false repaired repair_left repair_fn
         for i in "${!asset_kinds[@]}"; do
             local kind="${asset_kinds[$i]}" src="${asset_sources[$i]}" apath="${asset_paths[$i]}" target=""
             case "$kind" in
@@ -758,10 +792,35 @@ cmd_restore() {
                 _restore_rewrite_paths "$restore_root" "$src" "$restore_root"
                 state_moved=true
             fi
+            [ "$kind" = "state" ] && state_restored=true
         done
         if [ "$restored" -eq 0 ]; then
             echo -e "${RED}[FAIL]${NC} Nothing to restore in this backup."
             exit 1
+        fi
+
+        if [ "$state_restored" = true ] && [ -n "$OA_NODE" ] && declare -f oa_repair_state_paths >/dev/null && declare -f oa_repair_config_paths >/dev/null; then
+            # Paths of another Android app in the restored data (a backup can carry those of a third
+            # environment too, so this does not depend on where the backup came from): OpenClaw 9.x stops
+            # on them with EACCES
+            for repair_fn in oa_repair_state_paths oa_repair_config_paths; do
+                read -r repaired repair_left _ <<< "$("$repair_fn" "$restore_root" "$OA_NODE")"
+                case "$repaired" in
+                    error:*)
+                        if [ "$repair_fn" = oa_repair_config_paths ]; then
+                            echo -e "${YELLOW}[WARN]${NC} Could not fix the folder paths in the restored config. Nothing was changed."
+                            echo "       Check $restore_root/openclaw.json: the workspace and agentDir values under agents may point to another app's folder."
+                        else
+                            echo -e "${YELLOW}[WARN]${NC} Could not check the other-app paths in the restored state."
+                        fi
+                        ;;
+                    0) ;;
+                    *) echo -e "${GREEN}[OK]${NC}   Updated $repaired path(s) in the restored data that pointed to another app or device" ;;
+                esac
+                if [ "${repair_left:-0}" -gt 0 ] 2>/dev/null; then
+                    echo -e "${YELLOW}[WARN]${NC} $repair_left path(s) point into another app's folder and were left as they are."
+                fi
+            done
         fi
 
         if [ "$state_moved" = true ] && [ -f "$restore_root/openclaw.json" ]; then
@@ -819,15 +878,13 @@ cmd_restore() {
 
     # Keep the newest five safety backups (never the one just restored); backups you
     # made yourself are never touched.
-    # shellcheck disable=SC2012
-    # (|| true: with no safety backups ls fails, and that must not end the restore)
-    ls -t "$BACKUP_DIR"/pre-restore/*.tar.gz 2>/dev/null | tail -n +6 \
-        | while IFS= read -r old; do [ "$old" = "$selected" ] || rm -f "$old"; done || true
+    _backup_prune_dir "$BACKUP_DIR/pre-restore" 5 "$selected"
 
     echo ""
     echo -e "  Restored to: $restore_root"
     echo ""
     echo -e "${YELLOW}[NOTE]${NC} Files created after this backup were kept."
+    [ -z "$restore_note" ] || echo -e "${YELLOW}[NOTE]${NC} $restore_note"
     echo -e "${YELLOW}[NOTE]${NC} Restart the OpenClaw gateway for changes to take effect."
     echo ""
 }

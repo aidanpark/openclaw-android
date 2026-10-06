@@ -13,6 +13,20 @@ else
     echo -e "  OpenClaw:    ${RED}not installed${NC}"
 fi
 
+# The hard-link patches (OpenClaw copies/renames instead of linking): look at the files themselves
+HL_SCRIPT="$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh"
+if [ -f "$HL_SCRIPT" ] && command -v openclaw &>/dev/null; then
+    hl_out=$(bash "$HL_SCRIPT" --check 2>&1 | sed 's/\x1b\[[0-9;]*m//g') || true
+    hl_sum=$(printf '%s\n' "$hl_out" | grep -E 'todo=|patched=' | tail -1 | sed 's/.*: //')
+    if printf '%s' "$hl_sum" | grep -q 'todo=0 already=[0-9]* problems=0'; then
+        echo "  Hard-link patch: applied (${hl_sum})"
+    else
+        echo -e "  Hard-link patch: ${YELLOW}not complete${NC} (${hl_sum:-unknown}) — run: oa --update"
+    fi
+else
+    echo -e "  Hard-link patch: ${YELLOW}unknown${NC} (script or openclaw missing)"
+fi
+
 if command -v node &>/dev/null; then
     echo "  Node.js:     $(node -v 2>/dev/null)"
 else

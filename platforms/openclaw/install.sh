@@ -18,7 +18,7 @@ if ! [[ "${PLATFORM_NPM_PACKAGE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 OC_PIN="$PLATFORM_NPM_PACKAGE@$PLATFORM_NPM_PACKAGE_VERSION"
 
-python -c "import yaml" 2>/dev/null || pip install pyyaml -q || true
+python -c "import yaml" 2>/dev/null || { command -v pip >/dev/null 2>&1 && pip install pyyaml -q; } || true
 
 mkdir -p "$PROJECT_DIR/patches"
 cp "$SCRIPT_DIR/../../patches/glibc-compat.js" "$PROJECT_DIR/patches/glibc-compat.js"

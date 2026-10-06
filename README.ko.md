@@ -70,7 +70,7 @@
 ## 요구사항
 
 - Android 7.0 이상 (Android 10 이상 권장)
-- 약 1GB 이상의 여유 저장공간
+- 약 2GB(2000MB) 이상의 여유 저장공간 (새 설치 전, 그리고 고정 버전이 바뀌는 업데이트 전에 확인합니다)
 - Wi-Fi 또는 모바일 데이터 연결
 
 ## 동작 원리
@@ -199,7 +199,7 @@ node -p "require(process.env.HOME + '/.openclaw/openclaw.json').gateway.auth.tok
 | `oa --uninstall` | OpenClaw on Android 제거 |
 | `oa --backup` | OpenClaw 데이터 전체 백업 생성 |
 | `oa --restore` | 백업에서 복구 (`--force-no-safety`: 안전 백업을 저장하지 못해도 진행) |
-| `oa --status` | 설치 상태 및 모든 설치된 컴포넌트 정보 표시 |
+| `oa --status` | 설치 상태 및 모든 설치된 컴포넌트 정보 표시 (하드링크 패치 상태 포함) |
 | `oa --version` | 버전 표시 |
 | `oa --help` | 사용 가능한 옵션 표시 |
 
@@ -211,7 +211,7 @@ oa --update && source ~/.bashrc
 
 이 명령어 하나로 설치된 모든 컴포넌트를 한번에 업데이트합니다:
 
-- **OpenClaw** — 고정(pinned)된 검증 버전으로 유지되는 코어 패키지 (현재 2026.7.35 — 항상 최신 릴리스는 아님)
+- **OpenClaw** — 고정(pinned)된 검증 버전으로 유지되는 코어 패키지 (현재 2026.9.8 — 항상 최신 릴리스는 아님)
 - **code-server** — 브라우저 IDE
 - **OpenCode** — AI 코딩 어시스턴트
 - **AI CLI 도구** — Claude Code, Gemini CLI, Codex CLI (Termux)
@@ -221,7 +221,18 @@ oa --update && source ~/.bashrc
 
 업데이트 중에 게이트웨이가 실행 중이었다면, 업데이트 뒤 다시 시작하세요(멈춘 뒤 `openclaw gateway` 를 다시 실행하거나 앱을 다시 시작) — 그래야 업데이트된 런타임을 사용합니다.
 
-**참고**: `openclaw update`(및 `openclaw --update`)는 의도적으로 차단되어 있습니다 — 이 프로젝트가 검증한 버전에 OpenClaw을 고정하는 가드가 설치되어 있기 때문입니다. 게이트웨이의 "update available" 알림은 꺼져 있습니다(`update.checkOnStart=false`). 직접 다시 켠 경우 `update available … Run: openclaw update` 같은 메시지가 출력될 수 있지만 해당 명령어는 차단되므로 대신 `oa --update`를 사용하세요. `openclaw update status`(읽기 전용)는 계속 동작합니다.
+**고정 버전이 바뀌는 업데이트**(예: Script v1.2.0 에서 Node.js 24.21.0 과 OpenClaw 2026.9.8 로 바뀌는 경우)에서 `oa --update` 는 다음 안전장치를 추가로 적용합니다:
+
+- 여유 공간 2000MB 가 필요합니다. 부족하면 아무것도 바꾸기 전에 멈추고 필요한 양과 남은 양을 알려 줍니다.
+- OpenClaw 게이트웨이가 실행 중이면 아무것도 바꾸지 않고 멈춥니다. 게이트웨이를 멈추고(Ctrl+C) `oa --update` 를 다시 실행하세요.
+- 먼저 `~/.openclaw-android/backup/pre-update/` 에 데이터 백업을 만듭니다(최신 3개만 보관).
+- 설치 뒤 OpenClaw 설정과 데이터 상태를 확인합니다. 데이터 이전이 필요하고 이번 실행에서 백업을 만들었을 때만 `openclaw doctor --fix` 를 한 번 자동으로 실행합니다(최대 2분). 실패하면 백업 위치와 수동 방법(게이트웨이를 멈추고 `openclaw doctor --fix` 실행)을 안내하고 실패로 끝납니다.
+
+자동 이전을 끄려면 `OA_SKIP_AUTO_DOCTOR=1`, 자동 백업을 건너뛰려면 `OA_SKIP_PRE_UPDATE_BACKUP=1` 을 설정하세요.
+
+`oa --update` 는 Node.js 나 OpenClaw 를 더 낮은 버전으로 내리지 않습니다(예: 배포 직후 옛 파일이 내려온 경우). 의도적으로 내리려면 `OA_ALLOW_OPENCLAW_DOWNGRADE=1` 과 `OA_ALLOW_NODE_DOWNGRADE=1` 을 둘 다 설정해야 합니다. `oa --restore` 는 데이터만 되돌리고 프로그램은 되돌리지 않습니다.
+
+**참고**: `openclaw update`(및 `openclaw --update`)는 의도적으로 차단되어 있습니다 — 이 프로젝트가 검증한 버전에 OpenClaw을 고정하는 가드가 설치되어 있기 때문입니다. 게이트웨이의 "update available" 알림은 꺼져 있습니다(`update.checkOnStart=false`). 직접 다시 켠 경우 `update available … Run: openclaw update` 같은 메시지가 출력될 수 있지만 해당 명령어는 차단되므로 대신 `oa --update`를 사용하세요. `openclaw update status`(읽기 전용)는 계속 동작합니다. OpenClaw 2026.9.8 은 대시보드의 Update 버튼, 에이전트의 gateway 도구, `openclaw gateway call update.run` 으로 자체 업데이트를 시작할 수 있습니다. 이 경로는 `openclaw` 명령 가드를 거치지 않으므로 Node.js 래퍼가 OpenClaw 의 자체 업데이트도 차단합니다(`[BLOCKED]`). OpenClaw 의 메시지가 `openclaw update --yes` 나 `openclaw update repair` 를 권하는 경우가 있으나 이 명령도 차단되어 있으므로 `oa --update` 를 사용하세요.
 
 > `oa` 명령어가 없는 경우 (이전 설치 사용자), curl로 실행:
 > ```bash
@@ -230,7 +241,7 @@ oa --update && source ~/.bashrc
 
 ## 백업 및 복구
 
-OpenClaw의 내장 백업 명령어(`openclaw backup create`)는 Android의 앱 전용 저장소에서 하드링크(`fs.link()`) 생성이 제한되어 실패하고, 대화 기록도 담지 않습니다. `oa --backup` 명령어는 두 문제를 모두 해결합니다. OpenClaw 데이터 폴더(`~/.openclaw`) 전체를 `tar`로 묶고, SQLite 데이터베이스는 일관된 스냅샷으로 담으며, `openclaw backup verify`가 인정하는 아카이브를 생성합니다.
+OpenClaw의 내장 백업 명령어(`openclaw backup create`)는 Android의 앱 전용 저장소에서 막히는 하드링크에 의존합니다. OpenClaw on Android 가 적용하는 하드링크 패치로 복사로 대체할 수 있습니다(아래의 하드링크 패치 문단 참고). `oa --backup` 명령어는 OpenClaw 데이터 폴더(`~/.openclaw`) 전체를 `tar`로 묶고, SQLite 데이터베이스는 일관된 스냅샷으로 담습니다. 이어서 OpenClaw 가 받아들이면 `openclaw backup verify`로, 그렇지 않으면 `tar` 구조 검사로 아카이브를 확인합니다(OpenClaw 2026.9 는 절대 경로 `plugin-skills` 링크가 든 아카이브를 거부하지만 복원은 정상입니다).
 
 백업 생성:
 ```bash
@@ -242,11 +253,15 @@ oa --backup
 >
 > **Claw 앱:** `oa --backup`이 `backup.sh not found`라고 나오면(이 기능이 들어오기 전에 설치한 앱) `oa --update`를 한 번 실행하세요.
 
+고정 버전이 바뀌는 업데이트 전에는 `oa --update` 가 `~/.openclaw-android/backup/pre-update/` 에 백업을 자동으로 만듭니다(최신 3개 보관). [업데이트](#업데이트)를 참고하세요.
+
 백업에서 복구:
 ```bash
 oa --restore
 ```
-이 명령어를 실행하면 기본 백업 폴더에 있는 사용 가능한 백업 목록이 표시됩니다. 복구하려는 백업의 번호를 선택하면 됩니다. 도구가 백업 매니페스트에서 플랫폼을 자동으로 감지하여 이 기기의 `~/.openclaw/` 경로로 복구합니다(다른 기기에서 만든 백업도 복구할 수 있습니다). 먼저 OpenClaw 게이트웨이를 중지하세요. 게이트웨이가 실행 중이면 복구를 거부합니다. 덮어쓰기 전에 현재 데이터를 `~/.openclaw-android/backup/pre-restore/`에 안전 백업으로 저장합니다. 백업 이후에 만든 파일은 그대로 남습니다. 실행 전 확인 절차가 진행됩니다. 안전 백업을 저장하지 못하면(예: 저장 공간 부족) 아무것도 바꾸지 않고 복구를 중단합니다. 공간을 확보한 뒤 다시 시도하거나, 안전 백업 없이 복구하려면 `oa --restore --force-no-safety`를 실행하세요.
+이 명령어를 실행하면 기본 백업 폴더에 있는 사용 가능한 백업 목록이 표시되며, `pre-update/` 백업도 포함됩니다. 복구하려는 백업의 번호를 선택하면 됩니다. 도구가 백업 매니페스트에서 플랫폼을 자동으로 감지하여 이 기기의 `~/.openclaw/` 경로로 복구합니다(다른 기기에서 만든 백업도 복구할 수 있습니다). 먼저 OpenClaw 게이트웨이를 중지하세요. 게이트웨이가 실행 중이면 복구를 거부합니다. 덮어쓰기 전에 현재 데이터를 `~/.openclaw-android/backup/pre-restore/`에 안전 백업으로 저장합니다. 백업 이후에 만든 파일은 그대로 남습니다. 실행 전 확인 절차가 진행됩니다. 백업에 기록된 OpenClaw 버전이 설치된 버전보다 새로우면 경고하고 확인을 받습니다(기본값은 No). 더 옛 버전의 백업이면 복구 뒤 `openclaw doctor --fix` 를 실행하라고 안내합니다. `oa --restore` 는 데이터만 되돌리고 프로그램은 되돌리지 않습니다. 안전 백업을 저장하지 못하면(예: 저장 공간 부족) 아무것도 바꾸지 않고 복구를 중단합니다. 공간을 확보한 뒤 다시 시도하거나, 안전 백업 없이 복구하려면 `oa --restore --force-no-safety`를 실행하세요.
+
+**다른 환경에서 옮겨 온 데이터.** Claw 앱과 Termux 사이, 디버그 앱과 릴리스 앱 사이를 옮기거나 다른 기기의 백업을 복구하면, OpenClaw 데이터 안에 다른 앱의 홈 경로(`/data/data/<다른 패키지>/files/home/...`)가 남을 수 있습니다. Android 는 다른 앱의 폴더에 접근하면 권한 오류(EACCES)를 내며, OpenClaw 2026.9 의 데이터 이전은 이 경로에서 멈춥니다. `oa --update`(설정 확인 직전)와 모든 `oa --restore`(같은 환경 복구 포함)는 이제 OpenClaw 상태 데이터베이스의 에이전트 데이터베이스 등록 행과 오래된 lease 행, 그리고 `openclaw.json` 의 에이전트 `workspace`·`agentDir` 값에서 이런 경로를 고칩니다. 고치기 전에 `~/.openclaw/state/openclaw.sqlite.oa-before-repair-<날짜시각>` 과 `~/.openclaw/openclaw.json.oa-before-repair-<날짜시각>` 이라는 사본을 남깁니다(최신 3개 보관). 자동으로 고칠 수 없는 값이 있으면 경고가 나오며, 그 경우 `openclaw.json` 의 해당 경로를 현재 홈(`$HOME`) 아래로 직접 고치세요. [문제 해결 문서](docs/troubleshooting.ko.md)를 참고하세요.
 
 ## 문제 해결
 
@@ -273,7 +288,7 @@ OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통
 
 실험 목적이라면 TinyLlama 1.1B (Q4, ~670MB) 같은 소형 모델은 폰에서 실행할 수 있습니다. 실제 사용에는 클라우드 LLM 제공자를 권장합니다.
 
-> **왜 `--ignore-scripts`인가?** 설치 스크립트는 `npm install -g openclaw@2026.7.35 --ignore-scripts`(고정된 버전)를 사용합니다. node-llama-cpp의 postinstall 스크립트가 cmake로 llama.cpp 소스를 빌드하려고 시도하는데, 폰에서 30분 이상 소요되며 툴체인 호환성 문제로 실패합니다. 프리빌트 바이너리는 이 빌드 과정 없이 작동하므로, postinstall을 안전하게 건너뜁니다.
+> **왜 `--ignore-scripts`인가?** 설치 스크립트는 `npm install -g openclaw@2026.9.8 --ignore-scripts`(고정된 버전)를 사용합니다. node-llama-cpp의 postinstall 스크립트가 cmake로 llama.cpp 소스를 빌드하려고 시도하는데, 폰에서 30분 이상 소요되며 툴체인 호환성 문제로 실패합니다. 프리빌트 바이너리는 이 빌드 과정 없이 작동하므로, postinstall을 안전하게 건너뜁니다.
 
 <details>
 <summary>개발자용 기술 문서</summary>
@@ -296,7 +311,7 @@ OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통
 |----------|------|-----------|
 | [pacman](https://wiki.archlinux.org/title/Pacman) | glibc 패키지 관리자 | `pkg install` |
 | [glibc-runner](https://github.com/termux-pacman/glibc-packages) | glibc 동적 링커 — 표준 Linux 바이너리를 Android에서 실행 | `pacman -Sy` |
-| [Node.js](https://nodejs.org/) 22.23.3 (linux-arm64) | OpenClaw용 JavaScript 런타임, sha256로 검증되는 고정 버전 | nodejs.org에서 직접 다운로드 |
+| [Node.js](https://nodejs.org/) 24.21.0 (linux-arm64) | OpenClaw용 JavaScript 런타임, sha256로 검증되는 고정 버전 | nodejs.org에서 직접 다운로드 |
 | python | 네이티브 C/C++ 애드온 빌드 스크립트 (node-gyp) | `pkg install` |
 | make | 네이티브 모듈 Makefile 실행 | `pkg install` |
 | cmake | CMake 기반 네이티브 모듈 빌드 | `pkg install` |
@@ -307,7 +322,7 @@ OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통
 
 | 컴포넌트 | 역할 | 설치 방식 |
 |----------|------|-----------|
-| [OpenClaw](https://github.com/openclaw/openclaw) | AI 에이전트 플랫폼 (핵심), 검증된 버전으로 고정 (2026.7.35) | `npm install -g` |
+| [OpenClaw](https://github.com/openclaw/openclaw) | AI 에이전트 플랫폼 (핵심), 검증된 버전으로 고정 (2026.9.8) | `npm install -g` |
 | [clawdhub](https://github.com/AidanPark/clawdhub) | OpenClaw 스킬 매니저 | `npm install -g` |
 | [PyYAML](https://pyyaml.org/) | `.skill` 패키징용 YAML 파서 | `pip install` |
 
@@ -321,7 +336,7 @@ OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통
 | [ttyd](https://github.com/tsl0922/ttyd) | 웹 터미널 — 브라우저에서 Termux 접속 | `pkg install` |
 | [dufs](https://github.com/sigoden/dufs) | HTTP/WebDAV 파일 서버 | `pkg install` |
 | [android-tools](https://developer.android.com/tools/adb) | Phantom Process Killer 비활성화용 ADB | `pkg install` |
-| [code-server](https://github.com/coder/code-server) | 브라우저 기반 VS Code IDE, 4.117.0으로 고정 (그 이후 버전은 Node.js 24 필요) | GitHub에서 직접 다운로드 |
+| [code-server](https://github.com/coder/code-server) | 브라우저 기반 VS Code IDE, 4.117.0으로 고정 (이 환경에서 동작을 확인한 버전) | GitHub에서 직접 다운로드 |
 | [OpenCode](https://opencode.ai/) | AI 코딩 어시스턴트 (TUI). [Bun](https://bun.sh/)과 [proot](https://proot-me.github.io/)을 의존성으로 자동 설치 | `bun install -g` |
 | [Chromium](https://www.chromium.org/) | OpenClaw 브라우저 자동화 (~400MB) | 전용 설치 스크립트 |
 | [Playwright](https://playwright.dev/) | 브라우저 자동화 라이브러리 (Chromium 필요). `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 자동 설정 | 전용 설치 스크립트 |
@@ -376,6 +391,7 @@ openclaw-android/
 │   │   └── patches/            # 플랫폼 전용 패치
 │   │       ├── openclaw-apply-patches.sh
 │   │       ├── openclaw-patch-paths.sh
+│   │       ├── openclaw-patch-hardlink.sh  # Android 하드링크/reflink 대체 처리 (OpenClaw 용)
 │   │       └── openclaw-build-sharp.sh
 ├── tests/
 │   └── verify-install.sh       # 설치 후 검증 (오케스트레이터 + 플랫폼)
@@ -439,9 +455,9 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 
 - **Termux 감지**: `$PREFIX` 환경변수 존재 여부로 Termux 환경인지 확인. 없으면 즉시 종료
 - **아키텍처 확인**: `uname -m`으로 CPU 아키텍처 확인 (aarch64 권장, armv7l 지원, x86_64은 에뮬레이터로 판단)
-- **디스크 여유 공간**: `$PREFIX` 파티션에 최소 1000MB 이상 여유 공간이 있는지 확인. 부족하면 오류
+- **디스크 여유 공간**: `$PREFIX` 파티션에 최소 2000MB 이상 여유 공간이 있는지 확인. 부족하면 필요한 양과 남은 양을 표시하고 오류
 - **기존 설치 감지**: `openclaw` 명령어가 이미 존재하면 현재 버전을 표시하고 재설치/업데이트임을 안내
-- **Node.js 사전 확인**: 이미 설치된 Node.js가 있으면 버전을 표시하고, 22 미만이면 업그레이드 예고
+- **Node.js 사전 확인**: 이미 설치된 Node.js가 있으면 버전을 표시하고, 24 미만이면 업그레이드 예고
 - **Phantom Process Killer** (Android 12+): Phantom Process Killer에 대한 안내 메시지와 [비활성화 가이드](docs/disable-phantom-process-killer.ko.md) 링크를 표시
 
 ### [2/8] 플랫폼 선택
@@ -480,10 +496,16 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 | 플래그 | 스크립트 | 설치 내용 |
 |--------|----------|----------|
 | `PLATFORM_NEEDS_GLIBC=true` | `scripts/install-glibc.sh` | pacman, glibc-runner (`ld-linux-aarch64.so.1` 제공) |
-| `PLATFORM_NEEDS_NODEJS=true` | `scripts/install-nodejs.sh` | Node.js 22.23.3 linux-arm64 (sha256 검증), grun 스타일 래퍼 스크립트 |
+| `PLATFORM_NEEDS_NODEJS=true` | `scripts/install-nodejs.sh` | Node.js 24.21.0 linux-arm64 (sha256 검증), grun 스타일 래퍼 스크립트 |
 | `PLATFORM_NEEDS_BUILD_TOOLS=true` | `scripts/install-build-tools.sh` | python, make, cmake, clang, binutils |
 
 각 스크립트는 사전 체크와 멱등성(이미 설치된 경우 스킵)을 갖춘 독립 실행형입니다.
+
+**Node.js 래퍼의 기본값:** OpenClaw 2026.9.x 는 Node.js 24.16 이상을 요구합니다. OpenClaw 의 파일 안전 모듈(`@openclaw/fs-safe`)은 네이티브 도우미에서 `openat2` 시스템 콜을 사용하는데, Android 의 앱 seccomp 정책이 이 호출을 SIGSYS(Bad system call)로 종료시킵니다. 그래서 래퍼는 기본으로 `FS_SAFE_TEST_NO_OPENAT2=1` 을 설정하여, 네이티브 도우미는 유지하되 `openat2` 를 사용하지 않게 합니다(값이 정확히 `1` 이어야 인식됩니다). `FS_SAFE_NATIVE_MODE=off` 를 설정하면 네이티브 도우미 자체를 끌 수 있으나, 그러면 OpenClaw 의 일부 데이터 이전이 거부될 수 있습니다. 래퍼는 `OPENCLAW_NO_AUTO_UPDATE=1` 도 기본으로 설정하고 OpenClaw 의 자체 업데이트를 차단합니다([업데이트](#업데이트) 참고).
+
+**하드링크 패치:** Android 는 앱 데이터 영역에서 하드링크와 reflink(`FICLONE`) 복사를 막습니다(앱과 Termux 모두, 오류 `EACCES`). OpenClaw 2026.9.8 은 하드링크를 먼저 시도하고 「지원 안 함」 오류일 때만 복사로 넘어가는데, `EACCES` 는 지원 안 함으로 보지 않습니다. 또 대화 기록을 이전한 뒤 원본을 보관 폴더로 옮길 때는 하드링크만 사용합니다. 그대로 두면 7.35 에서 올라온 사용자의 데이터 이전이 실패합니다. OpenClaw on Android 는 OpenClaw 를 설치하거나 업데이트할 때마다(앱 설치, Termux 설치, `oa --update`, 그리고 `npm install -g openclaw@<고정 버전>` 으로 다시 설치할 때) `platforms/openclaw/patches/openclaw-patch-hardlink.sh` 로 OpenClaw 의 해당 부분을 고칩니다. `EACCES` 를 복사로 넘어가는 경우에 포함하고, 보관 폴더로 옮길 때는 하드링크가 거부되면 같은 파일 시스템 안의 이름 바꾸기(rename)로 처리합니다. 이에 따라 `openclaw backup create` 도 하드링크 대신 복사를 사용할 수 있습니다. `oa --status` 에 `Hard-link patch: applied (…)` 또는 `not complete (…)` 줄이 표시됩니다. 대화 기록이 있는 7.35 사용자가 고정 버전이 바뀌는 업데이트를 하면, 설치할 OpenClaw 에 이 패치가 맞는지 먼저 확인하고 맞지 않으면 아무것도 바꾸지 않고 멈춥니다([문제 해결](docs/troubleshooting.ko.md) 참고).
+
+**알려진 한계:** OpenClaw 의 데스크톱 자동화 도구(`@trycua/cua-driver`)는 Android 10 이하(API 29 이하)에서 필요한 시스템 콜 일부가 막혀 동작하지 않을 수 있습니다.
 
 ### [6/8] 플랫폼 패키지 설치 (L2) — `platforms/<platform>/install.sh`
 
@@ -493,7 +515,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 2. pip으로 PyYAML 설치 (`.skill` 패키징용)
 3. `glibc-compat.js`를 `~/.openclaw-android/patches/`에 복사 (Node.js 래퍼는 Node.js 설치 때 함께 들어가는 `~/.openclaw-android/lib/` 사본을 읽습니다 — 앱이 덮어쓰지 않는 위치)
 4. `systemctl` 스텅을 `$PREFIX/bin/`에 설치
-5. `npm install -g openclaw@2026.7.35 --ignore-scripts` 실행 (`config.env`에 고정된 버전)
+5. `npm install -g openclaw@2026.9.8 --ignore-scripts` 실행 (`config.env`에 고정된 버전)
 6. `--ignore-scripts`로 건너뛴 OpenClaw 자체 postinstall 스크립트(`postinstall-bundled-plugins.mjs`) 실행
 7. `openclaw-apply-patches.sh`로 플랫폼별 패치 적용
 8. `openclaw update` 가드(`openclaw-shim.sh`) 설치 — 고정 버전이 유지되도록 함
@@ -585,15 +607,16 @@ GitHub에서 전체 저장소 tarball을 다운로드하고 임시 디렉토리�
 
 ### [3/5] 핵심 인프라 업데이트
 
-업데이터, 언인스톨러, CLI가 사용하는 공유 파일을 갱신합니다:
+업데이터, 언인스톨러, CLI가 사용하는 공유 파일을 갱신합니다. 이번 업데이트로 고정된 Node.js 나 OpenClaw 의 버전이 바뀌면, 무엇이든 바꾸기 전에 세 가지 안전장치가 먼저 실행됩니다. 여유 공간 확인(2000MB), OpenClaw 게이트웨이가 실행 중이 아닌지 확인, `~/.openclaw-android/backup/pre-update/` 에 데이터 백업([업데이트](#업데이트) 참고)입니다.
 
+- 업데이트 스크립트 자신이 최신인지 확인합니다. 옛 캐시 사본이 내려왔으면(릴리스 직후 몇 분 동안 가능) 아무것도 바꾸지 않고 멈춥니다. 몇 분 뒤 `oa --update` 를 다시 실행하세요
 - 최신 플랫폼 디렉토리를 `~/.openclaw-android/platforms/`에 복사
 - `~/.openclaw-android/scripts/`의 `lib.sh`와 `setup-env.sh` 갱신
 - 패치 파일 갱신 (`glibc-compat.js`, `argon2-stub.js`, `spawn.h`, `systemctl`)
 - `$PREFIX/bin/`의 `oa` CLI와 `oaupdate` 래퍼 갱신
 - `~/.openclaw-android/`의 `uninstall.sh` 갱신
 - Bionic 아키텍처가 감지되면 자동 glibc 마이그레이션 수행
-- Node.js를 고정 버전으로 수렴 (sha256 검증 다운로드, 원자적 교체 — 실패 시 이전 설치 복원)
+- Node.js를 고정 버전으로 수렴 (sha256 검증 다운로드, 원자적 교체 — 실패 시 이전 설치 복원). `OA_ALLOW_NODE_DOWNGRADE=1` 을 설정하지 않으면 Node.js 를 더 낮은 버전으로 내리지 않음
 - `setup-env.sh`를 실행하여 `.bashrc` 환경변수 블록 갱신
 - **Node 게이트**: 이후에도 Node.js가 고정 버전이 아니면 여기서 업데이트를 중단합니다 — OpenClaw([4/5])는 건드리지 않습니다. `oa --update`를 다시 실행하세요
 
@@ -601,11 +624,13 @@ GitHub에서 전체 저장소 tarball을 다운로드하고 임시 디렉토리�
 
 `platforms/<platform>/update.sh`에 위임합니다. OpenClaw의 경우:
 
+- 고정 버전이 바뀐 경우: 설치 뒤 OpenClaw 설정과 데이터 상태를 확인하고, 데이터 이전이 필요하며 이번 실행에서 백업을 만들었을 때 `openclaw doctor --fix` 를 한 번 실행 ([업데이트](#업데이트) 참고)
+- 설치 뒤 설정 확인 직전에 다른 앱의 폴더를 가리키는 경로를 고침 ([백업 및 복구](#백업-및-복구) 참고)
 - `binutils` 설치 (네이티브 모듈 빌드용)
 - 안전장치로 Node.js 고정 버전을 재확인 (방어적 이중 확인 — [3/5]에서 이미 게이트를 거침)
-- `openclaw`을 고정 버전으로 수렴 — 설치된 버전이 다르면 방향에 상관없이 고정 버전을 설치 (더 최신 버전이 설치되어 있어도 고정 버전으로 되돌림)
+- `openclaw`을 고정 버전으로 수렴 — 설치된 버전이 더 낮으면 고정 버전을 설치. `OA_ALLOW_OPENCLAW_DOWNGRADE=1` 을 설정하지 않으면 OpenClaw 를 더 낮은 버전으로 내리지 않음
 - 플랫폼별 패치 재적용
-- `openclaw update` 가드(`openclaw-shim.sh`) 갱신 — `openclaw update`/`--update`가 계속 차단되도록 유지
+- `openclaw update` 가드(`openclaw-shim.sh`) 갱신 — `openclaw update`/`--update`가 계속 차단되도록 유지 (Node.js 래퍼는 OpenClaw 의 자체 업데이트 경로도 차단)
 - `clawdhub` (스킬 매니저) 업데이트/설치
 - 필요 시 clawdhub용 `undici` 설치 (Node.js v24+)
 - 게이트웨이의 "update available" 알림 끄기(`update.checkOnStart=false`) — 직접 설정한 값이 없을 때만

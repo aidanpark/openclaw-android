@@ -223,7 +223,7 @@ openclaw gateway
 
 ### 원인
 
-이 프로젝트는 검증되고 테스트된 OpenClaw + Node.js 버전 조합을 고정(pin)합니다(`platforms/openclaw/config.env` 참고). `openclaw update`(및 `openclaw --update`)는 최신 npm 릴리스를 설치하는데, 이는 고정된 버전보다 더 최신 Node.js를 필요로 하여 실행이 안 될 수 있습니다 — 그래서 `$PREFIX/bin/openclaw`에 설치된 가드가 두 명령을 모두 차단합니다. 게이트웨이 자체의 자동 업데이트 기능도 비활성화되어 있지만(`OPENCLAW_NO_AUTO_UPDATE=1`), `update available … Run: openclaw update` 같은 메시지는 계속 출력될 수 있습니다 — 바로 그 명령이 차단 대상입니다.
+이 프로젝트는 검증되고 테스트된 OpenClaw + Node.js 버전 조합을 고정(pin)합니다(`platforms/openclaw/config.env` 참고). `openclaw update`(및 `openclaw --update`)는 최신 npm 릴리스를 설치하는데, 이는 고정된 버전보다 더 최신 Node.js를 필요로 하여 실행이 안 될 수 있습니다 — 그래서 `$PREFIX/bin/openclaw`에 설치된 가드가 두 명령을 모두 차단합니다. 게이트웨이 자체의 자동 업데이트 기능도 비활성화되어 있지만(Node.js 래퍼가 `OPENCLAW_NO_AUTO_UPDATE=1` 을 기본으로 설정), `update available … Run: openclaw update` 같은 메시지는 계속 출력될 수 있습니다 — 바로 그 명령이 차단 대상입니다.
 
 ### 해결 방법
 
@@ -234,6 +234,242 @@ oa --update && source ~/.bashrc
 ```
 
 읽기 전용인 `openclaw update status`는 차단되지 않고 계속 동작합니다.
+
+## 대시보드의 Update 버튼이나 OpenClaw 가 권하는 `openclaw update` 명령이 [BLOCKED] 로 나옴
+
+```
+[BLOCKED] OpenClaw is pinned to the version verified by OpenClaw on Android.
+          Run 'oa --update' to update safely. ('openclaw update status' is allowed.)
+```
+
+### 원인
+
+OpenClaw 2026.9.8 은 대시보드의 Update 버튼, 에이전트의 gateway 도구, `openclaw gateway call update.run` 으로 자체 업데이트를 시작할 수 있습니다. 이 경로는 `openclaw` 명령 가드를 거치지 않으므로 Node.js 래퍼가 OpenClaw 의 자체 업데이트도 차단합니다. OpenClaw 의 일부 메시지는 `openclaw update --yes` 나 `openclaw update repair` 를 권하는데, 이 명령도 차단되어 있습니다. 고정된 Node.js 와 OpenClaw 버전은 한 쌍으로 검증된 조합이므로 의도된 동작입니다.
+
+### 해결 방법
+
+Update 버튼이나 위의 명령을 사용하지 말고 다음으로 업데이트하세요:
+
+```bash
+oa --update && source ~/.bashrc
+```
+
+읽기 전용인 `openclaw update status` 는 허용됩니다.
+
+## OpenClaw 실행 중 "Bad system call" (SIGSYS)
+
+```
+Bad system call
+```
+
+### 원인
+
+OpenClaw 2026.9.x 의 파일 안전 모듈(`@openclaw/fs-safe`)은 네이티브 도우미에서 `openat2` 시스템 콜을 사용합니다. Android 의 앱 seccomp 정책이 이 호출을 SIGSYS(Bad system call)로 종료시킵니다. 그래서 Node.js 래퍼는 기본으로 `FS_SAFE_TEST_NO_OPENAT2=1` 을 설정하여, 네이티브 도우미는 유지하되 `openat2` 를 사용하지 않게 합니다. 값이 정확히 `1` 이어야 인식됩니다.
+
+### 해결 방법
+
+보통은 조치가 필요 없습니다. 그래도 이 오류가 나오면 값이 정확히 `1` 인지 확인하세요:
+
+```bash
+echo "$FS_SAFE_TEST_NO_OPENAT2"
+```
+
+다른 값이 출력되면 `1` 로 설정하세요. 최후의 수단으로 네이티브 도우미 자체를 끌 수 있습니다:
+
+```bash
+export FS_SAFE_NATIVE_MODE=off
+```
+
+대가: 네이티브 도우미를 끄면 OpenClaw 의 일부 데이터 이전이 거부될 수 있습니다.
+
+## `oa --update` 가 "The OpenClaw gateway is running" 으로 멈춤
+
+```
+[FAIL] The OpenClaw gateway is running.
+       This update replaces OpenClaw and Node.js, which a running gateway cannot follow.
+```
+
+### 원인
+
+이번 업데이트는 고정된 Node.js 나 OpenClaw 버전을 바꿉니다. 실행 중인 게이트웨이는 교체를 따라갈 수 없으므로, `oa --update` 는 아무것도 바꾸지 않고 멈춥니다.
+
+### 해결 방법
+
+Claw 앱에서는 게이트웨이가 실행 중인 터미널 탭에서 Ctrl+C 를 누르거나, Android 설정 > 앱 > Claw > 강제 종료를 사용하세요. 최근 앱 목록에서 앱을 밀어 닫아도 앱이 포그라운드 서비스를 유지하므로 게이트웨이는 멈추지 않습니다.
+
+게이트웨이를 멈추고(실행 중인 터미널에서 Ctrl+C) 업데이트를 다시 실행하세요:
+
+```bash
+oa --update && source ~/.bashrc
+```
+
+게이트웨이가 어디에서 실행 중인지 찾을 수 없으면 [게이트웨이가 시작되지 않음](#게이트웨이가-시작되지-않음-gateway-already-running-또는-port-is-already-in-use) 섹션을 참고하세요.
+
+이 검사는 명령줄이 `openclaw.*gateway` 와 맞는 프로세스를 찾으므로 `tail -f …gateway.log` 같은 명령에도 걸릴 수 있습니다. 게이트웨이가 실행 중이 아닌 것이 확실하면 `OA_SKIP_GATEWAY_CHECK=1 oa --update` 로 실행하세요.
+
+## "state database schema migration required" 또는 업데이트 뒤 게이트웨이가 시작되지 않음
+
+```
+state database schema migration required
+```
+
+### 원인
+
+OpenClaw 2026.9.8 은 이전 OpenClaw 버전의 데이터를 이전해야 할 수 있습니다. `oa --update` 는 데이터 이전이 필요하다고 판단하면 `openclaw doctor --fix` 를 한 번 자동으로 실행하지만, 이번 실행에서 `~/.openclaw-android/backup/pre-update/` 에 백업을 만들었을 때만 실행합니다. 이전이 실패했거나, 자동 이전을 껐거나(`OA_SKIP_AUTO_DOCTOR=1`), 백업을 건너뛴 경우에는 데이터가 그대로 남아 게이트웨이가 시작을 거부할 수 있습니다.
+
+### 해결 방법
+
+먼저 게이트웨이를 멈춘 뒤 이전을 직접 실행하고 게이트웨이를 다시 시작하세요:
+
+```bash
+openclaw doctor --fix
+openclaw gateway
+```
+
+문제가 생기면 `oa --restore` 의 목록에서 `pre-update/` 백업(업데이트 전의 데이터)을 선택할 수 있습니다. 복구는 데이터만 되돌리고 프로그램은 되돌리지 않습니다.
+
+`oa --update` 가 이전을 직접 실행했다가 실패한 경우, `openclaw doctor --fix` 의 전체 출력이 `~/.openclaw-android/doctor-fix.log` 에 저장됩니다.
+
+## `Hard-link patch: not complete`, `linkat … Permission denied` 또는 `FICLONE: Permission denied`
+
+```
+Hard-link patch: not complete (…)
+```
+
+### 원인
+
+Android 는 앱 데이터 영역에서 하드링크와 reflink(`FICLONE`) 복사를 막습니다(앱과 Termux 모두). 이 호출은 `EACCES` 로 실패합니다. OpenClaw 2026.9.8 은 하드링크를 먼저 시도하고 「지원 안 함」 오류일 때만 복사로 넘어가는데, `EACCES` 는 지원 안 함으로 보지 않습니다. 또 대화 기록의 원본을 보관 폴더로 옮길 때는 하드링크만 사용합니다. 그래서 OpenClaw on Android 는 OpenClaw 를 설치하거나 업데이트할 때마다 OpenClaw 를 패치합니다(`platforms/openclaw/patches/openclaw-patch-hardlink.sh`). `oa --status` 는 패치가 적용되어 있으면 `Hard-link patch: applied (…)`, 그렇지 않으면 `not complete (…)` 를 표시합니다. 패치 없이 OpenClaw 를 다시 설치한 경우가 그 예입니다.
+
+### 해결 방법
+
+업데이트를 다시 실행하거나 고정 버전의 OpenClaw 를 다시 설치하면 패치가 다시 적용됩니다:
+
+```bash
+oa --update && source ~/.bashrc
+# 또는
+npm install -g openclaw@2026.9.8
+```
+
+그 뒤 `oa --status` 를 확인하세요. 줄이 계속 `not complete` 이거나 자동 데이터 이전이 실패했다면 `~/.openclaw-android/doctor-fix.log`(`openclaw doctor --fix` 의 전체 출력)를 읽고, `oa --status` 의 출력과 함께 보고하세요.
+
+## `oa --update` 가 "Your OpenClaw has saved chat history, and the patch … does not fit" 으로 멈춤
+
+```
+[FAIL] Your OpenClaw has saved chat history, and the patch for moving chat history does not fit OpenClaw 2026.9.8.
+```
+
+### 원인
+
+OpenClaw 2026.7.35 에서 업데이트하는 중이고 저장된 대화 기록이 있습니다. 새 OpenClaw 는 이 기록을 자체 데이터베이스로 옮겨야 하며, 이 이전에는 위의 하드링크 패치가 필요합니다. `oa --update` 는 아무것도 바꾸기 전에 이 패치가 설치할 OpenClaw 버전에 맞는지 확인합니다. 맞지 않으면 업데이트 뒤 OpenClaw 가 시작되지 않으므로 멈춥니다.
+
+### 영향
+
+아무것도 바뀌지 않았습니다. Node.js 와 OpenClaw 는 그대로(Node.js 22 와 OpenClaw 7.35)이고 데이터도 그대로입니다.
+
+### 해결 방법
+
+현재 상태를 유지하고 OpenClaw on Android 의 다음 릴리스를 기다린 뒤 `oa --update` 를 다시 실행하세요. 업데이트 스크립트가 오래된 캐시 사본일 때도 이 메시지가 나올 수 있으므로, 몇 분 뒤 다시 실행하면 새 사본을 받습니다. 계속 멈추면 전체 메시지와 함께 보고하세요.
+
+## 데이터 이전 도중 업데이트가 끊김
+
+### 원인
+
+업데이트 또는 그 안의 데이터 이전이 끝나기 전에 종료되었습니다(예: 앱을 강제 종료했거나 전원이 꺼짐). 데이터는 그대로 남아 있지만 이전은 끝나지 않은 상태입니다. 같은 `oa --update` 를 다시 실행해도 자동 이전은 다시 실행되지 않습니다. 그 실행은 새 백업을 만들지 않고, 자동 이전은 같은 실행에서 백업을 만들었을 때만 실행되기 때문입니다.
+
+### 해결 방법
+
+먼저 게이트웨이를 멈춘 뒤 이전을 직접 마무리하고 게이트웨이를 다시 시작하세요:
+
+```bash
+openclaw doctor --fix
+openclaw gateway
+```
+
+문제가 생기면 `oa --restore` 의 목록에서 `pre-update/` 백업(업데이트 전의 데이터)을 선택할 수 있습니다.
+
+## `EACCES: permission denied, realpath '/data/data/<다른 패키지>/...'` 또는 "... point into another app's folder"
+
+```
+EACCES: permission denied, realpath '/data/data/<다른 패키지>/files/home/.openclaw/...'
+```
+
+```
+[WARN] N path(s) point into another app's folder and could not be repaired automatically
+```
+
+### 원인
+
+Claw 앱과 Termux 사이, 디버그 앱과 릴리스 앱 사이에서 데이터를 옮기거나 다른 기기에서 만든 백업을 복구하면, OpenClaw 데이터 안에 다른 앱의 홈 경로(`/data/data/<다른 패키지>/files/home/...`)가 남을 수 있습니다. Android 는 다른 앱의 폴더에 접근하면 권한 오류(EACCES)를 내며, OpenClaw 2026.9 의 데이터 이전은 이 경로에서 멈춥니다.
+
+`oa --update`(설정 확인 직전)와 모든 `oa --restore`(같은 환경 복구 포함)는 이제 이런 경로를 고칩니다. 대상은 OpenClaw 상태 데이터베이스의 에이전트 데이터베이스 등록 행과 오래된 lease 행, 그리고 `openclaw.json` 의 에이전트 `workspace`·`agentDir` 값입니다(에이전트를 여러 개 만든 경우 포함). 고쳤으면 `Repaired N path(s) …` (복구 때는 `Updated N path(s) …`) 가 출력됩니다. 자동으로 고칠 수 없는 값이 있으면 위의 경고가 나옵니다.
+
+### 해결 방법
+
+이전 업데이트가 이 문제로 멈췄다면 업데이트를 다시 실행한 뒤, 게이트웨이를 멈추고 이전을 직접 실행하세요.
+
+```bash
+oa --update && source ~/.bashrc
+openclaw doctor --fix
+```
+
+`Could not fix the folder paths in your OpenClaw config … Nothing was changed.` 경고가 나오면 `~/.openclaw/openclaw.json` 에서 다른 앱의 폴더를 가리키는 경로 값(에이전트의 `workspace`·`agentDir`)을 현재 홈(`$HOME`) 아래로 직접 고친 뒤 `openclaw doctor --fix` 를 다시 실행하세요.
+
+`point into another app's folder and could not be repaired automatically` 경고는 OpenClaw 상태 데이터베이스 안의 예상과 다른 모양의 항목을 가리킵니다. 그 뒤에도 `openclaw doctor --fix` 가 `EACCES … realpath` 로 멈추면 `oa --status` 출력과 `~/.openclaw-android/doctor-fix.log` 를 첨부해 [이슈](https://github.com/AidanPark/openclaw-android/issues)를 남겨 주세요. `oa --restore` 로 업데이트 전 데이터(`pre-update/` 백업)로 돌아갈 수 있습니다.
+
+고치기 전에 수정할 파일의 사본이 남습니다(각각 최신 3개 보관).
+
+- `~/.openclaw/state/openclaw.sqlite.oa-before-repair-<날짜시각>`
+- `~/.openclaw/openclaw.json.oa-before-repair-<날짜시각>`
+
+## `The updater downloaded an older copy of itself (cache)`
+
+```
+[FAIL] The updater downloaded an older copy of itself (cache). Nothing was changed.
+       Run 'oa --update' again in a few minutes.
+```
+
+### 원인
+
+새 릴리스 직후 몇 분 동안은 캐시가 업데이트 스크립트의 옛 사본을 내려줄 수 있습니다. 업데이터는 자신이 최신인지 확인하고, 옛 사본이면 Node.js 와 OpenClaw 를 바꾸기 전에 멈춥니다.
+
+### 영향
+
+아무것도 바뀌지 않았습니다. Node.js, OpenClaw, 데이터는 그대로입니다.
+
+### 해결 방법
+
+몇 분 뒤 `oa --update` 를 다시 실행하면 새 사본을 받습니다.
+
+```bash
+oa --update && source ~/.bashrc
+```
+
+환경 변수 `OA_ALLOW_UNMARKED_NODE_CHANGE=1` 과 `OA_ALLOW_UNMARKED_OPENCLAW_CHANGE=1` 은 개발자용으로 이 확인을 끕니다. 일반 사용에서는 쓰지 마세요.
+
+## "Not enough free storage"
+
+```
+[FAIL] Not enough free storage to ...: 2000 MB needed, ... MB available.
+       Nothing was changed.
+```
+
+### 원인
+
+새 설치와, 고정 버전이 바뀌는 업데이트는 모두 2000MB 의 여유 공간이 필요합니다. 공간이 부족하면 아무것도 바꾸기 전에 멈추고 필요한 양과 남은 양을 알려 줍니다.
+
+### 해결 방법
+
+공간을 확보한 뒤(예: 다른 앱의 캐시 삭제, 사용하지 않는 파일 삭제, `~/.npm/_cacache` 제거) 명령을 다시 실행하세요. 아무것도 바뀌지 않았으므로 안전하게 다시 시도할 수 있습니다.
+
+## Android 10 이하에서 OpenClaw 의 데스크톱 자동화 도구가 동작하지 않음
+
+### 원인
+
+OpenClaw 의 데스크톱 자동화 도구(`@trycua/cua-driver`)는 Android 10 이하(API 29 이하)에서 필요한 시스템 콜 일부가 막혀 동작하지 않을 수 있습니다.
+
+### 해결 방법
+
+해당 Android 버전에서 이 도구에 알려진 한계입니다.
 
 ## `openclaw update` 중 sharp 빌드 실패
 

@@ -27,8 +27,8 @@ BIN_DIR="$OCA_DIR/bin"
 # Same keys and values as platforms/openclaw/config.env (the SSOT). This script
 # runs as a single file and does not read config.env; .githooks/pre-commit
 # checks that these lines match it. Bump both files together.
-PLATFORM_NPM_PACKAGE_VERSION="2026.7.35"
-PLATFORM_NODE_VERSION="22.23.3"
+PLATFORM_NPM_PACKAGE_VERSION="2026.9.8"
+PLATFORM_NODE_VERSION="24.21.0"
 NODE_VERSION="$PLATFORM_NODE_VERSION"
 
 GLIBC_LDSO="$PREFIX/glibc/lib/ld-linux-aarch64.so.1"
@@ -368,6 +368,23 @@ if [ "$OA_MODE" = "full" ]; then
     echo "  OpenClaw Android — Installing components"
     echo "══════════════════════════════════════════════"
     echo ""
+
+    # Before anything is installed: OpenClaw takes about 1 GB while it is installed
+    # (about 720 MB + about 310 MB npm cache), Node.js and the runtime come on top.
+    # Same numbers as scripts/lib.sh (OA_MIN_FREE_INSTALL_MB / oa_check_free_space).
+    # (the Termux df does not start in the app terminal: "bad interpreter"; the system's df is tried next)
+    _oa_have_mb=""
+    for _oa_df in df /system/bin/df; do
+        _oa_have_mb=$({ "$_oa_df" -Pk "$PREFIX" 2>/dev/null || "$_oa_df" -k "$PREFIX" 2>/dev/null || true; } | awk 'NR==2 {print int($4/1024)}')
+        [[ "$_oa_have_mb" =~ ^[0-9]+$ ]] && break
+    done
+    # (A re-run after OpenClaw was already installed needs far less: not checked then.)
+    if [ ! -f "$PREFIX/lib/node_modules/openclaw/package.json" ] \
+        && [[ "$_oa_have_mb" =~ ^[0-9]+$ ]] && [ "$_oa_have_mb" -lt 2000 ]; then
+        echo -e "${RED}[FAIL]${NC} Not enough free storage to install OpenClaw: 2000 MB needed, ${_oa_have_mb} MB available."
+        echo "       Nothing was changed. Free some space (clear other apps' caches, delete unused files) and open the app again."
+        exit 1
+    fi
 fi
 
 if [ "$OA_MODE" = tools ]; then
@@ -1399,6 +1416,12 @@ case "\$*" in *-g*openclaw*|*--global*openclaw*|*openclaw*-g*|*openclaw*--global
             chmod +x "\$_oc_bin"
         fi
     fi
+    # The install replaced the OpenClaw package, so the Android patches (hard links are refused
+    # here) are gone: apply them again (idempotent and quiet; the result is kept in hardlink-patch.state)
+    _oc_hl="\$HOME/.openclaw-android/platforms/openclaw/patches/openclaw-patch-hardlink.sh"
+    if [ "\$_oc_write" = true ] && [ -f "\$_oc_mjs" ] && [ -f "\$_oc_hl" ]; then
+        PATH="$BIN_DIR:\$PATH" "$PREFIX/bin/bash" "\$_oc_hl" "$PREFIX/lib/node_modules/openclaw" >/dev/null 2>&1 || true
+    fi
     ;;
 esac
 # Re-patch codex CLI wrapper after global install/update (DioNanos fork launcher fix)
@@ -1516,11 +1539,61 @@ else
 
     # Create grun-style node wrapper in BIN_DIR (safe from npm overwrites)
     mkdir -p "$BIN_DIR"
+    # ─── node wrapper ───
     cat > "$BIN_DIR/node.tmp" << WRAPPER
 #!${PREFIX}/bin/bash
 [ -n "\$LD_PRELOAD" ] && export _OA_ORIG_LD_PRELOAD="\$LD_PRELOAD"
 unset LD_PRELOAD
 export _OA_WRAPPER_PATH="$BIN_DIR/node"
+# OpenClaw 2026.9.x's native fs-safe helper probes the openat2 system call, which
+# Android's app sandbox answers by killing the process (SIGSYS). This switch of the
+# helper makes it use its own fallback for that one call and keep everything else
+# native (no-clobber moves, state migrations). A mode the user set stays untouched.
+# (The helper only recognises the value 1 here; to turn native off use FS_SAFE_NATIVE_MODE=off.)
+export FS_SAFE_TEST_NO_OPENAT2="\${FS_SAFE_TEST_NO_OPENAT2:-1}"
+# OpenClaw's gateway can start a self-update through this wrapper (not through the
+# openclaw command), which would replace the version pair this app was verified with.
+export OPENCLAW_NO_AUTO_UPDATE="\${OPENCLAW_NO_AUTO_UPDATE:-1}"
+_oa_found=false
+_oa_rest=()
+for _oa_arg in "\$@"; do
+    if [ "\$_oa_found" = true ]; then
+        _oa_rest+=("\$_oa_arg")
+    else
+        case "\$_oa_arg" in
+            */openclaw/openclaw.mjs|*/openclaw/dist/index.js|*/openclaw/dist/index.mjs|*/openclaw/dist/entry.js|*/openclaw/dist/entry.mjs|*/bin/openclaw) _oa_found=true ;;
+        esac
+    fi
+done
+if [ "\$_oa_found" = true ]; then
+    _oa_block=false
+    for _oa_arg in "\${_oa_rest[@]}"; do
+        [ "\$_oa_arg" = "--update" ] && _oa_block=true && break
+    done
+    if [ "\$_oa_block" = false ]; then
+        _oa_skip=false
+        _oa_next=false
+        for _oa_arg in "\${_oa_rest[@]}"; do
+            if [ "\$_oa_next" = true ]; then
+                [ "\$_oa_arg" = "status" ] && _oa_block=false
+                break
+            fi
+            if [ "\$_oa_skip" = true ]; then _oa_skip=false; continue; fi
+            case "\$_oa_arg" in
+                --profile|--container|--log-level) _oa_skip=true ;;
+                -*) ;;
+                update) _oa_block=true; _oa_next=true ;;
+                *) break ;;
+            esac
+        done
+    fi
+    if [ "\$_oa_block" = true ]; then
+        echo "[BLOCKED] OpenClaw is pinned to the version verified by OpenClaw on Android." >&2
+        echo "          Run 'oa --update' to update safely. ('openclaw update status' is allowed.)" >&2
+        exit 1
+    fi
+fi
+unset _oa_found _oa_rest _oa_arg _oa_block _oa_skip _oa_next
 _OA_COMPAT="\$HOME/.openclaw-android/lib/glibc-compat.js"
 [ -s "\$_OA_COMPAT" ] || _OA_COMPAT="\$HOME/.openclaw-android/patches/glibc-compat.js"
 if [ -f "\$_OA_COMPAT" ]; then
@@ -1545,6 +1618,7 @@ if [ \$_COUNT -gt 0 ] && [ \$_COUNT -lt \$# ]; then
 fi
 exec "$GLIBC_LDSO" --library-path "$PREFIX/glibc/lib" "$NODE_DIR/bin/node.real" "\$@"
 WRAPPER
+    # ─── end node wrapper ───
     chmod +x "$BIN_DIR/node.tmp"
     mv -f "$BIN_DIR/node.tmp" "$BIN_DIR/node"
 
@@ -1573,6 +1647,12 @@ case "\$*" in *-g*openclaw*|*--global*openclaw*|*openclaw*-g*|*openclaw*--global
             printf '#!$PREFIX/bin/bash\nexec "$BIN_DIR/node" "%s" "\$@"\n' "\$_oc_mjs" > "\$_oc_bin"
             chmod +x "\$_oc_bin"
         fi
+    fi
+    # The install replaced the OpenClaw package, so the Android patches (hard links are refused
+    # here) are gone: apply them again (idempotent and quiet; the result is kept in hardlink-patch.state)
+    _oc_hl="\$HOME/.openclaw-android/platforms/openclaw/patches/openclaw-patch-hardlink.sh"
+    if [ "\$_oc_write" = true ] && [ -f "\$_oc_mjs" ] && [ -f "\$_oc_hl" ]; then
+        PATH="$BIN_DIR:\$PATH" "$PREFIX/bin/bash" "\$_oc_hl" "$PREFIX/lib/node_modules/openclaw" >/dev/null 2>&1 || true
     fi
     ;;
 esac
@@ -1960,6 +2040,294 @@ if [ "$OC_INSTALLED" = true ] && [ -d "$OPENCLAW_DIR" ]; then
     (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
 fi
 
+# Hard links are denied on Android: let OpenClaw copy instead (its data migration and file
+# publication fail otherwise). Same script as platforms/openclaw/patches/openclaw-patch-hardlink.sh
+# (a pre-commit check keeps the two identical); runs after every OpenClaw install, before first use.
+OC_HL_GEN="$OCA_DIR/platforms/openclaw/patches/openclaw-patch-hardlink.sh"
+mkdir -p "$(dirname "$OC_HL_GEN")"
+cat > "$OC_HL_GEN" << 'OPENCLAW_HARDLINK_SH'
+#!/usr/bin/env bash
+# openclaw-patch-hardlink.sh - make OpenClaw copy a file when a hard link is denied.
+#
+# Android (app and Termux alike) denies hard links (ln, fs.link, linkat) with EACCES. OpenClaw's
+# fs-safe publishes files with strategy "link-or-copy": it tries a hard link first and copies only
+# when the error code is in HARDLINK_FALLBACK_CODES (EPERM, EXDEV, ENOTSUP, EOPNOTSUPP, ENOSYS).
+# EACCES is not in that list, so every such publication fails - among them the SQLite snapshot of
+# `openclaw doctor --fix`, which migrates the data when OpenClaw is updated (the gateway then does
+# not start). Two changes:
+#   F1  add EACCES to HARDLINK_FALLBACK_CODES and to NATIVE_COPY_FALLBACK_CODES (the clone/reflink step
+#       of the copy is refused with EACCES too); both are inlined in 3 bundles and in
+#       node_modules/@openclaw/fs-safe
+#   F1b dist/backup-create-*.mjs: strategy "link-required" -> "link-or-copy"
+#       (so `openclaw backup create` works)
+#
+#   F3  B3_SESSION_ARCHIVE_PATCH: the session migration of 9.x (`doctor --fix`, "Legacy session store
+#       requires migration") archives each old transcript with moveMigrationArtifact: a hard link
+#       (strategy "link-required") and an `nlink == 2` check, then it removes the source. Hard links are
+#       refused here (EACCES) and a copy would fail the check, so the move is done with rename(2)
+#       instead (same file system: atomic, inode/mtime kept, so the later identity checks still hold;
+#       "undo" renames back). Applied by wrapping the function in each bundle that defines it. The
+#       wrapper only takes over when the link is refused with EACCES (or when an interrupted rename
+#       is resumed); every other case runs OpenClaw's own code unchanged.
+#
+# THIS PATCH IS TIED TO THE PINNED OPENCLAW VERSION. At every pin bump re-run it on the new
+# package and make sure nothing is reported as MISSING/NOMATCH (and test under
+# .agent/tools/android-trap/trap_android.py). Files are read and written as bytes (latin1): the
+# worker bundles are not clean UTF-8. Idempotent. A file that does not match is reported, never
+# hidden: the data migration then fails again with the original EACCES message.
+# Usage: openclaw-patch-hardlink.sh [--check] [--only-b3] [<openclaw package dir>]   (default: npm root -g)
+# --only-b3: look at the session-archive patch only (for a package taken from the npm tarball, before it is installed)
+# --check: change nothing, report what is still to do (exit 3 when something is, or does not match)
+set -euo pipefail
+
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+CHECK=0
+ONLY_B3=0
+ARG_DIR=""
+for arg in "$@"; do
+    case "$arg" in
+        --check) CHECK=1 ;;
+        --only-b3) ONLY_B3=1 ;;
+        *) [ -n "$ARG_DIR" ] || ARG_DIR="$arg" ;;
+    esac
+done
+OPENCLAW_DIR="${ARG_DIR:-$(npm root -g 2>/dev/null || true)/openclaw}"
+STATE_FILE="${HOME:-/tmp}/.openclaw-android/hardlink-patch.state"
+
+if [ ! -f "$OPENCLAW_DIR/package.json" ]; then
+    echo -e "${YELLOW}[WARN]${NC} OpenClaw not found at $OPENCLAW_DIR - hard-link patch skipped"
+    exit 0
+fi
+if ! command -v node >/dev/null 2>&1; then
+    echo -e "${YELLOW}[WARN]${NC} node not found - hard-link patch skipped"
+    exit 0
+fi
+
+HARDLINK_TMP=$(mktemp "${TMPDIR:-/tmp}/oa-hardlink-patch.XXXXXX") || HARDLINK_TMP="/tmp/oa-hardlink-patch.$$"
+trap 'rm -f "$HARDLINK_TMP"' EXIT
+cat > "$HARDLINK_TMP" << 'HARDLINK_JS'
+const fs = require('fs');
+const path = require('path');
+const root = process.argv[2];
+const FILES = [
+  'node_modules/@openclaw/fs-safe/dist/publish-file.js',
+  'dist/package-update-activation-recovery.mjs',
+  'dist/worker/worker.mjs',
+  'dist/worker/sqlite-store.worker.mjs',
+];
+// Two classifier sets, each `NAME = [/* @__PURE__ */] new Set([ <quote>CODE<quote>, ... ])` (quotes may be
+// ", ' or `, on one line or several; the minified bundles use back quotes on one line):
+//   HARDLINK_FALLBACK_CODES    - the hard link is refused  -> copy
+//   NATIVE_COPY_FALLBACK_CODES - the clone/reflink step of that copy is refused (ioctl FICLONE: EACCES on
+//                                Android, found on the device after the first fix) -> plain copy
+const SETS = ['HARDLINK_FALLBACK_CODES', 'NATIVE_COPY_FALLBACK_CODES'];
+let patched = 0, already = 0, problems = 0;
+const CHECK = process.argv.includes('--check');
+const ONLY_B3 = process.argv.includes('--only-b3');
+const read = (f) => fs.readFileSync(f, 'latin1');
+// Atomic: a full disk must not leave a cut-off bundle (a broken OpenClaw); write a temp file next to it, then
+// rename it over the original. A failed write is a problem (counted, reported), the original stays as it was.
+const write = (f, s) => {
+  if (CHECK) return true;
+  const tmp = f + '.oa-tmp';
+  try {
+    fs.writeFileSync(tmp, s, 'latin1');
+    fs.chmodSync(tmp, fs.statSync(f).mode & 0o7777);
+    fs.renameSync(tmp, f);
+    return true;
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (e2) { /* nothing to clean */ }
+    console.log('WRITEFAIL ' + path.relative(root, f) + ' (' + (e && e.code ? e.code : String(e)) + ')');
+    problems++;
+    return false;
+  }
+};
+// Add EACCES to one set; returns 'patched' | 'already' | 'nomatch'
+function addEacces(text, name) {
+  const re = new RegExp('(' + name + '\\s*=\\s*(?:\\/\\*[^*]*\\*\\/\\s*)?new Set\\(\\[\\s*)((["\'`])[^\\]]*)\\]\\)');
+  const m = re.exec(text);
+  if (!m) return { status: 'nomatch', text };
+  if (/EACCES/.test(m[2])) return { status: 'already', text };
+  const q = m[3];
+  const out = text.slice(0, m.index) + m[1] + q + 'EACCES' + q + ',' + m[2] + '])' + text.slice(m.index + m[0].length);
+  return { status: 'patched', text: out };
+}
+for (const rel of ONLY_B3 ? [] : FILES) {
+  const file = path.join(root, rel);
+  if (!fs.existsSync(file)) { console.log('MISSING ' + rel); problems++; continue; }
+  let s = read(file);
+  let changed = false;
+  for (const name of SETS) {
+    const r = addEacces(s, name);
+    if (r.status === 'nomatch') { console.log('NOMATCH ' + rel + ' (' + name + ')'); problems++; continue; }
+    if (r.status === 'already') { already++; continue; }
+    s = r.text; changed = true; patched++; console.log((CHECK ? 'TODO ' : 'PATCHED ') + rel + ' (' + name + ')');
+  }
+  if (changed) write(file, s);
+}
+const dist = path.join(root, 'dist');
+const backups = fs.existsSync(dist) && !ONLY_B3 ? fs.readdirSync(dist).filter((n) => /^backup-create-.*\.mjs$/.test(n)) : [];
+if (backups.length === 0 && !ONLY_B3) { console.log('MISSING dist/backup-create-*.mjs'); problems++; }
+for (const name of backups) {
+  const file = path.join(dist, name);
+  const s = read(file);
+  const n = s.split('strategy: "link-required"').length - 1;
+  if (n === 0) { already++; continue; }
+  if (!write(file, s.split('strategy: "link-required"').join('strategy: "link-or-copy"'))) continue;
+  patched++; console.log((CHECK ? 'TODO ' : 'PATCHED ') + 'dist/' + name + ' (' + n + ' link-required -> link-or-copy)');
+}
+
+// ---- F3: moveMigrationArtifact by rename when the hard link is refused (see the header)
+const B3_MARK = '__oaMoveMigrationArtifactOrig';
+const B3_DEF = /async function moveMigrationArtifact\(/;
+function b3Helper(requireSync, syncDir) {
+  return `/* B3_SESSION_ARCHIVE_PATCH v2 (OpenClaw on Android): hard links are refused, archive by rename */
+async function __oaMoveByRename(sourcePath, targetPath, expected, onPublished, publishSourceRemoval) {
+	const sourceThere = !!fs.lstatSync(sourcePath, { bigint: true, throwIfNoEntry: false });
+	const targetThere = !!fs.lstatSync(targetPath, { bigint: true, throwIfNoEntry: false });
+	if (sourceThere && targetThere) throw new Error("artifact archive path already exists");
+	let movedHere = false;
+	if (sourceThere) {
+		if (!sameMigrationArtifact(readMigrationArtifactIdentity(sourcePath), expected)) throw new Error("artifact changed before publication");
+		fs.renameSync(sourcePath, targetPath);
+		movedHere = true;
+	}
+	${requireSync}(await ${syncDir}(path.dirname(targetPath)), "Recovery artifact publication");
+	const verifyMoved = () => {
+		if (fs.lstatSync(sourcePath, { bigint: true, throwIfNoEntry: false }) || !sameMigrationArtifact(readMigrationArtifactIdentity(targetPath), expected)) throw new Error("artifact changed during publication");
+	};
+	let published = false;
+	const removeSource = () => {
+		verifyMoved();
+		if (onPublished) {
+			onPublished();
+			published = true;
+			verifyMoved();
+		}
+		published = true;
+	};
+	let retainedSource = false;
+	const retainSource = () => {
+		// as in OpenClaw's own code: a publication made by an earlier run cannot be discarded
+		if (!movedHere) throw new Error("Cannot discard a recovery publication created by an earlier run.");
+		verifyMoved();
+		fs.renameSync(targetPath, sourcePath);
+		retainedSource = true;
+	};
+	try {
+		if (publishSourceRemoval) publishSourceRemoval(removeSource, retainSource);
+		else removeSource();
+	} catch (error) {
+		// failed before the move was final: put the file back under its own name (OpenClaw's own code
+		// keeps both names then), so that a rerun sees the same state as after a refused hard link
+		if (movedHere && !published && !retainedSource) {
+			try {
+				if (!fs.lstatSync(sourcePath, { bigint: true, throwIfNoEntry: false }) && sameMigrationArtifact(readMigrationArtifactIdentity(targetPath), expected)) fs.renameSync(targetPath, sourcePath);
+			} catch (restoreError) { /* keep the original error */ }
+		}
+		throw error;
+	} finally {
+		if (retainedSource) ${requireSync}(await ${syncDir}(path.dirname(targetPath)), "Recovery artifact deferral");
+	}
+	${requireSync}(await ${syncDir}(path.dirname(sourcePath)), "Recovery artifact source");
+	if (!sameMigrationArtifact(readMigrationArtifactIdentity(targetPath), expected)) throw new Error("artifact changed during publication");
+}
+async function moveMigrationArtifact(sourcePath, targetPath, expected, onPublished, publishSourceRemoval) {
+	const missing = (p) => !fs.lstatSync(p, { bigint: true, throwIfNoEntry: false });
+	// an interrupted rename-based move: the source is gone, the archive copy is there
+	if (missing(sourcePath) && !missing(targetPath)) return __oaMoveByRename(sourcePath, targetPath, expected, onPublished, publishSourceRemoval);
+	try {
+		return await ${B3_MARK}(sourcePath, targetPath, expected, onPublished, publishSourceRemoval);
+	} catch (error) {
+		// only a refused hard link (the codes of the B2 fallback list), before anything was published
+		if (error && ["EACCES", "EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"].includes(error.code) && !missing(sourcePath) && missing(targetPath)) return __oaMoveByRename(sourcePath, targetPath, expected, onPublished, publishSourceRemoval);
+		throw error;
+	}
+}
+`;
+}
+const B3_TAG = '/* B3_SESSION_ARCHIVE_PATCH';
+const B3_TAG_CURRENT = B3_TAG + ' v2 ';
+const B3_HELPER_NAMES = /([\w$]+)\(await ([\w$]+)\(path\.dirname\(/;
+// A bundle with a second, unwrapped definition would pass on the marker alone: count them (the wrapper is the one)
+const b3Defs = (t) => t.split(B3_DEF).length - 1;
+function patchB3(text) {
+  if (b3Defs(text) > 1) return { status: 'nomatch', text };
+  if (text.includes(B3_MARK)) {
+    if (text.includes(B3_TAG_CURRENT)) return { status: 'already', text };
+    // patched by an earlier version of this helper: replace it (it sits right before the renamed original)
+    const a = text.indexOf(B3_TAG);
+    const oidx = text.indexOf('async function ' + B3_MARK + '(');
+    if (a < 0 || oidx < a) return { status: 'nomatch', text };
+    const m = B3_HELPER_NAMES.exec(text.slice(oidx, oidx + 8000));
+    if (!m) return { status: 'nomatch', text };
+    return { status: 'patched', text: text.slice(0, a) + b3Helper(m[1], m[2]) + text.slice(oidx) };
+  }
+  const idx = text.search(B3_DEF);
+  if (idx < 0) return { status: 'nomatch', text };
+  // the names this bundle uses for the directory-sync helpers (minified bundles rename them)
+  const m = B3_HELPER_NAMES.exec(text.slice(idx, idx + 8000));
+  if (!m) return { status: 'nomatch', text };
+  const rest = text.slice(idx).replace(B3_DEF, 'async function ' + B3_MARK + '(');
+  return { status: 'patched', text: text.slice(0, idx) + b3Helper(m[1], m[2]) + rest };
+}
+const b3Files = [];
+if (fs.existsSync(path.join(root, 'dist'))) {
+  for (const n of fs.readdirSync(path.join(root, 'dist'))) if (/^session-sqlite-migration-manifest-.*\.mjs$/.test(n)) b3Files.push('dist/' + n);
+}
+b3Files.push('dist/package-update-activation-recovery.mjs', 'dist/worker/worker.mjs', 'dist/worker/sqlite-store.worker.mjs');
+let b3Seen = 0;
+for (const rel of b3Files) {
+  const file = path.join(root, rel);
+  if (!fs.existsSync(file)) { console.log('MISSING ' + rel + ' (B3)'); problems++; continue; }
+  const r = patchB3(read(file));
+  if (r.status === 'already') { already++; b3Seen++; continue; }
+  if (r.status === 'nomatch') { console.log('NOMATCH ' + rel + ' (B3 moveMigrationArtifact)'); problems++; continue; }
+  if (!write(file, r.text)) continue; patched++; b3Seen++; console.log((CHECK ? 'TODO ' : 'PATCHED ') + rel + ' (B3 moveMigrationArtifact)');
+}
+console.log('SUMMARY ' + (CHECK ? 'todo=' : 'patched=') + patched + ' already=' + already + ' problems=' + problems);
+process.exit(problems || (CHECK && patched) ? 3 : 0);
+HARDLINK_JS
+rc=0
+JS_FLAGS=""
+[ "$CHECK" = 1 ] && JS_FLAGS="--check"
+[ "$ONLY_B3" = 1 ] && JS_FLAGS="$JS_FLAGS --only-b3"
+# shellcheck disable=SC2086
+out=$(node "$HARDLINK_TMP" "$OPENCLAW_DIR" $JS_FLAGS) || rc=$?
+
+summary=$(printf '%s\n' "$out" | { grep '^SUMMARY ' || true; } | tail -1 | sed 's/^SUMMARY //')
+# (|| true: with nothing to report grep finds no line, and that must not end the script)
+{ printf '%s\n' "$out" | grep -v '^SUMMARY ' || true; } | while IFS= read -r line; do
+    case "$line" in
+        PATCHED*) echo -e "  ${GREEN}[PATCHED]${NC} ${line#PATCHED }" ;;
+        TODO*) echo -e "  ${YELLOW}[TODO]${NC} ${line#TODO }" ;;
+        MISSING*|NOMATCH*|WRITEFAIL*) echo -e "  ${YELLOW}[WARN]${NC} ${line%% *}: ${line#* } - hard-link fallback NOT applied here" ;;
+        *) [ -z "$line" ] || echo "  $line" ;;
+    esac
+done
+ocver=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$OPENCLAW_DIR/package.json" | head -1)
+if [ "$CHECK" != 1 ] && [ "$ONLY_B3" != 1 ]; then
+    mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
+    echo "openclaw=${ocver:-unknown} ${summary:-error} exit=$rc date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE" 2>/dev/null || true
+fi
+if [ "$rc" -eq 0 ]; then
+    echo "Hard-link fallback: ${summary}"
+elif [ "$CHECK" = 1 ] && printf '%s' "$summary" | grep -q 'problems=0'; then
+    echo "Hard-link fallback not applied yet: ${summary}"
+else
+    echo -e "${YELLOW}[WARN]${NC} Hard-link fallback incomplete (${summary:-node failed}): this OpenClaw version does not match the patch, or a file could not be written."
+    echo "       Hard links are denied on Android, so the data migration of 'openclaw doctor --fix' can fail with EACCES."
+fi
+# (a normal run never fails the caller; --check reports through its exit code)
+[ "$CHECK" = 1 ] && exit "$rc"
+exit 0
+OPENCLAW_HARDLINK_SH
+chmod +x "$OC_HL_GEN"
+bash "$OC_HL_GEN" | sed 's/^/  /'
+
 # Block `openclaw update` so the pin holds (after the npm wrappers from [3/7])
 bash "$OC_SHIM_GEN" | sed 's/^/  /'
 
@@ -1983,7 +2351,7 @@ if [ -d "$CLAWHUB_DIR" ] && ! (cd "$CLAWHUB_DIR" && node -e "require('undici')" 
 fi
 
 # PyYAML (for .skill packaging)
-command -v python &>/dev/null && { python -c "import yaml" 2>/dev/null || pip install pyyaml -q || true; }
+command -v python &>/dev/null && { python -c "import yaml" 2>/dev/null || { command -v pip >/dev/null 2>&1 && pip install pyyaml -q; } || true; }
 
 # ─── [5/7] Patches ──────────────────────────
 echo -e "▸ ${YELLOW}[5/7]${NC} Applying patches..."

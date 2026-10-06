@@ -44,10 +44,10 @@ if command -v node &>/dev/null; then
         else
             check_fail "Node.js $NODE_VER (pinned: v$PIN_NODE_VER)"
         fi
-    elif [ "$NODE_MAJOR" -ge 22 ] 2>/dev/null; then
-        check_pass "Node.js $NODE_VER (>= 22)"
+    elif [ "$NODE_MAJOR" -ge 24 ] 2>/dev/null; then
+        check_pass "Node.js $NODE_VER (>= 24)"
     else
-        check_fail "Node.js $NODE_VER (need >= 22)"
+        check_fail "Node.js $NODE_VER (need >= 24)"
     fi
 else
     check_fail "Node.js not found"

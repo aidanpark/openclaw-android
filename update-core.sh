@@ -9,7 +9,11 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.1.4"
+OA_VERSION="1.2.0"
+# Marks this updater as the current protocol for the scripts it runs from the downloaded copy
+# (install-nodejs.sh and platforms/*/update.sh refuse a version change without it: a cached older
+# update-core.sh must not combine with a newer download).
+export OA_UPDATE_CORE_PROTOCOL=2
 
 echo ""
 echo -e "${BOLD}========================================${NC}"
@@ -100,6 +104,8 @@ fi
 step 2 "Download Latest Release (tarball)"
 
 mkdir -p "$PREFIX/tmp"
+# Leftovers of an update that was killed (its cleanup trap did not run): older than an hour
+find "$PREFIX/tmp" -maxdepth 1 -name 'oa-update.*' -mmin +60 -exec rm -rf {} + 2>/dev/null || true
 RELEASE_TMP=$(mktemp -d "$PREFIX/tmp/oa-update.XXXXXX") || {
     echo -e "${RED}[FAIL]${NC} Failed to create temp directory"
     exit 1
@@ -144,6 +150,113 @@ if [ -z "${PLATFORM_NODE_VERSION:-}" ]; then
     exit 1
 fi
 
+# Never move Node.js below what the installed OpenClaw needs. A stale download (the pin it
+# carries is older than what is installed) would otherwise put Node 22 under OpenClaw 9.x,
+# which then stops starting, and an older OpenClaw could not read data a newer one migrated.
+# This runs before anything on disk is replaced (the pins in config.env are trusted later).
+# A deliberate rollback release needs both OA_ALLOW_OPENCLAW_DOWNGRADE=1 and OA_ALLOW_NODE_DOWNGRADE=1.
+if [ "$IS_GLIBC" = true ] && [ "${OA_ALLOW_NODE_DOWNGRADE:-}" != "1" ]; then
+    _OC_PKG_JSON="$PREFIX/lib/node_modules/${PLATFORM_NPM_PACKAGE:-openclaw}/package.json"
+    if [ -f "$_OC_PKG_JSON" ]; then
+        _OC_VER=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_OC_PKG_JSON" | head -1)
+        # lowest major named by ">=N" in engines.node (">=24.16.0 <25 || >=26.1.0" -> 24); empty when
+        # there is none (the pipe must not stop the script under set -e -o pipefail)
+        _OC_MIN_NODE=$( { awk '/"engines"[[:space:]]*:/{f=1} f&&/"node"[[:space:]]*:/{print; exit}' "$_OC_PKG_JSON" \
+            | grep -oE '>=[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | sort -n | head -1; } 2>/dev/null || true)
+        _PIN_NODE_MAJOR="${PLATFORM_NODE_VERSION%%.*}"
+        if [[ "$_OC_MIN_NODE" =~ ^[0-9]+$ ]] && [[ "$_PIN_NODE_MAJOR" =~ ^[0-9]+$ ]] && [ "$_PIN_NODE_MAJOR" -lt "$_OC_MIN_NODE" ]; then
+            echo ""
+            echo -e "${RED}[FAIL]${NC} The installed OpenClaw ${_OC_VER:-?} needs Node.js ${_OC_MIN_NODE} or newer, but this update pins Node.js ${PLATFORM_NODE_VERSION}."
+            echo "       Not downgrading Node.js: OpenClaw would stop starting, and it may already have migrated your data."
+            echo "       This usually means the download was an older cached copy. Wait a few minutes and run 'oa --update' again."
+            echo "       Nothing was changed. ('oa --restore' only brings back your data, not the program.)"
+            echo "       For a deliberate rollback release, set OA_ALLOW_OPENCLAW_DOWNGRADE=1 and OA_ALLOW_NODE_DOWNGRADE=1."
+            exit 1
+        fi
+    fi
+fi
+
+# Does this update change the pinned OpenClaw or Node.js? Such an update needs room for
+# the new packages next to the old ones, and a backup of the OpenClaw data first.
+_oa_oc_pkg="$PREFIX/lib/node_modules/openclaw/package.json"
+_oa_oc_now=""
+[ -f "$_oa_oc_pkg" ] && _oa_oc_now=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_oa_oc_pkg" | head -1)
+_oa_node_now=""
+if [ -x "$PROJECT_DIR/bin/node" ]; then
+    _oa_node_now=$("$PROJECT_DIR/bin/node" --version 2>/dev/null || true)
+else
+    _oa_node_now=$(node --version 2>/dev/null || true)
+fi
+unset OA_PRE_UPDATE_BACKUP     # set below only when this run saves a backup
+OA_PIN_CHANGES=false
+if [ "$_oa_oc_now" != "${PLATFORM_NPM_PACKAGE_VERSION:-}" ] || [ "$_oa_node_now" != "v${PLATFORM_NODE_VERSION}" ]; then
+    OA_PIN_CHANGES=true
+    # Before anything is changed: stop here when the new packages would not fit
+    # (a cached older lib.sh may lack the helper: then there is no check, as before)
+    if declare -f oa_check_free_space >/dev/null && ! oa_check_free_space "${OA_MIN_FREE_UPDATE_MB:-2000}" "update OpenClaw and Node.js"; then
+        echo "       $PLATFORM was not changed."
+        exit 1
+    fi
+fi
+
+# A running gateway cannot be moved to the new version: its files are replaced under it
+# and the data migration is refused while it holds the lock. Stop before anything is
+# changed (only when this update changes the pinned OpenClaw/Node.js).
+if [ "$OA_PIN_CHANGES" = true ] && [ "${OA_SKIP_GATEWAY_CHECK:-0}" != 1 ] \
+    && ( source "$RELEASE_TMP/scripts/backup.sh" && _gateway_running ) 2>/dev/null; then
+    echo -e "${RED}[FAIL]${NC} The OpenClaw gateway is running."
+    echo "       This update replaces OpenClaw and Node.js, which a running gateway cannot follow."
+    echo "       Stop it first (Ctrl+C in the terminal where it runs, or: pkill -f 'openclaw.*gateway'),"
+    echo "       then run 'oa --update' again. $PLATFORM was not changed."
+    echo "       In the Claw app: press Ctrl+C in the terminal tab running the gateway, or use"
+    echo "       Settings > Apps > Claw > Force stop (swiping the app away does not stop it)."
+    echo "       (If nothing is running, set OA_SKIP_GATEWAY_CHECK=1 to skip this check.)"
+    exit 1
+fi
+
+# The chat history of OpenClaw 7.x lives in a JSON store that 9.x moves into SQLite: that move
+# archives each old transcript with a hard link, which Android refuses. platforms/openclaw
+# patches OpenClaw to archive by rename instead (the B3_SESSION_ARCHIVE_PATCH of
+# openclaw-patch-hardlink.sh). A user who has such history must not be updated unless that patch
+# is there and fits the OpenClaw that would be installed: otherwise the new OpenClaw cannot start
+# and cannot be migrated. Checked here, before anything is changed.
+if [ "$OA_PIN_CHANGES" = true ] && [ "$PLATFORM" = "openclaw" ] && [ "${OA_SKIP_SESSION_GUARD:-0}" != 1 ] \
+    && [ -n "$_oa_oc_now" ] && oa_version_gt "${PLATFORM_NPM_PACKAGE_VERSION:-0}" "$_oa_oc_now" \
+    && declare -f oa_has_indexed_sessions >/dev/null && oa_has_indexed_sessions "${PLATFORM_DATA_DIR:-$HOME/.openclaw}"; then
+    _oa_hl_script="$RELEASE_TMP/platforms/$PLATFORM/patches/openclaw-patch-hardlink.sh"
+    _oa_sg_why=""
+    if ! grep -q 'B3_SESSION_ARCHIVE_PATCH' "$_oa_hl_script" 2>/dev/null; then
+        _oa_sg_why="this copy of the update scripts cannot move your chat history to the new OpenClaw (it is probably an old cached copy)"
+    else
+        # Take the package that would be installed from npm (the install later reuses the download)
+        # and try the patch on it. Offline or no npm: nothing can be said, the update goes on.
+        _oa_pf=$(mktemp -d "$PREFIX/tmp/oa-preflight.XXXXXX" 2>/dev/null) || _oa_pf=""
+        _oa_npm_cli="$PROJECT_DIR/node/lib/node_modules/npm/bin/npm-cli.js"
+        if [ -n "$_oa_pf" ] && [ -f "$_oa_npm_cli" ] && [ -x "$PROJECT_DIR/bin/node" ]; then
+            echo "Checking that your chat history can be moved to OpenClaw ${PLATFORM_NPM_PACKAGE_VERSION}..."
+            if ( cd "$_oa_pf" && timeout 900 "$PROJECT_DIR/bin/node" "$_oa_npm_cli" pack "openclaw@${PLATFORM_NPM_PACKAGE_VERSION}" --silent --ignore-scripts >/dev/null 2>&1 ) \
+                && _oa_tgz=$(ls "$_oa_pf"/*.tgz 2>/dev/null | head -1) && [ -n "$_oa_tgz" ] \
+                && tar -xzf "$_oa_tgz" -C "$_oa_pf" --wildcards 'package/package.json' 'package/dist/session-sqlite-migration-manifest-*.mjs' \
+                    'package/dist/package-update-activation-recovery.mjs' 'package/dist/worker/worker.mjs' 'package/dist/worker/sqlite-store.worker.mjs' 2>/dev/null; then
+                _oa_pf_out=$(bash "$_oa_hl_script" --only-b3 "$_oa_pf/package" 2>&1 || true)
+                if ! printf '%s' "$_oa_pf_out" | grep -q 'problems=0'; then
+                    _oa_sg_why="the patch for moving chat history does not fit OpenClaw ${PLATFORM_NPM_PACKAGE_VERSION}"
+                fi
+            else
+                echo -e "${YELLOW}[WARN]${NC} Could not fetch OpenClaw ${PLATFORM_NPM_PACKAGE_VERSION} to check the chat-history patch — continuing."
+            fi
+        fi
+        [ -z "$_oa_pf" ] || rm -rf "$_oa_pf"
+    fi
+    if [ -n "$_oa_sg_why" ]; then
+        echo -e "${RED}[FAIL]${NC} Your OpenClaw has saved chat history, and ${_oa_sg_why}."
+        echo "       Updating now would leave OpenClaw unable to start. $PLATFORM was not changed (Node.js and OpenClaw stay as they are)."
+        echo "       Wait a few minutes and run 'oa --update' again; if it keeps failing, report it."
+        echo "       (OA_SKIP_SESSION_GUARD=1 skips this check.)"
+        exit 1
+    fi
+fi
+
 step 3 "Update Core Infrastructure"
 
 mkdir -p "$PROJECT_DIR/platforms" "$PROJECT_DIR/scripts" "$PROJECT_DIR/patches"
@@ -155,6 +268,39 @@ cp "$RELEASE_TMP/scripts/lib.sh" "$PROJECT_DIR/scripts/lib.sh"
 cp "$RELEASE_TMP/scripts/setup-env.sh" "$PROJECT_DIR/scripts/setup-env.sh"
 if [ -f "$RELEASE_TMP/scripts/backup.sh" ]; then
     cp "$RELEASE_TMP/scripts/backup.sh" "$PROJECT_DIR/scripts/backup.sh"
+fi
+
+# A new OpenClaw/Node.js pin may change the OpenClaw data format, and going back is only
+# possible from a backup: make one first (with the previous Node.js and OpenClaw still in
+# place). It never blocks the update: no room or a failed backup only gives a warning.
+# (Set OA_SKIP_PRE_UPDATE_BACKUP=1 to skip it.)
+if [ "$OA_PIN_CHANGES" = true ] && [ "$PLATFORM" = "openclaw" ] && [ -f "$PROJECT_DIR/scripts/backup.sh" ] \
+    && [ "${OA_SKIP_PRE_UPDATE_BACKUP:-0}" != 1 ] \
+    && [ -d "${PLATFORM_DATA_DIR:-$HOME/.openclaw}" ]; then
+    echo ""
+    echo "Backing up your OpenClaw data before the update..."
+    # Neither du nor df may stop the update (set -e): an empty answer just means "unknown"
+    _oa_state_mb=$({ du -sm "${PLATFORM_DATA_DIR:-$HOME/.openclaw}" 2>/dev/null || true; } | awk '{print $1}')
+    _oa_free_now=$(oa_free_mb || true)
+    if [[ "$_oa_state_mb" =~ ^[0-9]+$ ]] && [[ "$_oa_free_now" =~ ^[0-9]+$ ]] \
+        && [ "$_oa_free_now" -lt $(( ${OA_MIN_FREE_UPDATE_MB:-2000} + _oa_state_mb + 50 )) ]; then
+        echo -e "${YELLOW}[WARN]${NC} Not enough free storage for a backup next to the update (${_oa_state_mb} MB of data) — skipped."
+        echo "       To keep a copy first, free some space and run 'oa --backup', then 'oa --update' again."
+    elif _oa_prev_backup=$(ls -t "$PROJECT_DIR/backup/pre-update"/*.tar.gz 2>/dev/null | head -1 || true) \
+        && ( source "$PROJECT_DIR/scripts/backup.sh"; cmd_backup "$PROJECT_DIR/backup/pre-update" \
+            && { ! declare -f _backup_prune_dir >/dev/null || _backup_prune_dir "$PROJECT_DIR/backup/pre-update" 3; } ); then
+        # The archive made in this run (platforms/*/update.sh may migrate the data when it exists)
+        _oa_new_backup=$(ls -t "$PROJECT_DIR/backup/pre-update"/*.tar.gz 2>/dev/null | head -1 || true)
+        if [ -n "$_oa_new_backup" ] && [ "$_oa_new_backup" != "$_oa_prev_backup" ]; then
+            export OA_PRE_UPDATE_BACKUP="$_oa_new_backup"
+        fi
+        # (own folder, newest three kept: a retried update does not pile up full backups)
+        echo -e "${GREEN}[OK]${NC}   Backup saved: your OpenClaw data as it was before this update (not the program itself)."
+        echo "       If the update damaged your data, 'oa --restore' puts it back (it is listed as pre-update/…);"
+        echo "       if the gateway then asks for a state migration, run: openclaw doctor --fix"
+    else
+        echo -e "${YELLOW}[WARN]${NC} The backup did not finish — continuing the update without it."
+    fi
 fi
 
 cp "$RELEASE_TMP/patches/glibc-compat.js" "$PROJECT_DIR/patches/glibc-compat.js"

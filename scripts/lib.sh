@@ -83,7 +83,7 @@ REPO_BASE="$REPO_BASE_ORIGIN"
 
 BASHRC_MARKER_START="# >>> OpenClaw on Android >>>"
 BASHRC_MARKER_END="# <<< OpenClaw on Android <<<"
-OA_VERSION="1.2.0"
+OA_VERSION="1.2.1"
 
 # ── Platform detection ──
 # 1. Explicit marker file (new install and after first update)
@@ -121,9 +121,16 @@ validate_platform_name() {
 
 # ── User confirmation prompt ──
 # Reads from /dev/tty so it works even in curl|bash mode.
+# OA_ASSUME_YES=1 / 0 answers every such question without asking (the Claw app runs the updater as a
+# child process with no terminal and sets it); unset keeps the behaviour above. The question is still
+# printed, with the answer, so the log shows what was decided.
 ask_yn() {
     local prompt="$1"
     local reply
+    case "${OA_ASSUME_YES:-}" in
+        1) echo "$prompt [Y/n] y (OA_ASSUME_YES=1)"; return 0 ;;
+        0) echo "$prompt [Y/n] n (OA_ASSUME_YES=0)"; return 1 ;;
+    esac
     if (echo -n "" > /dev/tty) 2>/dev/null; then
         read -rp "$prompt [Y/n] " reply < /dev/tty
     else
@@ -224,7 +231,8 @@ load_platform_config() {
 # EPERM and ends in agents/<agent_id>/agent/openclaw-agent.sqlite is moved to this state folder
 # (dropped when this state folder has that row already, as an absolute or a relative path). A stale
 # row of agent_database_leases with such a path is deleted.
-# Before the first change a copy of the state database is made (openclaw.sqlite.oa-before-repair-<time>).
+# Before the first change a copy of the state database is made (openclaw.sqlite.oa-before-repair-<time>, 0600;
+# of the copies of earlier repairs only the newest 2 stay, the same for openclaw.json).
 # Prints one line: "<rows changed> <rows left that need repair> <copy path or ->", or "error: <reason>"
 # when the repair could not be done (nothing was changed then); "0 0 -" when there is nothing to do.
 oa_repair_state_paths() {
@@ -233,11 +241,14 @@ oa_repair_state_paths() {
     out=$("$node" --no-warnings -e '
         const fs = require("fs");
         const path = require("path");
-        // copies of what a repair changed hold the same data (API keys) as the original: keep the newest 3 per kind
-        const keepNewest = (dir, prefix) => {
+        // copies of what a repair changed hold the same data (API keys) as the original: keep the newest 3 per
+        // kind, the one just made always among them. Only names this repair makes (prefix + 14 digits + x*)
+        // are ever deleted, never another file that starts the same way.
+        const keepNewest = (dir, prefix, current) => {
             try {
-                const names = fs.readdirSync(dir).filter((n) => n.startsWith(prefix)).sort();
-                for (const n of names.slice(0, Math.max(0, names.length - 3))) fs.unlinkSync(dir + "/" + n);
+                const re = new RegExp("^" + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[0-9]{14}x*$");
+                const others = fs.readdirSync(dir).filter((n) => re.test(n) && dir + "/" + n !== current).sort();
+                for (const n of others.slice(0, Math.max(0, others.length - 2))) fs.unlinkSync(dir + "/" + n);
             } catch (e) { /* pruning is best effort */ }
         };
         const state = path.resolve(process.argv[1]);
@@ -302,7 +313,7 @@ oa_repair_state_paths() {
                 try { fs.unlinkSync(copy); } catch (e2) { /* no copy */ }
                 throw e;
             }
-            keepNewest(path.dirname(dbPath), path.basename(dbPath) + ".oa-before-repair-");
+            keepNewest(path.dirname(dbPath), path.basename(dbPath) + ".oa-before-repair-", copy);
             console.log((todo.length + staleLeases.length) + " " + left + " " + copy);
         } catch (e) {
             console.log("error: " + (e && e.message ? e.message : String(e)).replace(/\s+/g, " ").slice(0, 160));
@@ -314,22 +325,27 @@ oa_repair_state_paths() {
 # oa_repair_config_paths <state dir> [node]: the same problem in openclaw.json. "openclaw agents add" writes
 # absolute paths (agents.list[].agentDir and .workspace), and agents.defaults.workspace can be one too.
 # A value that points into the home folder of another Android app (/data/data/<package>/files/home or
-# /data/user/<n>/<package>/files/home), that cannot be resolved here (EACCES or EPERM) is moved to
-# this $HOME (the part after the home folder stays). Only those fields change, as a text edit of the
+# /data/user/<n>/<package>/files/home) of a package other than this app's, that cannot be resolved here
+# (the folder is missing, or refused: EACCES, EPERM), is moved to this $HOME (the part after the home
+# folder stays; another spelling of this app's own home is left alone). Only those fields change, as a text edit of the
 # string value, so the rest of the file stays as it was; the result is parsed again and compared with
 # the expected object before it is written (temp file, then rename). A copy is made first
-# (openclaw.json.oa-before-repair-<time>). Output as oa_repair_state_paths: "<changed> <left> <copy>".
+# (openclaw.json.oa-before-repair-<time>, 0600). Output as oa_repair_state_paths: "<changed> <left> <copy>",
+# where <changed> is the number of values changed in the file (a path used in several fields counts for each).
 oa_repair_config_paths() {
     local state="${1:-${PLATFORM_DATA_DIR:-$HOME/.openclaw}}" node="${2:-node}" out
     [ -f "$state/openclaw.json" ] || { echo "0 0 -"; return 0; }
     out=$("$node" --no-warnings -e '
         const fs = require("fs");
         const path = require("path");
-        // copies of what a repair changed hold the same data (API keys) as the original: keep the newest 3 per kind
-        const keepNewest = (dir, prefix) => {
+        // copies of what a repair changed hold the same data (API keys) as the original: keep the newest 3 per
+        // kind, the one just made always among them. Only names this repair makes (prefix + 14 digits + x*)
+        // are ever deleted, never another file that starts the same way.
+        const keepNewest = (dir, prefix, current) => {
             try {
-                const names = fs.readdirSync(dir).filter((n) => n.startsWith(prefix)).sort();
-                for (const n of names.slice(0, Math.max(0, names.length - 3))) fs.unlinkSync(dir + "/" + n);
+                const re = new RegExp("^" + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[0-9]{14}x*$");
+                const others = fs.readdirSync(dir).filter((n) => re.test(n) && dir + "/" + n !== current).sort();
+                for (const n of others.slice(0, Math.max(0, others.length - 2))) fs.unlinkSync(dir + "/" + n);
             } catch (e) { /* pruning is best effort */ }
         };
         const file = path.resolve(process.argv[1]) + "/openclaw.json";
@@ -349,13 +365,15 @@ oa_repair_config_paths() {
                 const agentObjects = [].concat(Array.isArray(agents.list) ? agents.list : [], agents.entries && typeof agents.entries === "object" ? Object.values(agents.entries) : []);
                 for (const a of agentObjects) if (a && typeof a === "object") for (const k of ["workspace", "agentDir"]) if (typeof a[k] === "string") fields.push([a, k]);
             }
+            // another spelling of the own home of this app (/data/user/0/<pkg>/… for /data/data/<pkg>/…) is no other app
+            const own = foreign.exec(home);
             const changes = new Map();
             let left = 0;
             for (const [obj, k] of fields) {
                 const v = obj[k];
                 const m = foreign.exec(v);
                 // a folder of an app that is gone (ENOENT) is moved too: the agent could not create its files there (mkdir EACCES)
-                if (!m || v === home || v.startsWith(home + "/") || !unresolved(v)) continue;
+                if (!m || (own && m[1] === own[1]) || v === home || v.startsWith(home + "/") || !unresolved(v)) continue;
                 changes.set(v, home + (m[2] || ""));
             }
             if (changes.size === 0) { console.log("0 " + left + " -"); process.exit(0); }
@@ -382,10 +400,11 @@ oa_repair_config_paths() {
                 fs.chmodSync(tmp, fs.statSync(file).mode & 0o7777);
                 fs.renameSync(tmp, file);
             } catch (e) {
-                try { fs.unlinkSync(tmp); } catch (e2) { /* no temp file */ }
+                // nothing was changed: the copy is of no use
+                for (const f of [tmp, copy]) { try { fs.unlinkSync(f); } catch (e2) { /* not there */ } }
                 throw e;
             }
-            keepNewest(path.dirname(file), path.basename(file) + ".oa-before-repair-");
+            keepNewest(path.dirname(file), path.basename(file) + ".oa-before-repair-", copy);
             // (the number of values changed in the file, not of different paths)
             console.log(fields.filter(([obj, k]) => changes.has(obj[k])).length + " " + left + " " + copy);
         } catch (e) {

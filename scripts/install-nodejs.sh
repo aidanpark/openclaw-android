@@ -152,20 +152,9 @@ if [ -f "\$_OA_COMPAT" ]; then
         *) export NODE_OPTIONS="\${NODE_OPTIONS:+\$NODE_OPTIONS }-r \$_OA_COMPAT" ;;
     esac
 fi
-_LEADING_OPTS=""
-_COUNT=0
-for _arg in "\$@"; do
-    case "\$_arg" in --*) _COUNT=\$((_COUNT + 1)) ;; *) break ;; esac
-done
-if [ \$_COUNT -gt 0 ] && [ \$_COUNT -lt \$# ]; then
-    while [ \$# -gt 0 ]; do
-        case "\$1" in
-            --*) _LEADING_OPTS="\${_LEADING_OPTS:+\$_LEADING_OPTS }\$1"; shift ;;
-            *) break ;;
-        esac
-    done
-    export NODE_OPTIONS="\${NODE_OPTIONS:+\$NODE_OPTIONS }\$_LEADING_OPTS"
-fi
+# All arguments go to node.real unchanged. ld.so stops parsing its own options at
+# the program path, so leading --options (and their values) are not misread; moving
+# them to NODE_OPTIONS stripped values such as "--import X" and "--env-file X".
 exec "$GLIBC_LDSO" --library-path "$PREFIX/glibc/lib" "$NODE_DIR/bin/node.real" "\$@"
 WRAPPER
     # ─── end node wrapper ───

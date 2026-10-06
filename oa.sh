@@ -11,7 +11,7 @@ if [ -f "$HOME/.openclaw-android/scripts/lib.sh" ]; then
         source "$HOME/.openclaw-android/scripts/backup.sh"
     fi
 else
-    OA_VERSION="1.2.0"
+    OA_VERSION="1.2.1"
     RED='\033[0;31m'
     GREEN='\033[0;32m'
     YELLOW='\033[1;33m'
@@ -151,7 +151,8 @@ cmd_status() {
 
     echo ""
     echo -e "${BOLD}Paths${NC}"
-    local CHECK_DIRS=("$PROJECT_DIR" "${PREFIX:-}/tmp")
+    # The temp folder in use: Termux has $PREFIX/tmp, the app has files/tmp (both set as TMPDIR)
+    local CHECK_DIRS=("$PROJECT_DIR" "${TMPDIR:-${PREFIX:-}/tmp}")
     for dir in "${CHECK_DIRS[@]}"; do
         if [ -d "$dir" ]; then
             echo -e "  ${GREEN}[OK]${NC}   $dir"
@@ -162,7 +163,9 @@ cmd_status() {
 
     echo ""
     echo -e "${BOLD}Configuration${NC}"
-    if grep -qF "OpenClaw on Android" "$HOME/.bashrc" 2>/dev/null; then
+    # Termux writes a marked block ("# >>> OpenClaw on Android >>>"); the app writes its own
+    # whole file that starts with "# OpenClaw Android environment"
+    if grep -qE "^# (>>> OpenClaw on Android >>>|OpenClaw Android environment)" "$HOME/.bashrc" 2>/dev/null; then
         echo -e "  ${GREEN}[OK]${NC}   .bashrc environment block present"
     else
         echo -e "  ${RED}[MISS]${NC} .bashrc environment block not found"

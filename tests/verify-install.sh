@@ -101,7 +101,7 @@ else
     check_fail "glibc node wrapper not found or not a wrapper script"
 fi
 
-for DIR in "$PROJECT_DIR" "$PREFIX/tmp"; do
+for DIR in "$PROJECT_DIR" "${TMPDIR:-$PREFIX/tmp}"; do
     if [ -d "$DIR" ]; then
         check_pass "Directory $DIR exists"
     else
@@ -126,7 +126,7 @@ else
     check_warn "opencode not installed (non-critical)"
 fi
 
-if grep -qF "OpenClaw on Android" "$HOME/.bashrc" 2>/dev/null; then
+if grep -qE "^# (>>> OpenClaw on Android >>>|OpenClaw Android environment)" "$HOME/.bashrc" 2>/dev/null; then
     check_pass ".bashrc contains environment block"
 else
     check_fail ".bashrc missing environment block"

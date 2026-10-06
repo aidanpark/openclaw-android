@@ -305,6 +305,20 @@ else
     pass "8g: wrapper lets 'update status' through"
 fi
 
+# 8h: leading value options reach node unchanged (the wrapper once moved them to NODE_OPTIONS
+# and dropped the value: '--require X' became '--require', which node rejected there).
+_H_DIR=$(mktemp -d)
+echo 'globalThis.__oa_req = "ok";' > "$_H_DIR/r.cjs"
+H_OUT=$(node --require "$_H_DIR/r.cjs" -p 'globalThis.__oa_req' 2>&1)
+# the shapes OpenClaw 9.8's update hand-off uses: --import <data: URL> and --input-type=module -e
+H_OUT2=$(node --import 'data:text/javascript,globalThis.__oa_imp=1' --input-type=module -e 'process.stdout.write(String(globalThis.__oa_imp))' 2>&1)
+rm -rf "$_H_DIR"
+if [ "$H_OUT" = "ok" ] && [ "$H_OUT2" = "1" ]; then
+    pass "8h: wrapper passes leading '--require <file>' and '--import <url>' to node unchanged"
+else
+    fail "8h: leading --require/--import options did not reach node (got: $H_OUT / $H_OUT2)"
+fi
+
 # ─────────────────────────────────────────────────
 # Summary
 # ─────────────────────────────────────────────────

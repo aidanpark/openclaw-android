@@ -9,7 +9,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.2.0"
+OA_VERSION="1.2.1"
 # Marks this updater as the current protocol for the scripts it runs from the downloaded copy
 # (install-nodejs.sh and platforms/*/update.sh refuse a version change without it: a cached older
 # update-core.sh must not combine with a newer download).
@@ -486,8 +486,32 @@ update_ai_tool() {
         # the native binary: without the script the update leaves `claude` broken.
         local scripts_flag="--ignore-scripts"
         [ "$pkg" = "@anthropic-ai/claude-code" ] && scripts_flag=""
-        # shellcheck disable=SC2086
-        if npm install -g "$pkg@latest" --no-fund --no-audit $scripts_flag; then
+        local install_ok=false npm_out="" codex_keep=""
+        if [ "$pkg" = "@mmmbuto/codex-cli-termux" ]; then
+            # Our launcher script sits at the place of npm's bin link; npm refuses to replace a file it does
+            # not own (EEXIST). Put it aside for the install; it is written again below, or put back on failure.
+            if [ -f "$PREFIX/bin/codex" ] && [ ! -L "$PREFIX/bin/codex" ] && grep -q 'codex.bin' "$PREFIX/bin/codex" 2>/dev/null; then
+                codex_keep="$PREFIX/bin/codex.oa-keep"
+                mv -f "$PREFIX/bin/codex" "$codex_keep" || codex_keep=""
+            fi
+            # The package declares os=android, but the glibc Node reports "linux", so npm refuses it
+            # (EBADPLATFORM). The binary inside is a bionic build for this prefix: retry with --force for
+            # this one package only (the same as the app's installer does).
+            if npm_out=$(npm install -g "$pkg@latest" --no-fund --no-audit $scripts_flag 2>&1); then
+                install_ok=true
+            elif printf '%s' "$npm_out" | grep -q EBADPLATFORM; then
+                echo "  (npm refused the platform: retrying with --force for this package)"
+                npm install -g --force "$pkg@latest" --no-fund --no-audit $scripts_flag 2>&1 && install_ok=true
+                npm_out=""
+            fi
+            [ -z "$npm_out" ] || printf '%s\n' "$npm_out"
+            if [ -n "$codex_keep" ]; then
+                if [ "$install_ok" = true ] || [ -e "$PREFIX/bin/codex" ]; then rm -f "$codex_keep"; else mv -f "$codex_keep" "$PREFIX/bin/codex"; fi
+            fi
+        elif npm install -g "$pkg@latest" --no-fund --no-audit $scripts_flag; then
+            install_ok=true
+        fi
+        if [ "$install_ok" = true ]; then
             echo -e "${GREEN}[OK]${NC}   $label $latest_ver updated"
         else
             echo -e "${YELLOW}[WARN]${NC} $label update failed (non-critical)"

@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.2.1] - 2026-10-06
+
+### Fixed
+
+- The Node.js wrapper passes every option straight to Node.js. It used to move leading options into `NODE_OPTIONS`, which broke value options such as `--import <file>` and `--require <file>` and options Node.js does not allow there (`--env-file`, `--eval`, `--print`, `--check`). OpenClaw 2026.9's update helper now runs to the end, so `openclaw update status` records the blocked dashboard update as failed instead of staying "in progress" (OpenClaw itself is still not updated; use `oa --update`). Leading options are no longer inherited by children started with `spawn(process.execPath)`, as in standard Node.js.
+- `oa --update` updates an installed Codex CLI with `--force` when npm rejects its Android package, in Termux too, and keeps the `codex` launcher if the reinstall fails.
+- Repair copies: the copy made by the current repair is always kept, only files named like repair copies are pruned, and the app's own home written another way (`/data/user/<n>/<same package>/...`) is no longer treated as another app's folder.
+- Claw app: `oa --status` shows the platform section (including the hard-link patch) right after a new install, and no longer reports the app's temporary folder and `.bashrc` block as missing.
+- A rerun of an unfinished app setup now refreshes the Node.js wrapper too.
+
 ## [Script v1.2.0] - 2026-10-06
 
 ### Changed

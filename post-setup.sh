@@ -1378,6 +1378,87 @@ if [ -d "$NODE_OLD" ]; then
 fi
 rm -rf "${NODE_NEW:?}" "${NODE_TRASH:?}"
 
+# Node wrapper: grun-style execution (same text as scripts/install-nodejs.sh write_node_wrapper).
+write_node_wrapper() {
+    mkdir -p "$BIN_DIR"
+    # ─── node wrapper ───
+    cat > "$BIN_DIR/node.tmp" << WRAPPER
+#!${PREFIX}/bin/bash
+[ -n "\$LD_PRELOAD" ] && export _OA_ORIG_LD_PRELOAD="\$LD_PRELOAD"
+unset LD_PRELOAD
+export _OA_WRAPPER_PATH="$BIN_DIR/node"
+# OpenClaw 2026.9.x's native fs-safe helper probes the openat2 system call, which
+# Android's app sandbox answers by killing the process (SIGSYS). This switch of the
+# helper makes it use its own fallback for that one call and keep everything else
+# native (no-clobber moves, state migrations). A mode the user set stays untouched.
+# (The helper only recognises the value 1 here; to turn native off use FS_SAFE_NATIVE_MODE=off.)
+export FS_SAFE_TEST_NO_OPENAT2="\${FS_SAFE_TEST_NO_OPENAT2:-1}"
+# OpenClaw's gateway can start a self-update through this wrapper (not through the
+# openclaw command), which would replace the version pair this app was verified with.
+export OPENCLAW_NO_AUTO_UPDATE="\${OPENCLAW_NO_AUTO_UPDATE:-1}"
+_oa_found=false
+_oa_rest=()
+for _oa_arg in "\$@"; do
+    if [ "\$_oa_found" = true ]; then
+        _oa_rest+=("\$_oa_arg")
+    else
+        case "\$_oa_arg" in
+            */openclaw/openclaw.mjs|*/openclaw/dist/index.js|*/openclaw/dist/index.mjs|*/openclaw/dist/entry.js|*/openclaw/dist/entry.mjs|*/bin/openclaw) _oa_found=true ;;
+        esac
+    fi
+done
+if [ "\$_oa_found" = true ]; then
+    _oa_block=false
+    for _oa_arg in "\${_oa_rest[@]}"; do
+        [ "\$_oa_arg" = "--update" ] && _oa_block=true && break
+    done
+    if [ "\$_oa_block" = false ]; then
+        _oa_skip=false
+        _oa_next=false
+        for _oa_arg in "\${_oa_rest[@]}"; do
+            if [ "\$_oa_next" = true ]; then
+                [ "\$_oa_arg" = "status" ] && _oa_block=false
+                break
+            fi
+            if [ "\$_oa_skip" = true ]; then _oa_skip=false; continue; fi
+            case "\$_oa_arg" in
+                --profile|--container|--log-level) _oa_skip=true ;;
+                -*) ;;
+                update) _oa_block=true; _oa_next=true ;;
+                *) break ;;
+            esac
+        done
+    fi
+    if [ "\$_oa_block" = true ]; then
+        echo "[BLOCKED] OpenClaw is pinned to the version verified by OpenClaw on Android." >&2
+        echo "          Run 'oa --update' to update safely. ('openclaw update status' is allowed.)" >&2
+        exit 1
+    fi
+fi
+unset _oa_found _oa_rest _oa_arg _oa_block _oa_skip _oa_next
+_OA_COMPAT="\$HOME/.openclaw-android/lib/glibc-compat.js"
+[ -s "\$_OA_COMPAT" ] || _OA_COMPAT="\$HOME/.openclaw-android/patches/glibc-compat.js"
+if [ -f "\$_OA_COMPAT" ]; then
+    case "\${NODE_OPTIONS:-}" in
+        *glibc-compat.js*) ;;
+        *) export NODE_OPTIONS="\${NODE_OPTIONS:+\$NODE_OPTIONS }-r \$_OA_COMPAT" ;;
+    esac
+fi
+# All arguments go to node.real unchanged. ld.so stops parsing its own options at
+# the program path, so leading --options (and their values) are not misread; moving
+# them to NODE_OPTIONS stripped values such as "--import X" and "--env-file X".
+exec "$GLIBC_LDSO" --library-path "$PREFIX/glibc/lib" "$NODE_DIR/bin/node.real" "\$@"
+WRAPPER
+    # ─── end node wrapper ───
+    chmod +x "$BIN_DIR/node.tmp"
+    # Leave an identical wrapper alone; replace a stale one (never edit it in place)
+    if [ -f "$BIN_DIR/node" ] && cmp -s "$BIN_DIR/node.tmp" "$BIN_DIR/node"; then
+        rm -f "$BIN_DIR/node.tmp"
+    else
+        mv -f "$BIN_DIR/node.tmp" "$BIN_DIR/node"
+    fi
+}
+
 _NODE_CMD=""
 if [ -x "$BIN_DIR/node" ]; then _NODE_CMD="$BIN_DIR/node"
 elif [ -f "$NODE_DIR/bin/node.real" ] && [ -x "$NODE_DIR/bin/node" ]; then _NODE_CMD="$NODE_DIR/bin/node"
@@ -1391,6 +1472,8 @@ if [ "$INSTALLED_VER" = "$NODE_VERSION" ]; then
     echo -e "  ${GREEN}[SKIP]${NC} Node.js already installed (v$INSTALLED_VER)"
     # Repair wrappers in BIN_DIR (safe from npm overwrites)
     mkdir -p "$BIN_DIR"
+    # The node wrapper is refreshed too: an interrupted setup that is run again must not keep an old one (a finished app gets it from oa --update)
+    [ -f "$NODE_DIR/bin/node.real" ] && write_node_wrapper
     if [ -f "$NODE_DIR/lib/node_modules/npm/bin/npm-cli.js" ]; then
         cat > "$BIN_DIR/npm.tmp" << NPMWRAP
 #!$PREFIX/bin/bash
@@ -1538,89 +1621,7 @@ else
     mv "$NODE_NEW" "$NODE_DIR"
 
     # Create grun-style node wrapper in BIN_DIR (safe from npm overwrites)
-    mkdir -p "$BIN_DIR"
-    # ─── node wrapper ───
-    cat > "$BIN_DIR/node.tmp" << WRAPPER
-#!${PREFIX}/bin/bash
-[ -n "\$LD_PRELOAD" ] && export _OA_ORIG_LD_PRELOAD="\$LD_PRELOAD"
-unset LD_PRELOAD
-export _OA_WRAPPER_PATH="$BIN_DIR/node"
-# OpenClaw 2026.9.x's native fs-safe helper probes the openat2 system call, which
-# Android's app sandbox answers by killing the process (SIGSYS). This switch of the
-# helper makes it use its own fallback for that one call and keep everything else
-# native (no-clobber moves, state migrations). A mode the user set stays untouched.
-# (The helper only recognises the value 1 here; to turn native off use FS_SAFE_NATIVE_MODE=off.)
-export FS_SAFE_TEST_NO_OPENAT2="\${FS_SAFE_TEST_NO_OPENAT2:-1}"
-# OpenClaw's gateway can start a self-update through this wrapper (not through the
-# openclaw command), which would replace the version pair this app was verified with.
-export OPENCLAW_NO_AUTO_UPDATE="\${OPENCLAW_NO_AUTO_UPDATE:-1}"
-_oa_found=false
-_oa_rest=()
-for _oa_arg in "\$@"; do
-    if [ "\$_oa_found" = true ]; then
-        _oa_rest+=("\$_oa_arg")
-    else
-        case "\$_oa_arg" in
-            */openclaw/openclaw.mjs|*/openclaw/dist/index.js|*/openclaw/dist/index.mjs|*/openclaw/dist/entry.js|*/openclaw/dist/entry.mjs|*/bin/openclaw) _oa_found=true ;;
-        esac
-    fi
-done
-if [ "\$_oa_found" = true ]; then
-    _oa_block=false
-    for _oa_arg in "\${_oa_rest[@]}"; do
-        [ "\$_oa_arg" = "--update" ] && _oa_block=true && break
-    done
-    if [ "\$_oa_block" = false ]; then
-        _oa_skip=false
-        _oa_next=false
-        for _oa_arg in "\${_oa_rest[@]}"; do
-            if [ "\$_oa_next" = true ]; then
-                [ "\$_oa_arg" = "status" ] && _oa_block=false
-                break
-            fi
-            if [ "\$_oa_skip" = true ]; then _oa_skip=false; continue; fi
-            case "\$_oa_arg" in
-                --profile|--container|--log-level) _oa_skip=true ;;
-                -*) ;;
-                update) _oa_block=true; _oa_next=true ;;
-                *) break ;;
-            esac
-        done
-    fi
-    if [ "\$_oa_block" = true ]; then
-        echo "[BLOCKED] OpenClaw is pinned to the version verified by OpenClaw on Android." >&2
-        echo "          Run 'oa --update' to update safely. ('openclaw update status' is allowed.)" >&2
-        exit 1
-    fi
-fi
-unset _oa_found _oa_rest _oa_arg _oa_block _oa_skip _oa_next
-_OA_COMPAT="\$HOME/.openclaw-android/lib/glibc-compat.js"
-[ -s "\$_OA_COMPAT" ] || _OA_COMPAT="\$HOME/.openclaw-android/patches/glibc-compat.js"
-if [ -f "\$_OA_COMPAT" ]; then
-    case "\${NODE_OPTIONS:-}" in
-        *glibc-compat.js*) ;;
-        *) export NODE_OPTIONS="\${NODE_OPTIONS:+\$NODE_OPTIONS }-r \$_OA_COMPAT" ;;
-    esac
-fi
-_LEADING_OPTS=""
-_COUNT=0
-for _arg in "\$@"; do
-    case "\$_arg" in --*) _COUNT=\$((_COUNT + 1)) ;; *) break ;; esac
-done
-if [ \$_COUNT -gt 0 ] && [ \$_COUNT -lt \$# ]; then
-    while [ \$# -gt 0 ]; do
-        case "\$1" in
-            --*) _LEADING_OPTS="\${_LEADING_OPTS:+\$_LEADING_OPTS }\$1"; shift ;;
-            *) break ;;
-        esac
-    done
-    export NODE_OPTIONS="\${NODE_OPTIONS:+\$NODE_OPTIONS }\$_LEADING_OPTS"
-fi
-exec "$GLIBC_LDSO" --library-path "$PREFIX/glibc/lib" "$NODE_DIR/bin/node.real" "\$@"
-WRAPPER
-    # ─── end node wrapper ───
-    chmod +x "$BIN_DIR/node.tmp"
-    mv -f "$BIN_DIR/node.tmp" "$BIN_DIR/node"
+    write_node_wrapper
 
     # Create npm/npx wrappers in BIN_DIR
     if [ -f "$NODE_DIR/lib/node_modules/npm/bin/npm-cli.js" ]; then
@@ -2437,12 +2438,12 @@ else
     echo -e "  ${YELLOW}[WARN]${NC} oa CLI installation failed (non-critical)"
 fi
 
-# Files that oa --backup / oa --restore need (the same ones oa --update installs).
-# All three are fetched first and put in place together, so a failed download never
-# leaves a half set; oa --update installs them later if this step is skipped.
+# Files that oa --backup / oa --restore need, and the platform part of oa --status (the same
+# ones oa --update installs). All of them are fetched first and put in place together, so a
+# failed download never leaves a half set; oa --update installs them later if this step is skipped.
 _oa_dl_ok=true
 mkdir -p "$OCA_DIR/scripts" "$OCA_DIR/platforms/openclaw"
-for _oa_f in scripts/lib.sh scripts/backup.sh platforms/openclaw/config.env; do
+for _oa_f in scripts/lib.sh scripts/backup.sh platforms/openclaw/config.env platforms/openclaw/status.sh; do
     if ! curl -fsSL "$REPO_BASE/$_oa_f" -o "$OCA_DIR/$_oa_f.tmp" 2>/dev/null || [ ! -s "$OCA_DIR/$_oa_f.tmp" ]; then
         _oa_dl_ok=false
         break
@@ -2454,12 +2455,12 @@ for _oa_f in scripts/lib.sh scripts/backup.sh platforms/openclaw/config.env; do
     esac
 done
 if [ "$_oa_dl_ok" = true ]; then
-    for _oa_f in scripts/lib.sh scripts/backup.sh platforms/openclaw/config.env; do
+    for _oa_f in scripts/lib.sh scripts/backup.sh platforms/openclaw/config.env platforms/openclaw/status.sh; do
         mv -f "$OCA_DIR/$_oa_f.tmp" "$OCA_DIR/$_oa_f"
     done
     echo -e "  ${GREEN}✓${NC} backup/restore scripts installed (oa --backup, oa --restore)"
 else
-    rm -f "$OCA_DIR/scripts/lib.sh.tmp" "$OCA_DIR/scripts/backup.sh.tmp" "$OCA_DIR/platforms/openclaw/config.env.tmp"
+    rm -f "$OCA_DIR/scripts/lib.sh.tmp" "$OCA_DIR/scripts/backup.sh.tmp" "$OCA_DIR/platforms/openclaw/config.env.tmp" "$OCA_DIR/platforms/openclaw/status.sh.tmp"
     echo -e "  ${YELLOW}[WARN]${NC} Could not download the backup/restore scripts (non-critical) — run oa --update later to get them"
 fi
 

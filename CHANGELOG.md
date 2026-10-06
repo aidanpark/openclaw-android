@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.2.2] - 2026-10-06
+
+### Added
+
+- A new install, `oa --update` and tool installs from the Claw app no longer run at the same time. A second run stops right away with exit code 2 and a message, without changing the installation.
+- A new install and `oa --update` record their progress and outcome in a small result file (`post-setup-result.conf`, `update-result.conf`) that the Claw app can read.
+- `OA_NO_ONBOARD=1` finishes a new install without starting OpenClaw onboarding.
+- `OA_ASSUME_YES=1` (or `0`) answers yes (or no) to the questions of `oa --update` and to the final confirmation of `oa --restore` without asking (available since v1.2.1, now documented).
+
+### Changed
+
+- Cancelling `oa --update` (Ctrl+C, or from the Claw app) while it copies the new scripts now lets the copy finish first, so the platform scripts are no longer left half-copied.
+
+### Fixed
+
+- When the gateway was using OpenClaw's data during an update that did not replace OpenClaw, the final data check reported a failure, although nothing was wrong with the data. The check is now skipped with a warning: stop the gateway, then run `openclaw doctor`.
+- Claw app: `oa --status` shows the free storage instead of "unknown", and no longer reports the OpenCode command as missing when OpenCode is not installed.
+
 ## [Script v1.2.1] - 2026-10-06
 
 ### Fixed

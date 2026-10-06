@@ -221,6 +221,8 @@ oa --update && source ~/.bashrc
 
 업데이트 중에 게이트웨이가 실행 중이었다면, 업데이트 뒤 다시 시작하세요(멈춘 뒤 `openclaw gateway` 를 다시 실행하거나 앱을 다시 시작) — 그래야 업데이트된 런타임을 사용합니다.
 
+한 번에 하나의 설치·업데이트·도구 설치만 실행합니다(새 설치, `oa --update`, Claw 앱의 도구 설치는 잠금 하나를 공유합니다). 다른 실행이 진행 중이면 `oa --update` 는 `[FAIL] Another update, setup or tools run is in progress. Try again when it has finished.` 를 출력하고 설치 상태를 바꾸지 않은 채 종료 코드 2 로 끝납니다([문제 해결](docs/troubleshooting.ko.md) 참고).
+
 **고정 버전이 바뀌는 업데이트**(예: Script v1.2.0 에서 Node.js 24.21.0 과 OpenClaw 2026.9.8 로 바뀌는 경우)에서 `oa --update` 는 다음 안전장치를 추가로 적용합니다:
 
 - 여유 공간 2000MB 가 필요합니다. 부족하면 아무것도 바꾸기 전에 멈추고 필요한 양과 남은 양을 알려 줍니다.
@@ -595,6 +597,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - 아키텍처 감지: glibc (`.glibc-arch` 마커) 또는 Bionic (레거시)
 - 구버전 디렉토리 마이그레이션 (`.openclaw-lite` → `.openclaw-android` — 레거시 호환)
 - **Phantom Process Killer** (Android 12+): [비활성화 가이드](docs/disable-phantom-process-killer.ko.md) 링크와 함께 안내 메시지를 표시
+- **한 번에 한 실행**: 설치·업데이트·도구 설치는 한 번에 하나만 실행합니다. 두 번째 실행은 `[FAIL] Another update, setup or tools run is in progress. Try again when it has finished.` 를 출력하고, 설치 상태를 바꾸지 않은 채 종료 코드 2 로 끝납니다
 
 ### [2/5] 최신 릴리스 다운로드
 
@@ -626,6 +629,7 @@ GitHub에서 전체 저장소 tarball을 다운로드하고 임시 디렉토리�
 
 - 고정 버전이 바뀐 경우: 설치 뒤 OpenClaw 설정과 데이터 상태를 확인하고, 데이터 이전이 필요하며 이번 실행에서 백업을 만들었을 때 `openclaw doctor --fix` 를 한 번 실행 ([업데이트](#업데이트) 참고)
 - 설치 뒤 설정 확인 직전에 다른 앱의 폴더를 가리키는 경로를 고침 ([백업 및 복구](#백업-및-복구) 참고)
+- 마지막 데이터 확인(`openclaw config validate` 와 `openclaw doctor --non-interactive`): 게이트웨이가 OpenClaw 데이터를 사용 중이고 이번 실행에서 OpenClaw 를 교체하지 않았다면, 확인을 실패로 처리하지 않고 건너뛰며 `[WARN] The gateway is using the OpenClaw state, so the data check was skipped. Stop the gateway, then run: openclaw doctor` 를 표시한 채 업데이트를 계속합니다
 - `binutils` 설치 (네이티브 모듈 빌드용)
 - 안전장치로 Node.js 고정 버전을 재확인 (방어적 이중 확인 — [3/5]에서 이미 게이트를 거침)
 - `openclaw`을 고정 버전으로 수렴 — 설치된 버전이 더 낮으면 고정 버전을 설치. `OA_ALLOW_OPENCLAW_DOWNGRADE=1` 을 설정하지 않으면 OpenClaw 를 더 낮은 버전으로 내리지 않음

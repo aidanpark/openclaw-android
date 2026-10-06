@@ -272,4 +272,30 @@ if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$NW_A" -e "$NW_B"; then
     fi
 fi
 
+# --- run lock block: post-setup.sh == update-core.sh (the one lock of setup, update and tools runs) ---
+
+RL_A="post-setup.sh"
+RL_B="update-core.sh"
+if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$RL_A" -e "$RL_B"; then
+    rl_body() {
+        git show ":$1" 2>/dev/null | awk '
+            /^# ─── run lock ───$/      {m=1; next}
+            /^# ─── end run lock ───$/  {m=0}
+            m                            {print}'
+    }
+    rl_has_end() {
+        git show ":$1" 2>/dev/null | grep -qE '^# ─── end run lock ───$'
+    }
+    RA=$(rl_body "$RL_A")
+    RB=$(rl_body "$RL_B")
+    if [ -z "$RA" ] || [ -z "$RB" ] || [ "$RA" != "$RB" ] || ! rl_has_end "$RL_A" || ! rl_has_end "$RL_B"; then
+        echo ""
+        echo "ERROR: run lock block mismatch"
+        echo "  The lock functions between the '# ─── run lock ───' and '# ─── end run lock ───'"
+        echo "  markers in $RL_A and $RL_B must be identical and non-empty (they share one lock:"
+        echo "  \$OCA_DIR/.tools.lock for the full setup, 'oa --update' and --tools-only)."
+        exit 1
+    fi
+fi
+
 echo "All checks passed."

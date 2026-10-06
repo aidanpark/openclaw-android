@@ -221,6 +221,8 @@ oa --update && source ~/.bashrc
 
 アップデート中にゲートウェイが動作していた場合は、更新後に再起動してください（停止して `openclaw gateway` を再実行するか、アプリを再起動します）。そうすると更新されたランタイムが反映されます。
 
+セットアップ・アップデート・ツールのインストールは、同時には1つだけ実行されます（新規インストール、`oa --update`、Claw アプリのツールインストールは1つのロックを共有します）。別の実行が進行中の場合、`oa --update` は `[FAIL] Another update, setup or tools run is in progress. Try again when it has finished.` を表示し、インストールを変更せずに終了コード2で終了します（[トラブルシューティング](docs/troubleshooting.md)を参照）。
+
 **固定バージョンが変わるアップデート**（例: Script v1.2.0 でNode.js 24.21.0とOpenClaw 2026.9.8に変わる場合）では、`oa --update` が次の安全策を追加で実行します。
 
 - 空き容量が2000MB必要です。不足している場合は、何も変更する前に停止し、必要量と残量を表示します。
@@ -596,6 +598,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - アーキテクチャを検出: glibc（`.glibc-arch` マーカー）またはBionic（レガシー）
 - 必要に応じて旧ディレクトリ名を移行（`.openclaw-lite` → `.openclaw-android` — レガシー互換）
 - **Phantom Process Killer**（Android 12+）: [無効化ガイド](docs/disable-phantom-process-killer.md) のリンク付きで案内を表示
+- **同時に実行できるのは1つだけ**: セットアップ・アップデート・ツールのインストールは同時には1つだけ実行されます。2つ目の実行は `[FAIL] Another update, setup or tools run is in progress. Try again when it has finished.` を表示し、インストールを変更せずに終了コード2で終了します
 
 ### [2/5] 最新リリースのダウンロード
 
@@ -629,6 +632,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 
 - 固定バージョンが変わった場合: インストール後にOpenClawの設定とデータの状態を確認し、データ移行が必要で今回の実行でバックアップを作成していれば `openclaw doctor --fix` を1回実行（[アップデート](#アップデート)を参照）
 - インストール後、設定の確認の直前に、他のアプリのフォルダを指すパスを修復（[バックアップとリストア](#バックアップとリストア)を参照）
+- 最後のデータ確認（`openclaw config validate` と `openclaw doctor --non-interactive`）: ゲートウェイがOpenClawのデータを使用中で、今回の実行でOpenClawを置き換えていない場合は、確認を失敗とせずにスキップし、`[WARN] The gateway is using the OpenClaw state, so the data check was skipped. Stop the gateway, then run: openclaw doctor` を表示してアップデートを続行
 - `binutils` をインストール（ネイティブモジュールのビルド用）
 - Node.jsの固定を安全策として再確認（多層防御 — [3/5] でもすでにゲートされています）
 - `openclaw` を固定バージョンに収束させる — インストール済みバージョンがより低い場合に固定バージョンをインストールする。`OA_ALLOW_OPENCLAW_DOWNGRADE=1` を設定しない限り、OpenClawをより低いバージョンに下げることはありません

@@ -307,6 +307,30 @@ If you cannot find where the gateway is running, see [Gateway won't start](#gate
 
 The check looks for a process whose command line matches `openclaw.*gateway`, so a command such as `tail -f …gateway.log` can also trigger it. If you are sure no gateway is running, run `OA_SKIP_GATEWAY_CHECK=1 oa --update`.
 
+## `oa --update` stops with "Another update, setup or tools run is in progress"
+
+```
+[FAIL] Another update, setup or tools run is in progress. Try again when it has finished.
+```
+
+A new install prints `Another setup, update or tools run is in progress. Try again when it has finished.`, and a tool install from the Claw app prints `Another tools run is in progress. Try again when it has finished.` The exit code is 2 in all three cases, and the installation was not changed.
+
+### Cause
+
+A new install, `oa --update` and a tool install from the Claw app run one at a time. They share one lock, the folder `~/.openclaw-android/.tools.lock`, and a run that finds it held by another run stops right away.
+
+### Solution
+
+Wait until the other run has finished (in a terminal or in the Claw app), then run the command again.
+
+If no other run exists (for example, a run was killed), you usually need to do nothing: the lock holds the process ID of its owner in the file `pid`, and a new run takes the lock over automatically when that process is gone. A lock without a `pid` file (its owner stopped while creating it) is taken over after about one minute. If the message still appears, wait about a minute and run the command again.
+
+As a last resort, remove the lock folder. Do this only when you are sure that no other setup, update or tool install is running, in a terminal or in the Claw app:
+
+```bash
+rm -rf ~/.openclaw-android/.tools.lock
+```
+
 ## "state database schema migration required", or the gateway does not start after an update
 
 ```
@@ -329,6 +353,12 @@ openclaw gateway
 If something went wrong, `oa --restore` lists the `pre-update/` backup (your data as it was before the update). It restores data only, not the programs.
 
 If `oa --update` ran the migration itself and it failed, the full output of `openclaw doctor --fix` is saved in `~/.openclaw-android/doctor-fix.log`.
+
+If `oa --update` finishes with the following line, the data check was skipped, not failed: the gateway is using the OpenClaw state, so OpenClaw's own check could not look at it. The update itself finished. Stop the gateway, then run `openclaw doctor`.
+
+```
+[WARN] The gateway is using the OpenClaw state, so the data check was skipped. Stop the gateway, then run: openclaw doctor
+```
 
 ## `Hard-link patch: not complete`, `linkat … Permission denied`, or `FICLONE: Permission denied`
 
@@ -460,6 +490,8 @@ A new install, and an update that changes the pinned versions, both need 2000 MB
 ### Solution
 
 Free some space (for example, clear other apps' caches, delete unused files, or remove `~/.npm/_cacache`) and run the command again. Nothing was changed, so it is safe to retry.
+
+When the storage is completely full, `oa --update` can stop earlier with `[FAIL] Could not create the run lock in … (is the storage full?)`. The cause and the solution are the same.
 
 ## OpenClaw's desktop automation tool does not work on Android 10 or lower
 

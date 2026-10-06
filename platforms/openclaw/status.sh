@@ -114,10 +114,14 @@ else
     echo -e "  ${RED}[MISS]${NC} glibc node wrapper"
 fi
 
-if [ -f "${PREFIX:-}/bin/opencode" ]; then
-    echo -e "  ${GREEN}[OK]${NC}   opencode command"
-else
-    echo -e "  ${YELLOW}[MISS]${NC} opencode command"
+# (OpenCode is optional, and not supported in the app: no line when it is not installed — the
+# Platform Components list above already says so)
+if command -v opencode &>/dev/null; then
+    if [ -f "${PREFIX:-}/bin/opencode" ]; then
+        echo -e "  ${GREEN}[OK]${NC}   opencode command"
+    else
+        echo -e "  ${YELLOW}[MISS]${NC} opencode command"
+    fi
 fi
 
 
@@ -157,5 +161,10 @@ fi
 if [ -d "$HOME/.bun" ]; then
     echo "  ~/.bun:               $(du -sh "$HOME/.bun" 2>/dev/null | cut -f1)"
 fi
-AVAIL_MB=$(df "${PREFIX:-/}" 2>/dev/null | awk 'NR==2 {print int($4/1024)}') || true
-echo "  Available:            ${AVAIL_MB:-unknown}MB"
+# (oa_free_mb tries the system df too: the df of the Termux packages does not start in the app terminal)
+AVAIL_MB=$(oa_free_mb "${PREFIX:-/}" 2>/dev/null || true)
+if [ -n "$AVAIL_MB" ]; then
+    echo "  Available:            ${AVAIL_MB}MB"
+else
+    echo "  Available:            unknown"
+fi

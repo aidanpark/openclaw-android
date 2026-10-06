@@ -221,6 +221,8 @@ Already up-to-date components are skipped. Components you haven't installed are 
 
 If the gateway was running during the update, restart it afterwards (stop it and run `openclaw gateway` again, or restart the app) so it picks up the updated runtime.
 
+Only one setup, update or tools run happens at a time (a new install, `oa --update` and a tool install from the Claw app share one lock). If another run is in progress, `oa --update` prints `[FAIL] Another update, setup or tools run is in progress. Try again when it has finished.` and exits with code 2 without changing the installation (see [Troubleshooting](docs/troubleshooting.md)).
+
 **When an update changes the pinned versions** (for example the move to Node.js 24.21.0 and OpenClaw 2026.9.8 in Script v1.2.0), `oa --update` adds these safeguards:
 
 - It needs 2000 MB of free space. If there is not enough, it stops before changing anything and shows the space needed and the space left.
@@ -595,6 +597,7 @@ Validates the minimum conditions for updating.
 - Detects architecture: glibc (`.glibc-arch` marker) or Bionic (legacy)
 - Migrates old directory name if needed (`.openclaw-lite` → `.openclaw-android` — legacy compatibility)
 - **Phantom Process Killer** (Android 12+): Shows an informational note with a link to the [disable guide](docs/disable-phantom-process-killer.md)
+- **One run at a time**: only one setup, update or tools run happens at a time. A second run prints `[FAIL] Another update, setup or tools run is in progress. Try again when it has finished.` and exits with code 2 without changing the installation
 
 ### [2/5] Download Latest Release
 
@@ -626,6 +629,7 @@ Delegates to `platforms/<platform>/update.sh`. For OpenClaw, this:
 
 - If the pinned versions changed: after the install, checks the OpenClaw configuration and data, and runs `openclaw doctor --fix` once when a data migration is needed and this run made the backup (details in [Update](#update))
 - Repairs paths that point into another app's folder, after the install and just before the configuration check (details in [Backup & Restore](#backup--restore))
+- Final data check (`openclaw config validate` and `openclaw doctor --non-interactive`): if the gateway is using OpenClaw's data and this run did not replace OpenClaw, the check is skipped instead of failing, and the update continues with `[WARN] The gateway is using the OpenClaw state, so the data check was skipped. Stop the gateway, then run: openclaw doctor`
 - Installs `binutils` (for native module builds)
 - Re-checks the Node.js pin as a safety net (defense in depth — [3/5] already gates on this)
 - Converges `openclaw` to the pinned version — installs it when the installed version is lower. It never moves OpenClaw to a lower version unless `OA_ALLOW_OPENCLAW_DOWNGRADE=1` is set

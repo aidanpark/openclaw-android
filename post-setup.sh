@@ -59,6 +59,183 @@ if [ "${1:-}" = "--tools-only" ]; then
     OA_TOOL_ARGS=("$@")
 fi
 
+# ─── run lock ───
+# One run at a time: the full setup, --tools-only here and `oa --update` (update-core.sh, same
+# block) share $OCA_DIR/.tools.lock. This block is kept identical in both files (pre-commit).
+# Take $OCA_DIR/.tools.lock (mkdir is atomic); the lock holds the owner's pid. A lock
+# whose owner is gone (SIGKILL cannot be trapped) is stale and is taken over; a lock
+# with no pid (owner died between mkdir and the pid write) is stale after a minute.
+# Takeovers are serialized by a second mkdir lock so two runs cannot both take over.
+# Taking over and releasing both happen under that second lock (the "guard"): while a
+# taker holds it, the owner it is judging cannot release, so the lock it removes is the
+# lock it judged.
+# Returns 1 when another run holds the lock, 2 when the lock cannot be made or its pid recorded.
+acquire_tools_lock() {
+    local lk="$OCA_DIR/.tools.lock" tk="$OCA_DIR/.tools.lock.takeover" owner="" stale=false rc=1
+    # (no lock there after a failed mkdir: it may have been released just now, so one more try)
+    if mkdir "$lk" 2>/dev/null || { [ ! -e "$lk" ] && sleep 0.1 && mkdir "$lk" 2>/dev/null; }; then
+        if { echo "$$" > "$lk/pid"; } 2>/dev/null; then
+            return 0
+        fi
+        rm -f "$lk/pid" 2>/dev/null || true
+        rmdir "$lk" 2>/dev/null || true
+        return 2
+    fi
+    # a taker that was killed leaves its guard behind: drop it after a minute
+    if [ -d "$tk" ] && [ -n "$(find "$tk" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+        rmdir "$tk" 2>/dev/null || true
+    fi
+    # no lock there and none could be made (disk full, no write access): nothing holds it, so not "busy"
+    [ -e "$lk" ] || return 2
+    mkdir "$tk" 2>/dev/null || return 1
+    owner=$(cat "$lk/pid" 2>/dev/null) || owner=""
+    if [ -n "$owner" ]; then
+        kill -0 "$owner" 2>/dev/null || stale=true
+    elif [ -d "$lk" ] && [ -n "$(find "$lk" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+        stale=true
+    elif [ -e "$lk" ] && [ ! -d "$lk" ]; then
+        stale=true      # a plain file in the lock's place
+    fi
+    # Only a lock judged stale is removed; a lock that vanished meanwhile is just retaken
+    [ "$stale" = false ] || rm -rf "$lk" 2>/dev/null || true
+    if mkdir "$lk" 2>/dev/null; then
+        if { echo "$$" > "$lk/pid"; } 2>/dev/null; then
+            rc=0
+        else
+            # only our own, still empty lock
+            rm -f "$lk/pid" 2>/dev/null || true
+            rmdir "$lk" 2>/dev/null || true
+            rc=2
+        fi
+    fi
+    rmdir "$tk" 2>/dev/null || true
+    return "$rc"
+}
+
+# Free our lock under the guard (waits about 5.5 s at most). Without the guard nothing is removed: our
+# pid is dead once we exit, so the next call takes the lock over.
+release_tools_lock() {
+    local lk="$OCA_DIR/.tools.lock" tk="$OCA_DIR/.tools.lock.takeover" tries=0 held=""
+    while [ "$tries" -lt 50 ]; do
+        if mkdir "$tk" 2>/dev/null; then
+            held=$(cat "$lk/pid" 2>/dev/null) || held=""
+            if [ "$held" = "$$" ]; then
+                rm -f "$lk/pid" 2>/dev/null || true
+                rmdir "$lk" 2>/dev/null || true
+            fi
+            rmdir "$tk" 2>/dev/null || true
+            return 0
+        fi
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+    return 0
+}
+# ─── end run lock ───
+
+# ─── Full run: result file ───────────────────
+# The full setup leaves $OCA_DIR/post-setup-result.conf for the app (same format rules as
+# tools-result.conf: KEY=VALUE lines, never executed). It is written when the run starts
+# and at every stage, so a file WITHOUT an "exit" key belongs to a run still going (or one that
+# was killed with SIGKILL); the final write adds exit=<install's own exit code> and, on failure,
+# error=<code>. Keys: schema, run (start epoch), stage (1..7|done, the last one started),
+# error, need_mb/have_mb (error=free-space), warn (comma list of non-fatal problems), exit.
+# Exit code 2 = another run holds the lock (nothing is written then: the other run's result stays).
+OA_FULL_LOCK_OWNED=false
+OA_FULL_FINAL=false
+OA_FULL_RUN=""
+OA_FULL_STAGE=""
+OA_FULL_WARN=""
+OA_FULL_NEED_MB=""
+OA_FULL_HAVE_MB=""
+OA_FULL_SIGNAL_CODE=""
+
+# oa_full_result [exit code]: rewrite the result file (no exit key while the run goes on)
+oa_full_result() {
+    local f="$OCA_DIR/post-setup-result.conf"
+    [ "$OA_FULL_LOCK_OWNED" = true ] || return 0
+    rm -rf "$f.tmp" 2>/dev/null || true
+    {
+        printf 'schema=1\nrun=%s\n' "$OA_FULL_RUN"
+        [ -z "$OA_FULL_STAGE" ] || printf 'stage=%s\n' "$OA_FULL_STAGE"
+        [ -z "${OA_TOOLS_ERROR:-}" ] || printf 'error=%s\n' "$OA_TOOLS_ERROR"
+        [ -z "$OA_FULL_NEED_MB" ] || printf 'need_mb=%s\n' "$OA_FULL_NEED_MB"
+        [ -z "$OA_FULL_HAVE_MB" ] || printf 'have_mb=%s\n' "$OA_FULL_HAVE_MB"
+        [ -z "$OA_FULL_WARN" ] || printf 'warn=%s\n' "$OA_FULL_WARN"
+        [ -z "${1:-}" ] || printf 'exit=%s\n' "$1"
+    } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
+}
+oa_stage() { OA_FULL_STAGE="$1"; oa_full_result; }
+# oa_warn <id>: a non-fatal problem (tools:<id>, clawdhub, oa-cli, backup-scripts, compat-js, hardlink-patch, checkOnStart)
+oa_warn() {
+    case ",$OA_FULL_WARN," in *",$1,"*) ;; *) OA_FULL_WARN="${OA_FULL_WARN:+$OA_FULL_WARN,}$1" ;; esac
+    oa_full_result
+}
+
+# The install finished: write the final result and free the lock now, before the
+# interactive onboard (its exit code is not the install's)
+oa_full_finalize() {
+    [ "$OA_FULL_LOCK_OWNED" = true ] && [ "$OA_FULL_FINAL" != true ] || return 0
+    trap '' TERM HUP INT    # not half way through the marker, the final write and the unlock
+    touch "$MARKER"
+    OA_FULL_STAGE="done"
+    oa_full_result 0
+    OA_FULL_FINAL=true
+    release_tools_lock
+    trap - TERM HUP INT     # the onboard that may follow is as it was before: no trap of ours
+}
+
+# Runs when the full setup ends, however it ends
+oa_full_finish() {
+    local code=$?
+    trap '' TERM HUP INT    # a second signal must not cut the result file short
+    trap - EXIT
+    [ -z "$OA_FULL_SIGNAL_CODE" ] || code=$OA_FULL_SIGNAL_CODE
+    if [ "$OA_FULL_LOCK_OWNED" = true ] && [ "$OA_FULL_FINAL" != true ]; then
+        # exit code 2 means "another run holds the lock" (the app reads it so): a failure that ends
+        # with some other command's 2 (tar, ...) is reported as 1; signals keep their codes.
+        # (After the install is final the code is the onboard's: left alone.)
+        case "$code" in 0|1|129|130|143) ;; *) code=1 ;; esac
+        # a failure with no code of its own (set -e stopped it) is "unknown", never a success
+        [ "$code" -eq 0 ] || [ -n "${OA_TOOLS_ERROR:-}" ] || OA_TOOLS_ERROR=unknown
+        oa_full_result "$code"
+        release_tools_lock
+    fi
+    exit "$code"
+}
+
+# The storage message (the install needs about 2000 MB); false when there is no shortage
+OA_FULL_NOSPACE=false
+oa_full_nospace_message() {
+    [ "$OA_FULL_NOSPACE" = true ] || return 1
+    echo -e "${RED}[FAIL]${NC} Not enough free storage to install OpenClaw: 2000 MB needed, ${OA_FULL_HAVE_MB} MB available."
+    echo "       Nothing was changed. Free some space (clear other apps' caches, delete unused files) and open the app again."
+    return 0
+}
+
+# Start of a full run: signals, the lock (exit 2 when busy), the first result file
+oa_full_begin() {
+    local _lock_rc=0
+    trap 'OA_TOOLS_ERROR=interrupted; OA_FULL_SIGNAL_CODE=143; exit 143' TERM
+    trap 'OA_TOOLS_ERROR=interrupted; OA_FULL_SIGNAL_CODE=129; exit 129' HUP
+    trap 'OA_TOOLS_ERROR=interrupted; OA_FULL_SIGNAL_CODE=130; exit 130' INT
+    acquire_tools_lock || _lock_rc=$?
+    if [ "$_lock_rc" -eq 1 ]; then
+        echo "Another setup, update or tools run is in progress. Try again when it has finished." >&2
+        exit 2
+    elif [ "$_lock_rc" -ne 0 ]; then
+        # (exit 1, not 2: the app reads 2 as "another run is going")
+        # On a full disk the lock cannot be made either: then the storage message is the right one
+        oa_full_nospace_message || echo "Could not create the run lock in $OCA_DIR (error=lock)." >&2
+        exit 1
+    fi
+    OA_FULL_LOCK_OWNED=true
+    OA_FULL_RUN=$(date +%s)
+    trap oa_full_finish EXIT
+    rm -f "$OCA_DIR/post-setup-result.conf"
+    oa_full_result
+}
+
 # ─── npm version-pin guard ────────────────────
 # Fallback pin for the guard in the npm wrapper (the guard reads config.env at
 # run time once it exists; a first install has none yet).
@@ -363,16 +540,12 @@ if [ "$OA_MODE" = "full" ]; then
         exit 0
     fi
 
-    echo ""
-    echo "══════════════════════════════════════════════"
-    echo "  OpenClaw Android — Installing components"
-    echo "══════════════════════════════════════════════"
-    echo ""
-
     # Before anything is installed: OpenClaw takes about 1 GB while it is installed
     # (about 720 MB + about 310 MB npm cache), Node.js and the runtime come on top.
     # Same numbers as scripts/lib.sh (OA_MIN_FREE_INSTALL_MB / oa_check_free_space).
     # (the Termux df does not start in the app terminal: "bad interpreter"; the system's df is tried next)
+    # Measured first, before the lock folder is made: on a full disk that folder cannot be made
+    # either, and the user must be told about the storage, not about "another run".
     _oa_have_mb=""
     for _oa_df in df /system/bin/df; do
         _oa_have_mb=$({ "$_oa_df" -Pk "$PREFIX" 2>/dev/null || "$_oa_df" -k "$PREFIX" 2>/dev/null || true; } | awk 'NR==2 {print int($4/1024)}')
@@ -381,8 +554,22 @@ if [ "$OA_MODE" = "full" ]; then
     # (A re-run after OpenClaw was already installed needs far less: not checked then.)
     if [ ! -f "$PREFIX/lib/node_modules/openclaw/package.json" ] \
         && [[ "$_oa_have_mb" =~ ^[0-9]+$ ]] && [ "$_oa_have_mb" -lt 2000 ]; then
-        echo -e "${RED}[FAIL]${NC} Not enough free storage to install OpenClaw: 2000 MB needed, ${_oa_have_mb} MB available."
-        echo "       Nothing was changed. Free some space (clear other apps' caches, delete unused files) and open the app again."
+        OA_FULL_NOSPACE=true; OA_FULL_HAVE_MB="$_oa_have_mb"
+    fi
+
+    # One run at a time (the lock and the result file live in $OCA_DIR)
+    mkdir -p "$OCA_DIR" || { oa_full_nospace_message || echo "Cannot create $OCA_DIR." >&2; exit 1; }
+    oa_full_begin
+
+    echo ""
+    echo "══════════════════════════════════════════════"
+    echo "  OpenClaw Android — Installing components"
+    echo "══════════════════════════════════════════════"
+    echo ""
+
+    # Not enough room: the lock is ours, so the result file can say so
+    if oa_full_nospace_message; then
+        OA_TOOLS_ERROR=free-space; OA_FULL_NEED_MB=2000
         exit 1
     fi
 fi
@@ -633,7 +820,11 @@ install_pacman_pkg() {
 
     rm -rf "$EXTRACT_DIR"
     mkdir -p "$EXTRACT_DIR"
-    tar -xJf "$pkg_file" -C "$EXTRACT_DIR" 2>/dev/null
+    tar -xJf "$pkg_file" -C "$EXTRACT_DIR" 2>/dev/null || {
+        echo -e "  ${RED}✗${NC} Could not unpack $filename. Restart the app to retry."
+        OA_TOOLS_ERROR=glibc
+        exit 1
+    }
 
     # Pacman packages also extract under data/data/com.termux/files/usr/...
     local inner="$EXTRACT_DIR/$TERMUX_INNER"
@@ -1076,73 +1267,6 @@ tool_verify() {
     esac >/dev/null 2>&1
 }
 
-# Take $OCA_DIR/.tools.lock (mkdir is atomic); the lock holds the owner's pid. A lock
-# whose owner is gone (SIGKILL cannot be trapped) is stale and is taken over; a lock
-# with no pid (owner died between mkdir and the pid write) is stale after a minute.
-# Takeovers are serialized by a second mkdir lock so two runs cannot both take over.
-# Taking over and releasing both happen under that second lock (the "guard"): while a
-# taker holds it, the owner it is judging cannot release, so the lock it removes is the
-# lock it judged.
-# Returns 1 when another run holds the lock, 2 when the pid cannot be recorded.
-acquire_tools_lock() {
-    local lk="$OCA_DIR/.tools.lock" tk="$OCA_DIR/.tools.lock.takeover" owner="" stale=false rc=1
-    if mkdir "$lk" 2>/dev/null; then
-        if { echo "$$" > "$lk/pid"; } 2>/dev/null; then
-            return 0
-        fi
-        rm -f "$lk/pid" 2>/dev/null || true
-        rmdir "$lk" 2>/dev/null || true
-        return 2
-    fi
-    # a taker that was killed leaves its guard behind: drop it after a minute
-    if [ -d "$tk" ] && [ -n "$(find "$tk" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
-        rmdir "$tk" 2>/dev/null || true
-    fi
-    mkdir "$tk" 2>/dev/null || return 1
-    owner=$(cat "$lk/pid" 2>/dev/null) || owner=""
-    if [ -n "$owner" ]; then
-        kill -0 "$owner" 2>/dev/null || stale=true
-    elif [ -d "$lk" ] && [ -n "$(find "$lk" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
-        stale=true
-    elif [ -e "$lk" ] && [ ! -d "$lk" ]; then
-        stale=true      # a plain file in the lock's place
-    fi
-    # Only a lock judged stale is removed; a lock that vanished meanwhile is just retaken
-    [ "$stale" = false ] || rm -rf "$lk" 2>/dev/null || true
-    if mkdir "$lk" 2>/dev/null; then
-        if { echo "$$" > "$lk/pid"; } 2>/dev/null; then
-            rc=0
-        else
-            # only our own, still empty lock
-            rm -f "$lk/pid" 2>/dev/null || true
-            rmdir "$lk" 2>/dev/null || true
-            rc=2
-        fi
-    fi
-    rmdir "$tk" 2>/dev/null || true
-    return "$rc"
-}
-
-# Free our lock under the guard (waits about 5.5 s at most). Without the guard nothing is removed: our
-# pid is dead once we exit, so the next call takes the lock over.
-release_tools_lock() {
-    local lk="$OCA_DIR/.tools.lock" tk="$OCA_DIR/.tools.lock.takeover" tries=0 held=""
-    while [ "$tries" -lt 50 ]; do
-        if mkdir "$tk" 2>/dev/null; then
-            held=$(cat "$lk/pid" 2>/dev/null) || held=""
-            if [ "$held" = "$$" ]; then
-                rm -f "$lk/pid" 2>/dev/null || true
-                rmdir "$lk" 2>/dev/null || true
-            fi
-            rmdir "$tk" 2>/dev/null || true
-            return 0
-        fi
-        sleep 0.1
-        tries=$((tries + 1))
-    done
-    return 0
-}
-
 # Runs when --tools-only ends, however it ends: write the result file, free the lock
 tools_finish() {
     local code=$?
@@ -1267,6 +1391,7 @@ if [ "$OA_MODE" = "tools" ]; then
 fi
 
 # ─── [1/7] Install essential packages ─────────
+oa_stage 1
 echo -e "▸ ${YELLOW}[1/7]${NC} Installing essential packages..."
 mkdir -p "$DEB_DIR" "$PKG_DIR"
 fetch_verified_index
@@ -1290,6 +1415,7 @@ for pkg in "${DEB_PACKAGES[@]}"; do
     echo "  [$COUNT/$TOTAL] $pkg"
     install_deb "$filename" || {
         echo -e "  ${RED}✗${NC} Could not install '$pkg' (required). Check your network connection and restart the app to retry."
+        OA_TOOLS_ERROR=deb
         exit 1
     }
 done
@@ -1302,10 +1428,12 @@ if [ -f "$PREFIX/bin/git" ]; then
     echo -e "  ${GREEN}✓${NC} git $(git --version 2>/dev/null | head -1)"
 else
     echo -e "  ${RED}✗${NC} git not found after extraction"
+    OA_TOOLS_ERROR=git
     exit 1
 fi
 
 # ─── [2/7] glibc runtime ─────────────────────
+oa_stage 2
 echo -e "▸ ${YELLOW}[2/7]${NC} Installing glibc runtime..."
 
 if [ -x "$GLIBC_LDSO" ]; then
@@ -1322,6 +1450,7 @@ else
     GLIBC_FILES=()
     echo "  Downloading glibc + gcc-libs (~34MB)..."
     if ! fetch_glibc_packages; then
+        OA_TOOLS_ERROR=glibc
         exit 1
     fi
     for _file in "${GLIBC_FILES[@]}"; do
@@ -1331,6 +1460,7 @@ else
     # Verify linker
     if [ ! -f "$GLIBC_LDSO" ]; then
         echo -e "  ${RED}✗${NC} glibc linker not found at $GLIBC_LDSO"
+        OA_TOOLS_ERROR=glibc
         exit 1
     fi
     chmod +x "$GLIBC_LDSO"
@@ -1365,6 +1495,7 @@ fi
 echo -e "  Linker: $GLIBC_LDSO"
 
 # ─── [3/7] Node.js ──────────────────────────
+oa_stage 3
 echo -e "▸ ${YELLOW}[3/7]${NC} Installing Node.js v${NODE_VERSION}..."
 NODE_NEW="$OCA_DIR/node.new"
 NODE_OLD="$OCA_DIR/node.old"
@@ -1569,6 +1700,7 @@ else
         -o "$TMPDIR/${NODE_TAR}.tar.xz"; then
         rm -f "$TMPDIR/${NODE_TAR}.tar.xz"
         echo -e "  ${RED}✗${NC} Node.js download failed — check the network and restart the app to retry"
+        OA_TOOLS_ERROR=node-download
         exit 1
     fi
 
@@ -1576,6 +1708,7 @@ else
     if ! curl -fsSL --max-time 60 "${NODE_DIST_BASE}/SHASUMS256.txt" -o "$TMPDIR/node-SHASUMS256.txt"; then
         rm -f "$TMPDIR/${NODE_TAR}.tar.xz" "$TMPDIR/node-SHASUMS256.txt"
         echo -e "  ${RED}✗${NC} Node.js checksum list download failed — check the network and restart the app to retry"
+        OA_TOOLS_ERROR=node-download
         exit 1
     fi
     _expected=$(awk -v f="${NODE_TAR}.tar.xz" '$2 == f { print $1; exit }' "$TMPDIR/node-SHASUMS256.txt")
@@ -1584,6 +1717,7 @@ else
     if [ -z "$_expected" ] || [ "$_expected" != "$_actual" ]; then
         rm -f "$TMPDIR/${NODE_TAR}.tar.xz"
         echo -e "  ${RED}✗${NC} Node.js checksum mismatch — restart the app to retry"
+        OA_TOOLS_ERROR=node-checksum
         exit 1
     fi
 
@@ -1601,6 +1735,7 @@ else
     if [ "$_staged" != "v$NODE_VERSION" ]; then
         rm -rf "${NODE_NEW:?}"
         echo -e "  ${RED}✗${NC} Extracted Node.js does not run (got: '${_staged}')"
+        OA_TOOLS_ERROR=node-run
         exit 1
     fi
 
@@ -1722,6 +1857,7 @@ NPXWRAP
             mv "$NODE_OLD" "$NODE_DIR"
         fi
         echo -e "  ${RED}✗${NC} Node.js verification failed (node: '${NODE_VER}', npm: '${NPM_VER}')"
+        OA_TOOLS_ERROR=node-verify
         exit 1
     fi
     if [ -d "$NODE_OLD" ]; then
@@ -1732,6 +1868,7 @@ NPXWRAP
 fi
 
 # ─── [4/7] OpenClaw ─────────────────────────
+oa_stage 4
 echo -e "▸ ${YELLOW}[4/7]${NC} Installing OpenClaw..."
 export PATH="$BIN_DIR:$NODE_DIR/bin:$PATH"
 
@@ -1923,9 +2060,11 @@ else
     else
         if [ "$git_rc" -eq 3 ]; then
             echo -e "  ${RED}✗${NC} Could not download git. Check your network connection and restart the app to retry."
+            OA_TOOLS_ERROR=git
         else
             echo -e "  ${RED}✗${NC} Could not set up git: the git wrapper would not run."
             echo "    Restart the app to try again, or report this."
+            OA_TOOLS_ERROR=git-wrapper
         fi
         exit 1
     fi
@@ -2029,7 +2168,11 @@ else
     if [ ! -f "$OPENCLAW_DIR/package.json" ] && [ -e "$PREFIX/bin/openclaw" ] && [ ! -L "$PREFIX/bin/openclaw" ]; then
         rm -f "$PREFIX/bin/openclaw"
     fi
-    npm install -g "openclaw@$PLATFORM_NPM_PACKAGE_VERSION" --ignore-scripts 2>&1
+    npm install -g "openclaw@$PLATFORM_NPM_PACKAGE_VERSION" --ignore-scripts 2>&1 || {
+        echo -e "  ${RED}✗${NC} Could not install OpenClaw $PLATFORM_NPM_PACKAGE_VERSION. Check your network connection and restart the app to retry."
+        OA_TOOLS_ERROR=npm-openclaw
+        exit 1
+    }
     OC_INSTALLED=true
     echo -e "  ${GREEN}✓${NC} OpenClaw $PLATFORM_NPM_PACKAGE_VERSION (${OC_CURRENT:-new install})"
 fi
@@ -2327,7 +2470,10 @@ fi
 exit 0
 OPENCLAW_HARDLINK_SH
 chmod +x "$OC_HL_GEN"
-bash "$OC_HL_GEN" | sed 's/^/  /'
+_oa_hl_out="$TMPDIR/oa-hl-patch.out"
+bash "$OC_HL_GEN" | { tee "$_oa_hl_out" || true; } | sed 's/^/  /'
+if grep -qE 'WARN|problems=[1-9]' "$_oa_hl_out" 2>/dev/null; then oa_warn hardlink-patch; fi
+rm -f "$_oa_hl_out"
 
 # Block `openclaw update` so the pin holds (after the npm wrappers from [3/7])
 bash "$OC_SHIM_GEN" | sed 's/^/  /'
@@ -2344,6 +2490,7 @@ else
         echo -e "  ${GREEN}✓${NC} clawdhub installed"
     else
         echo -e "  ${YELLOW}[WARN]${NC} clawdhub installation failed (non-critical)"
+        oa_warn clawdhub
     fi
 fi
 if [ -d "$CLAWHUB_DIR" ] && ! (cd "$CLAWHUB_DIR" && node -e "require('undici')" 2>/dev/null); then
@@ -2355,6 +2502,7 @@ fi
 command -v python &>/dev/null && { python -c "import yaml" 2>/dev/null || { command -v pip >/dev/null 2>&1 && pip install pyyaml -q; } || true; }
 
 # ─── [5/7] Patches ──────────────────────────
+oa_stage 5
 echo -e "▸ ${YELLOW}[5/7]${NC} Applying patches..."
 
 # glibc-compat.js — the node wrapper reads lib/glibc-compat.js, a directory the
@@ -2379,6 +2527,7 @@ elif [ ! -s "$OCA_DIR/lib/glibc-compat.js" ] && [ -s "$OCA_DIR/patches/glibc-com
     # (what the wrapper used before). An existing lib/ copy is never replaced by it.
     cp "$OCA_DIR/patches/glibc-compat.js" "$OCA_DIR/lib/glibc-compat.js"
     echo -e "  ${YELLOW}[WARN]${NC} Could not download glibc-compat.js — using the bundled copy. Run 'oa --update' later."
+    oa_warn compat-js
 fi
 rm -f "$COMPAT_TMP"
 
@@ -2389,9 +2538,10 @@ chmod +x "$PREFIX/bin/systemctl"
 echo -e "  ${GREEN}✓${NC} Patches applied"
 
 # ─── [6/7] Environment ──────────────────────
+oa_stage 6
 echo -e "▸ ${YELLOW}[6/7]${NC} Configuring environment..."
 
-cat > "$HOME/.bashrc" << BASHRC
+cat > "$HOME/.bashrc" << BASHRC || { echo -e "  ${RED}✗${NC} Could not write ~/.bashrc"; OA_TOOLS_ERROR="env"; exit 1; }
 # OpenClaw Android environment
 export PREFIX="$PREFIX"
 export HOME="$HOME"
@@ -2436,6 +2586,7 @@ if curl -fsSL "$REPO_BASE/oa.sh" -o "$_oa_tmp" 2>/dev/null \
 else
     rm -f "$_oa_tmp"
     echo -e "  ${YELLOW}[WARN]${NC} oa CLI installation failed (non-critical)"
+    oa_warn oa-cli
 fi
 
 # Files that oa --backup / oa --restore need, and the platform part of oa --status (the same
@@ -2462,9 +2613,11 @@ if [ "$_oa_dl_ok" = true ]; then
 else
     rm -f "$OCA_DIR/scripts/lib.sh.tmp" "$OCA_DIR/scripts/backup.sh.tmp" "$OCA_DIR/platforms/openclaw/config.env.tmp" "$OCA_DIR/platforms/openclaw/status.sh.tmp"
     echo -e "  ${YELLOW}[WARN]${NC} Could not download the backup/restore scripts (non-critical) — run oa --update later to get them"
+    oa_warn backup-scripts
 fi
 
 # ─── [7/7] Optional Tools ──────────────────
+oa_stage 7
 TOOL_CONF="$OCA_DIR/tool-selections.conf"
 if [ -f "$TOOL_CONF" ]; then
     # Read the selections as data, never as code: only the known keys, and only the
@@ -2505,14 +2658,14 @@ if [ -f "$TOOL_CONF" ]; then
 
         # Termux packages, then npm packages (the installers are defined above; a
         # failed tool is a warning, never fatal)
-        [ "${INSTALL_TMUX:-false}" = "true" ] && { tool_install_tmux || true; }
-        [ "${INSTALL_TTYD:-false}" = "true" ] && { tool_install_ttyd || true; }
-        [ "${INSTALL_DUFS:-false}" = "true" ] && { tool_install_dufs || true; }
-        [ "${INSTALL_CODE_SERVER:-false}" = "true" ] && { tool_install_code_server || true; }
-        [ "${INSTALL_PLAYWRIGHT:-false}" = "true" ] && { tool_install_playwright || true; }
-        [ "${INSTALL_CLAUDE_CODE:-false}" = "true" ] && { tool_install_claude_code || true; }
-        [ "${INSTALL_GEMINI_CLI:-false}" = "true" ] && { tool_install_gemini_cli || true; }
-        [ "${INSTALL_CODEX_CLI:-false}" = "true" ] && { tool_install_codex_cli || true; }
+        [ "${INSTALL_TMUX:-false}" = "true" ] && { tool_install_tmux || oa_warn "tools:tmux"; }
+        [ "${INSTALL_TTYD:-false}" = "true" ] && { tool_install_ttyd || oa_warn "tools:ttyd"; }
+        [ "${INSTALL_DUFS:-false}" = "true" ] && { tool_install_dufs || oa_warn "tools:dufs"; }
+        [ "${INSTALL_CODE_SERVER:-false}" = "true" ] && { tool_install_code_server || oa_warn "tools:code-server"; }
+        [ "${INSTALL_PLAYWRIGHT:-false}" = "true" ] && { tool_install_playwright || oa_warn "tools:playwright"; }
+        [ "${INSTALL_CLAUDE_CODE:-false}" = "true" ] && { tool_install_claude_code || oa_warn "tools:claude-code"; }
+        [ "${INSTALL_GEMINI_CLI:-false}" = "true" ] && { tool_install_gemini_cli || oa_warn "tools:gemini-cli"; }
+        [ "${INSTALL_CODEX_CLI:-false}" = "true" ] && { tool_install_codex_cli || oa_warn "tools:codex-cli"; }
 
         fix_npm_shebangs
     else
@@ -2526,8 +2679,6 @@ fi
 cleanup_downloads
 
 # ─── Done ────────────────────────────────────
-touch "$MARKER"
-
 echo ""
 echo "══════════════════════════════════════════════"
 echo -e "  ${GREEN}✓ Installation complete!${NC}"
@@ -2548,7 +2699,19 @@ elif timeout 60 openclaw config set update.checkOnStart false >/dev/null 2>&1; t
     echo -e "  ${GREEN}✓${NC} OpenClaw update notice turned off (update.checkOnStart=false)"
 else
     echo -e "  ${YELLOW}[WARN]${NC} Could not turn off the OpenClaw update notice (non-critical)"
+    oa_warn checkOnStart
 fi
+# The install is complete: the done-marker, the final result file and the lock go together
+# (the result and the marker must never disagree), before the interactive part
+oa_full_finalize
+
+# OA_NO_ONBOARD=1 (the app runs this script as a child and shows its own next step):
+# stop here with exit 0 instead of starting the interactive onboard
+if [ "${OA_NO_ONBOARD:-}" = "1" ]; then
+    echo "  OpenClaw onboard skipped (OA_NO_ONBOARD=1)."
+    exit 0
+fi
+
 echo ""
 echo "  Starting OpenClaw onboard..."
 echo ""

@@ -14,11 +14,19 @@ if [ ! -e "$PREFIX/bin/ar" ] && [ -x "$PREFIX/bin/llvm-ar" ]; then
     ln -s "$PREFIX/bin/llvm-ar" "$PREFIX/bin/ar"
 fi
 
+# The result of this update is read by the app from $PROJECT_DIR/update-result.conf. This script runs as a child
+# of update-core.sh, which exports OA_RESULT_NOTES (a file); a line "key=value" appended there just before a
+# failure says why (reason=<code>), whether anything was changed (changed=true|false), whether OpenClaw can use
+# the data (healthy=true|false) or where the backup is (backup=<path>). Without the variable nothing is written.
+# The reason codes are a fixed list that the app knows: do not make up new ones.
+oa_note() { local kv; for kv in "$@"; do printf '%s\n' "$kv" >> "${OA_RESULT_NOTES:-/dev/null}" 2>/dev/null || true; done; }
+
 # Version pin (SSOT: config.env). This script runs as a child process of
 # update-core.sh, so it loads the pin itself.
 load_platform_config openclaw "$SCRIPT_DIR/../.."
 if ! [[ "${PLATFORM_NPM_PACKAGE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo -e "${RED}[FAIL]${NC} Invalid OpenClaw version pin in config.env: '${PLATFORM_NPM_PACKAGE_VERSION:-}'"
+    oa_note reason=pin_missing changed=false
     exit 1
 fi
 PIN_VER="$PLATFORM_NPM_PACKAGE_VERSION"
@@ -30,6 +38,7 @@ NODE_FOUND="$(node --version 2>/dev/null || echo none)"
 if [ "$NODE_FOUND" != "v${PLATFORM_NODE_VERSION:-}" ]; then
     echo -e "${RED}[FAIL]${NC} Node.js v${PLATFORM_NODE_VERSION:-?} is required (found: $NODE_FOUND) — OpenClaw was not changed"
     echo "       Run 'oa --update' again."
+    oa_note reason=node_gate changed=false
     exit 1
 fi
 OPENCLAW_DIR="$(npm root -g)/openclaw"
@@ -56,6 +65,7 @@ if [ -n "$CURRENT_VER" ] && [ "$CURRENT_VER" != "$PIN_VER" ] \
     echo "       This usually means an old cached copy of the scripts was used: wait a few minutes and run 'oa --update' again."
     echo "       OpenClaw was not changed. ('oa --restore' only brings back your data, not the program.)"
     echo "       For a deliberate rollback release, set OA_ALLOW_OPENCLAW_DOWNGRADE=1 and OA_ALLOW_NODE_DOWNGRADE=1."
+    oa_note reason=cache_openclaw_downgrade changed=false
     exit 1
 fi
 
@@ -69,6 +79,7 @@ if [ -n "$CURRENT_VER" ] && [ "$CURRENT_VER" != "$PIN_VER" ] && [ "${OA_ALLOW_UN
     if [ "$OC_PROTO" -lt 2 ]; then
         echo -e "${RED}[FAIL]${NC} The updater downloaded an older copy of itself (cache). Nothing was changed."
         echo "       Run 'oa --update' again in a few minutes."
+        oa_note reason=cache_old_updater changed=false
         exit 1
     fi
 fi
@@ -80,6 +91,7 @@ else
     if declare -f oa_check_free_space >/dev/null && ! oa_check_free_space "${OA_MIN_FREE_UPDATE_MB:-2000}" "install OpenClaw $PIN_VER"; then
         bash "$SCRIPT_DIR/openclaw-shim.sh" || true
         echo "       OpenClaw was not changed."
+        oa_note reason=no_space changed=false
         exit 1
     fi
     echo "Installing pinned openclaw... (${CURRENT_VER:-none} → $PIN_VER)"
@@ -98,6 +110,7 @@ else
         bash "$SCRIPT_DIR/openclaw-shim.sh" || true
         echo -e "${RED}[FAIL]${NC} Could not install openclaw $PIN_VER"
         echo "       Check your network and run: oa --update"
+        oa_note reason=npm_install changed=true
         exit 1
     fi
 fi
@@ -124,13 +137,24 @@ bash "$SCRIPT_DIR/openclaw-shim.sh"
 # `doctor --non-interactive` (exit code 1 when a data migration is pending; it changes
 # nothing without --fix). The exit code decides, not the text. A doctor that does not
 # answer in time counts as "could not check", not as a failure.
-# oc_health_check: 0 healthy, 1 not usable yet (output in OC_CHECK_OUT), 2 could not check
+# A gateway that is running keeps the OpenClaw state to itself: the checks then fail with one of these two
+# OpenClaw messages (a state ownership that "could not be verified", GatewayStateOwnerContentionError). That is
+# no sign of a broken update, and the check cannot say more until the gateway is stopped. Only these two
+# are taken for it: a general "database is locked" can come from a real fault, which must stay a failure.
+oc_state_busy() {
+    printf '%s' "$1" | grep -qiE 'GatewayStateOwnerContentionError|state ownership.*could not be verified'
+}
+oc_warn_busy() {
+    echo -e "${YELLOW}[WARN]${NC} The gateway is using the OpenClaw state, so the data check was skipped. Stop the gateway, then run: openclaw doctor"
+}
+# oc_health_check: 0 healthy, 1 not usable yet (output in OC_CHECK_OUT), 2 could not check,
+# 3 could not check because a gateway is using the state
 oc_health_check() {
     local rc=0
-    OC_CHECK_OUT=$(timeout 90 openclaw config validate 2>&1) || return 1
+    OC_CHECK_OUT=$(timeout 90 openclaw config validate 2>&1) || { oc_state_busy "$OC_CHECK_OUT" && return 3; return 1; }
     OC_CHECK_OUT=$(timeout 150 openclaw doctor --non-interactive < /dev/null 2>&1) || rc=$?
     [ "$rc" -eq 124 ] && return 2
-    [ "$rc" -ne 0 ] && return 1
+    [ "$rc" -ne 0 ] && { oc_state_busy "$OC_CHECK_OUT" && return 3; return 1; }
     # A pending move of the chat history into SQLite does not change doctor's exit code (0), only its
     # text ("Found N session SQLite issue(s)"); the gateway refuses to start with it (exit 78).
     # "Found N" alone is not enough: after a migration that worked, doctor can still report one issue
@@ -199,10 +223,22 @@ OC_HEALTHY=true
 OC_HEALTH_RC=0
 if [ -f "${PLATFORM_DATA_DIR:-$HOME/.openclaw}/openclaw.json" ] && command -v openclaw &>/dev/null; then
     oc_health_check || OC_HEALTH_RC=$?
+    # A data migration may be due after a new OpenClaw was installed in this run: that must not be skipped as
+    # "busy" (the update would end with status 0 and an OpenClaw that cannot start). It stays a failure, as
+    # before, with the way out that goes with it.
+    if [ "$OC_HEALTH_RC" -eq 3 ] && [ "$OPENCLAW_UPDATED" = true ]; then
+        OC_HEALTH_RC=1
+    fi
+fi
+if [ "$OC_HEALTH_RC" -eq 0 ] && [ -f "${PLATFORM_DATA_DIR:-$HOME/.openclaw}/openclaw.json" ] && command -v openclaw &>/dev/null; then
+    oa_note healthy=true
 fi
 if [ "$OC_HEALTH_RC" -eq 2 ]; then
     echo -e "${YELLOW}[WARN]${NC} Could not check that OpenClaw can use your data (the check took too long)."
     echo "       If the gateway does not start, run:  openclaw doctor --fix"
+elif [ "$OC_HEALTH_RC" -eq 3 ]; then
+    # Not a failure and no migration: the data was not looked at. No "healthy" note either (the app reads that as "not checked").
+    oc_warn_busy
 elif [ "$OC_HEALTH_RC" -ne 0 ]; then
     OC_HEALTHY=false
     # The migration is the official step for this: run it once by itself, but only when
@@ -219,6 +255,7 @@ elif [ "$OC_HEALTH_RC" -ne 0 ]; then
         # (|| true: the check exits non-zero by design, and a pipeline failure must not end this script)
         { bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check 2>&1 || true; } | sed 's/\x1b\[[0-9;]*m//g' | { grep -E 'TODO|MISSING|NOMATCH|WARN' || true; } | head -4 | sed 's/^/         /'
         echo "       Nothing was migrated and your data is untouched. Run 'oa --update' again; if it keeps failing, report it."
+        oa_note reason=patch_missing changed=true healthy=false
         if [ -n "${OA_PRE_UPDATE_BACKUP:-}" ]; then
             echo "       Your data as it was before the update: $OA_PRE_UPDATE_BACKUP (restore with 'oa --restore')."
         fi
@@ -241,12 +278,21 @@ elif [ "$OC_HEALTH_RC" -ne 0 ]; then
         if [ "$OC_DOCTOR_RC" -eq 0 ] && [ "$OC_RECHECK_RC" -ne 1 ]; then
             OC_HEALTHY=true
             echo -e "${GREEN}[OK]${NC}   Your OpenClaw data was migrated for $PIN_VER"
+            if [ "$OC_RECHECK_RC" -eq 3 ]; then
+                # the check after the migration could not look at the data (a gateway is using the state)
+                oc_warn_busy
+            else
+                oa_note healthy=true
+            fi
         else
             if [ "$OC_DOCTOR_RC" -eq 124 ]; then
+                oa_note reason=migration_timeout changed=true healthy=false
                 echo -e "${RED}[FAIL]${NC} The data migration did not finish within 2 minutes."
             elif [ "$OC_DOCTOR_RC" -ne 0 ]; then
+                oa_note reason=migration_failed changed=true healthy=false
                 echo -e "${RED}[FAIL]${NC} The data migration did not succeed (exit code $OC_DOCTOR_RC):"
             else
+                oa_note reason=migration_failed changed=true healthy=false
                 echo -e "${RED}[FAIL]${NC} The data migration ran, but OpenClaw still cannot use your data:"
                 OC_DOCTOR_OUT="$OC_CHECK_OUT"
             fi
@@ -258,6 +304,7 @@ elif [ "$OC_HEALTH_RC" -ne 0 ]; then
             echo "       To try again yourself (stop the gateway first if it is running):  openclaw doctor --fix"
         fi
     else
+        oa_note reason=health_failed changed=true healthy=false
         echo -e "${RED}[FAIL]${NC} OpenClaw ${PIN_VER} is installed, but it cannot use your existing data yet:"
         oc_brief "$OC_CHECK_OUT"
         echo "       Stop the gateway if it is running, then run:  openclaw doctor --fix"
@@ -341,7 +388,7 @@ python -c "import yaml" 2>/dev/null || { command -v pip >/dev/null 2>&1 && pip i
 # here, so the notice only points at an update that oa blocks. A value the user
 # already set (true or false) is left alone. Same block as install.sh and the end
 # of post-setup.sh. (Skipped when the health check above failed: it would only repeat that.)
-if [ "$OC_HEALTHY" != true ]; then
+if [ "$OC_HEALTHY" != true ] || [ "$OC_HEALTH_RC" -eq 3 ]; then
     :
 elif timeout 60 openclaw config get update.checkOnStart >/dev/null 2>&1; then
     echo -e "${GREEN}[SKIP]${NC} update.checkOnStart is already set"

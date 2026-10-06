@@ -9,7 +9,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.2.1"
+OA_VERSION="1.2.2"
 # Marks this updater as the current protocol for the scripts it runs from the downloaded copy
 # (install-nodejs.sh and platforms/*/update.sh refuse a version change without it: a cached older
 # update-core.sh must not combine with a newer download).
@@ -25,6 +25,211 @@ step() {
     echo ""
     echo -e "${BOLD}[$1/5] $2${NC}"
     echo "----------------------------------------"
+    oa_upd_phase "$1"
+}
+
+# The lock functions below use $OCA_DIR; the updater's folder is the same folder
+OCA_DIR="$PROJECT_DIR"
+# ─── run lock ───
+# One run at a time: the full setup, --tools-only here and `oa --update` (update-core.sh, same
+# block) share $OCA_DIR/.tools.lock. This block is kept identical in both files (pre-commit).
+# Take $OCA_DIR/.tools.lock (mkdir is atomic); the lock holds the owner's pid. A lock
+# whose owner is gone (SIGKILL cannot be trapped) is stale and is taken over; a lock
+# with no pid (owner died between mkdir and the pid write) is stale after a minute.
+# Takeovers are serialized by a second mkdir lock so two runs cannot both take over.
+# Taking over and releasing both happen under that second lock (the "guard"): while a
+# taker holds it, the owner it is judging cannot release, so the lock it removes is the
+# lock it judged.
+# Returns 1 when another run holds the lock, 2 when the lock cannot be made or its pid recorded.
+acquire_tools_lock() {
+    local lk="$OCA_DIR/.tools.lock" tk="$OCA_DIR/.tools.lock.takeover" owner="" stale=false rc=1
+    # (no lock there after a failed mkdir: it may have been released just now, so one more try)
+    if mkdir "$lk" 2>/dev/null || { [ ! -e "$lk" ] && sleep 0.1 && mkdir "$lk" 2>/dev/null; }; then
+        if { echo "$$" > "$lk/pid"; } 2>/dev/null; then
+            return 0
+        fi
+        rm -f "$lk/pid" 2>/dev/null || true
+        rmdir "$lk" 2>/dev/null || true
+        return 2
+    fi
+    # a taker that was killed leaves its guard behind: drop it after a minute
+    if [ -d "$tk" ] && [ -n "$(find "$tk" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+        rmdir "$tk" 2>/dev/null || true
+    fi
+    # no lock there and none could be made (disk full, no write access): nothing holds it, so not "busy"
+    [ -e "$lk" ] || return 2
+    mkdir "$tk" 2>/dev/null || return 1
+    owner=$(cat "$lk/pid" 2>/dev/null) || owner=""
+    if [ -n "$owner" ]; then
+        kill -0 "$owner" 2>/dev/null || stale=true
+    elif [ -d "$lk" ] && [ -n "$(find "$lk" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+        stale=true
+    elif [ -e "$lk" ] && [ ! -d "$lk" ]; then
+        stale=true      # a plain file in the lock's place
+    fi
+    # Only a lock judged stale is removed; a lock that vanished meanwhile is just retaken
+    [ "$stale" = false ] || rm -rf "$lk" 2>/dev/null || true
+    if mkdir "$lk" 2>/dev/null; then
+        if { echo "$$" > "$lk/pid"; } 2>/dev/null; then
+            rc=0
+        else
+            # only our own, still empty lock
+            rm -f "$lk/pid" 2>/dev/null || true
+            rmdir "$lk" 2>/dev/null || true
+            rc=2
+        fi
+    fi
+    rmdir "$tk" 2>/dev/null || true
+    return "$rc"
+}
+
+# Free our lock under the guard (waits about 5.5 s at most). Without the guard nothing is removed: our
+# pid is dead once we exit, so the next call takes the lock over.
+release_tools_lock() {
+    local lk="$OCA_DIR/.tools.lock" tk="$OCA_DIR/.tools.lock.takeover" tries=0 held=""
+    while [ "$tries" -lt 50 ]; do
+        if mkdir "$tk" 2>/dev/null; then
+            held=$(cat "$lk/pid" 2>/dev/null) || held=""
+            if [ "$held" = "$$" ]; then
+                rm -f "$lk/pid" 2>/dev/null || true
+                rmdir "$lk" 2>/dev/null || true
+            fi
+            rmdir "$tk" 2>/dev/null || true
+            return 0
+        fi
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+    return 0
+}
+# ─── end run lock ───
+
+# ─── Update result file ──────────────────────
+# `oa --update` leaves $PROJECT_DIR/update-result.conf for the app (KEY=VALUE lines, never
+# executed; same format rules as tools-result.conf). It is written when the run starts and at
+# every step, so a file WITHOUT an "exit" key belongs to a run still going (or one killed with
+# SIGKILL). Keys: schema, run (start epoch), phase (preflight|download|core|platform|tools|done:
+# the step that was running when it stopped), reason (failure code, absent on success), exit,
+# changed (true when Node.js or OpenClaw may have been replaced), healthy (health check after
+# the update, when it ran), backup (path of the backup this run saved), from_openclaw,
+# pin_openclaw, from_node, pin_node. The "[N/5]" step lines and the "[FAIL]" texts stay as
+# they are: the app reads them when this file is missing.
+# Scripts started from here report their own reason through $OA_RESULT_NOTES: they APPEND
+# lines "reason=<code>", "changed=true|false", "healthy=true|false" or "backup=<path>" (a
+# script that sees no variable writes nowhere). Only these keys and valid values are taken over.
+OA_UPD_RESULT="$PROJECT_DIR/update-result.conf"
+OA_UPD_NOTES="$PROJECT_DIR/.update-notes"
+OA_UPD_LOCK_OWNED=false
+OA_UPD_RUN=""
+OA_UPD_PHASE=""
+OA_UPD_REASON=""
+OA_UPD_CHANGED=false        # final value: see oa_upd_finish
+OA_UPD_STEP4=false          # step 4 (platform) started: OpenClaw may have been replaced
+OA_UPD_NOTE_TRUE=false      # a script noted changed=true (it wins: a later refusal does not undo a replaced Node.js)
+OA_UPD_NOTE_FALSE=false
+OA_UPD_HEALTHY=""
+OA_UPD_BACKUP=""
+OA_UPD_FROM_OC=""
+OA_UPD_PIN_OC=""
+OA_UPD_FROM_NODE=""
+OA_UPD_PIN_NODE=""
+OA_UPD_SIGNAL_CODE=""
+
+# Read the scripts' notes (last value wins; anything else is ignored)
+oa_upd_read_notes() {
+    local _k _v
+    [ -f "$OA_UPD_NOTES" ] || return 0
+    while IFS='=' read -r _k _v || [ -n "$_k" ]; do
+        case "$_k" in
+            reason)  [[ "$_v" =~ ^[a-z_]{1,40}$ ]] && OA_UPD_REASON="$_v" ;;
+            changed) [ "$_v" = true ] && OA_UPD_NOTE_TRUE=true; [ "$_v" = false ] && OA_UPD_NOTE_FALSE=true ;;
+            healthy) [[ "$_v" =~ ^(true|false)$ ]] && OA_UPD_HEALTHY="$_v" ;;
+            backup)  [ "${#_v}" -le 190 ] && [[ "$_v" =~ ^/[A-Za-z0-9._/+-]+$ ]] && [[ "$_v" != *..* ]] && OA_UPD_BACKUP="$_v" ;;
+        esac
+    done < "$OA_UPD_NOTES" 2>/dev/null || true
+    return 0
+}
+
+# oa_upd_write [exit code]: rewrite the result file (no exit key while the run goes on)
+oa_upd_write() {
+    local f="$OA_UPD_RESULT"
+    [ "$OA_UPD_LOCK_OWNED" = true ] || return 0
+    rm -rf "$f.tmp" 2>/dev/null || true
+    {
+        printf 'schema=1\nrun=%s\n' "$OA_UPD_RUN"
+        [ -z "$OA_UPD_PHASE" ] || printf 'phase=%s\n' "$OA_UPD_PHASE"
+        [ -z "$OA_UPD_REASON" ] || printf 'reason=%s\n' "$OA_UPD_REASON"
+        [ -z "${1:-}" ] || printf 'exit=%s\nchanged=%s\n' "$1" "$OA_UPD_CHANGED"
+        [ -z "$OA_UPD_HEALTHY" ] || printf 'healthy=%s\n' "$OA_UPD_HEALTHY"
+        [ -z "$OA_UPD_BACKUP" ] || printf 'backup=%s\n' "$OA_UPD_BACKUP"
+        [ -z "$OA_UPD_FROM_OC" ] || printf 'from_openclaw=%s\n' "$OA_UPD_FROM_OC"
+        [ -z "$OA_UPD_PIN_OC" ] || printf 'pin_openclaw=%s\n' "$OA_UPD_PIN_OC"
+        [ -z "$OA_UPD_FROM_NODE" ] || printf 'from_node=%s\n' "$OA_UPD_FROM_NODE"
+        [ -z "$OA_UPD_PIN_NODE" ] || printf 'pin_node=%s\n' "$OA_UPD_PIN_NODE"
+    } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
+}
+
+oa_upd_phase() {
+    case "$1" in
+        1) OA_UPD_PHASE=preflight ;; 2) OA_UPD_PHASE=download ;; 3) OA_UPD_PHASE=core ;;
+        4) OA_UPD_PHASE=platform ;; 5) OA_UPD_PHASE=tools ;;
+    esac
+    oa_upd_write
+}
+
+# Runs when the updater ends, however it ends
+oa_upd_finish() {
+    local code=$?
+    trap '' TERM HUP INT    # a second signal must not cut the result file short
+    trap - EXIT
+    [ -z "$OA_UPD_SIGNAL_CODE" ] || code=$OA_UPD_SIGNAL_CODE
+    # exit code 2 means "another run holds the lock" (the app reads it so): a failure that ends
+    # with some other command's 2 is reported as 1; signals keep their codes
+    case "$code" in 0|1|129|130|143) ;; *) code=1 ;; esac
+    if [ "$OA_UPD_LOCK_OWNED" = true ]; then
+        oa_upd_read_notes
+        [ -z "$OA_UPD_SIGNAL_CODE" ] || OA_UPD_REASON=interrupted   # a cancel stays a cancel, whatever a script noted
+        if [ "$OA_UPD_NOTE_TRUE" = true ]; then OA_UPD_CHANGED=true
+        elif [ "$OA_UPD_NOTE_FALSE" = true ]; then OA_UPD_CHANGED=false
+        else OA_UPD_CHANGED="$OA_UPD_STEP4"; fi
+        if [ "$code" -eq 0 ]; then
+            OA_UPD_PHASE="done"
+            OA_UPD_REASON=""
+            [ "$OA_PIN_CHANGES" != true ] || OA_UPD_CHANGED=true
+        elif [ -z "$OA_UPD_REASON" ]; then
+            OA_UPD_REASON=unknown       # stopped with no code of its own (set -e): never shown as a success
+        fi
+        oa_upd_write "$code"
+        rm -f "$OA_UPD_NOTES" 2>/dev/null || true
+        release_tools_lock
+    fi
+    [ -z "${RELEASE_TMP:-}" ] || rm -rf "$RELEASE_TMP" 2>/dev/null || true
+    exit "$code"
+}
+
+# Start of the run: signals, the lock (exit 2 when busy; the other run's result stays), the first result file
+oa_upd_begin() {
+    local _lock_rc=0
+    trap 'OA_UPD_REASON=interrupted; OA_UPD_SIGNAL_CODE=143; exit 143' TERM
+    trap 'OA_UPD_REASON=interrupted; OA_UPD_SIGNAL_CODE=129; exit 129' HUP
+    trap 'OA_UPD_REASON=interrupted; OA_UPD_SIGNAL_CODE=130; exit 130' INT
+    acquire_tools_lock || _lock_rc=$?
+    if [ "$_lock_rc" -eq 1 ]; then
+        echo -e "${RED}[FAIL]${NC} Another update, setup or tools run is in progress. Try again when it has finished."
+        exit 2
+    elif [ "$_lock_rc" -ne 0 ]; then
+        # (exit 1, not 2: the app reads 2 as "another run is going")
+        echo -e "${RED}[FAIL]${NC} Could not create the run lock in $PROJECT_DIR (is the storage full?)."
+        exit 1
+    fi
+    OA_UPD_LOCK_OWNED=true
+    OA_UPD_RUN=$(date +%s)
+    trap oa_upd_finish EXIT
+    OA_UPD_PHASE=preflight
+    rm -f "$OA_UPD_RESULT"
+    : > "$OA_UPD_NOTES" 2>/dev/null || true
+    export OA_RESULT_NOTES="$OA_UPD_NOTES"
+    oa_upd_write
 }
 
 step 1 "Pre-flight Check"
@@ -51,6 +256,10 @@ elif [ -d "$OLD_DIR" ] && [ -d "$PROJECT_DIR" ]; then
 else
     mkdir -p "$PROJECT_DIR"
 fi
+
+# One run at a time (lock, result file); what comes before is the check of the environment and the old-folder move
+OA_PIN_CHANGES=false
+oa_upd_begin
 
 if [ -f "$PROJECT_DIR/scripts/lib.sh" ]; then
     source "$PROJECT_DIR/scripts/lib.sh"
@@ -79,10 +288,12 @@ fi
 
 PLATFORM=$(detect_platform) || {
     echo -e "${RED}[FAIL]${NC} No platform detected"
+    OA_UPD_REASON=no_platform
     exit 1
 }
 if [ -z "$PLATFORM" ]; then
     echo -e "${RED}[FAIL]${NC} No platform detected"
+    OA_UPD_REASON=no_platform
     exit 1
 fi
 echo -e "${GREEN}[OK]${NC}   Platform: $PLATFORM"
@@ -105,12 +316,13 @@ step 2 "Download Latest Release (tarball)"
 
 mkdir -p "$PREFIX/tmp"
 # Leftovers of an update that was killed (its cleanup trap did not run): older than an hour
-find "$PREFIX/tmp" -maxdepth 1 -name 'oa-update.*' -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+# (the unpacked release, the chat-history preflight, and the downloaded copy of this script that oa.sh makes)
+find "$PREFIX/tmp" -maxdepth 1 \( -name 'oa-update.*' -o -name 'oa-preflight.*' -o -name 'update-core.*.sh' \) -mmin +60 -exec rm -rf {} + 2>/dev/null || true
 RELEASE_TMP=$(mktemp -d "$PREFIX/tmp/oa-update.XXXXXX") || {
     echo -e "${RED}[FAIL]${NC} Failed to create temp directory"
     exit 1
 }
-trap 'rm -rf "$RELEASE_TMP"' EXIT
+# (RELEASE_TMP is removed by oa_upd_finish, the one EXIT trap)
 
 echo "Downloading latest scripts..."
 echo "  (This may take a moment depending on network speed)"
@@ -118,6 +330,7 @@ if curl -sfL "$REPO_TARBALL" | tar xz -C "$RELEASE_TMP" --strip-components=1; th
     echo -e "${GREEN}[OK]${NC}   Downloaded latest release"
 else
     echo -e "${RED}[FAIL]${NC} Failed to download release"
+    OA_UPD_REASON=download_failed
     exit 1
 fi
 
@@ -133,6 +346,7 @@ for f in "${REQUIRED_FILES[@]}"; do
     if [ ! -f "$RELEASE_TMP/$f" ]; then
         echo -e "${RED}[FAIL]${NC} Missing required file: $f"
         echo "       The downloaded release may be corrupted. Try again."
+        OA_UPD_REASON=missing_file
         exit 1
     fi
 done
@@ -142,13 +356,17 @@ source "$RELEASE_TMP/scripts/lib.sh"
 
 # Version pin (PLATFORM_NODE_VERSION etc.) comes from the downloaded config.env
 if ! load_platform_config "$PLATFORM" "$RELEASE_TMP"; then
+    OA_UPD_REASON=pin_missing
     exit 1
 fi
 if [ -z "${PLATFORM_NODE_VERSION:-}" ]; then
     echo -e "${RED}[FAIL]${NC} Version pin missing in platforms/$PLATFORM/config.env"
     echo "       The downloaded release may be incomplete. Run 'oa --update' again."
+    OA_UPD_REASON=pin_missing
     exit 1
 fi
+OA_UPD_PIN_OC="${PLATFORM_NPM_PACKAGE_VERSION:-}"
+OA_UPD_PIN_NODE="$PLATFORM_NODE_VERSION"
 
 # Never move Node.js below what the installed OpenClaw needs. A stale download (the pin it
 # carries is older than what is installed) would otherwise put Node 22 under OpenClaw 9.x,
@@ -171,6 +389,7 @@ if [ "$IS_GLIBC" = true ] && [ "${OA_ALLOW_NODE_DOWNGRADE:-}" != "1" ]; then
             echo "       This usually means the download was an older cached copy. Wait a few minutes and run 'oa --update' again."
             echo "       Nothing was changed. ('oa --restore' only brings back your data, not the program.)"
             echo "       For a deliberate rollback release, set OA_ALLOW_OPENCLAW_DOWNGRADE=1 and OA_ALLOW_NODE_DOWNGRADE=1."
+            OA_UPD_REASON=cache_node_downgrade
             exit 1
         fi
     fi
@@ -188,13 +407,15 @@ else
     _oa_node_now=$(node --version 2>/dev/null || true)
 fi
 unset OA_PRE_UPDATE_BACKUP     # set below only when this run saves a backup
-OA_PIN_CHANGES=false
+OA_UPD_FROM_OC="$_oa_oc_now"
+OA_UPD_FROM_NODE="${_oa_node_now#v}"
 if [ "$_oa_oc_now" != "${PLATFORM_NPM_PACKAGE_VERSION:-}" ] || [ "$_oa_node_now" != "v${PLATFORM_NODE_VERSION}" ]; then
     OA_PIN_CHANGES=true
     # Before anything is changed: stop here when the new packages would not fit
     # (a cached older lib.sh may lack the helper: then there is no check, as before)
     if declare -f oa_check_free_space >/dev/null && ! oa_check_free_space "${OA_MIN_FREE_UPDATE_MB:-2000}" "update OpenClaw and Node.js"; then
         echo "       $PLATFORM was not changed."
+        OA_UPD_REASON=no_space
         exit 1
     fi
 fi
@@ -211,6 +432,7 @@ if [ "$OA_PIN_CHANGES" = true ] && [ "${OA_SKIP_GATEWAY_CHECK:-0}" != 1 ] \
     echo "       In the Claw app: press Ctrl+C in the terminal tab running the gateway, or use"
     echo "       Settings > Apps > Claw > Force stop (swiping the app away does not stop it)."
     echo "       (If nothing is running, set OA_SKIP_GATEWAY_CHECK=1 to skip this check.)"
+    OA_UPD_REASON=gateway_running
     exit 1
 fi
 
@@ -253,22 +475,32 @@ if [ "$OA_PIN_CHANGES" = true ] && [ "$PLATFORM" = "openclaw" ] && [ "${OA_SKIP_
         echo "       Updating now would leave OpenClaw unable to start. $PLATFORM was not changed (Node.js and OpenClaw stay as they are)."
         echo "       Wait a few minutes and run 'oa --update' again; if it keeps failing, report it."
         echo "       (OA_SKIP_SESSION_GUARD=1 skips this check.)"
+        OA_UPD_REASON=session_guard
         exit 1
     fi
 fi
 
 step 3 "Update Core Infrastructure"
 
-mkdir -p "$PROJECT_DIR/platforms" "$PROJECT_DIR/scripts" "$PROJECT_DIR/patches"
+# The copy of the update scripts (rm -rf platforms/<p>, then cp -r, then the shared scripts) must not
+# be cut half way: a platform folder with part of its files cannot run. It runs in a subshell that
+# ignores TERM/HUP/INT, and the commands in it inherit that: Ctrl+C reaches the whole process group
+# and a cancel by the app reaches every descendant, so ignoring the signal in this shell alone would
+# not save the cp that is running. A signal that arrives meanwhile is acted on by this script's
+# own trap right after the subshell ends (bash runs a trap only when the foreground command is done).
+(
+    trap '' TERM HUP INT
+    mkdir -p "$PROJECT_DIR/platforms" "$PROJECT_DIR/scripts" "$PROJECT_DIR/patches"
 
-rm -rf "$PROJECT_DIR/platforms/$PLATFORM"
-cp -r "$RELEASE_TMP/platforms/$PLATFORM" "$PROJECT_DIR/platforms/"
+    rm -rf "$PROJECT_DIR/platforms/$PLATFORM"
+    cp -r "$RELEASE_TMP/platforms/$PLATFORM" "$PROJECT_DIR/platforms/"
 
-cp "$RELEASE_TMP/scripts/lib.sh" "$PROJECT_DIR/scripts/lib.sh"
-cp "$RELEASE_TMP/scripts/setup-env.sh" "$PROJECT_DIR/scripts/setup-env.sh"
-if [ -f "$RELEASE_TMP/scripts/backup.sh" ]; then
-    cp "$RELEASE_TMP/scripts/backup.sh" "$PROJECT_DIR/scripts/backup.sh"
-fi
+    cp "$RELEASE_TMP/scripts/lib.sh" "$PROJECT_DIR/scripts/lib.sh"
+    cp "$RELEASE_TMP/scripts/setup-env.sh" "$PROJECT_DIR/scripts/setup-env.sh"
+    if [ -f "$RELEASE_TMP/scripts/backup.sh" ]; then
+        cp "$RELEASE_TMP/scripts/backup.sh" "$PROJECT_DIR/scripts/backup.sh"
+    fi
+)
 
 # A new OpenClaw/Node.js pin may change the OpenClaw data format, and going back is only
 # possible from a backup: make one first (with the previous Node.js and OpenClaw still in
@@ -293,6 +525,7 @@ if [ "$OA_PIN_CHANGES" = true ] && [ "$PLATFORM" = "openclaw" ] && [ -f "$PROJEC
         _oa_new_backup=$(ls -t "$PROJECT_DIR/backup/pre-update"/*.tar.gz 2>/dev/null | head -1 || true)
         if [ -n "$_oa_new_backup" ] && [ "$_oa_new_backup" != "$_oa_prev_backup" ]; then
             export OA_PRE_UPDATE_BACKUP="$_oa_new_backup"
+            OA_UPD_BACKUP="$_oa_new_backup"
         fi
         # (own folder, newest three kept: a retried update does not pile up full backups)
         echo -e "${GREEN}[OK]${NC}   Backup saved: your OpenClaw data as it was before this update (not the program itself)."
@@ -403,10 +636,12 @@ if [ "$CURRENT_NODE_VER" != "v$PLATFORM_NODE_VERSION" ]; then
         echo "       See the Node.js messages above for the cause (network, checksum, disk space)."
     fi
     echo "       Then run 'oa --update' again."
+    OA_UPD_REASON=node_gate     # install-nodejs.sh may have noted a more exact reason (it wins)
     exit 1
 fi
 echo -e "${GREEN}[OK]${NC}   Node.js $CURRENT_NODE_VER (pinned)"
 
+OA_UPD_STEP4=true       # from here OpenClaw may be replaced (the platform script notes a refusal as changed=false)
 step 4 "Update Platform"
 
 if [ -f "$RELEASE_TMP/platforms/$PLATFORM/update.sh" ]; then

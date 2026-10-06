@@ -226,6 +226,8 @@ oa --update && source ~/.bashrc
 
 如果更新时网关正在运行，请在更新后重新启动它（停止后重新运行 `openclaw gateway`，或重启应用），以使用更新后的运行时。
 
+同一时间只会运行一个安装、更新或工具安装（新安装、`oa --update` 和 Claw 应用中的工具安装共用一个锁）。如果有其他运行正在进行，`oa --update` 会输出 `[FAIL] Another update, setup or tools run is in progress. Try again when it has finished.`，并在不更改安装内容的情况下以退出码 2 结束（参见[故障排除](docs/troubleshooting.md)）。
+
 **更改锁定版本的更新**（例如 Script v1.2.0 中改为 Node.js 24.21.0 和 OpenClaw 2026.9.8），`oa --update` 会额外执行以下保护措施：
 
 - 需要 2000MB 可用空间。空间不足时，会在更改任何内容之前停止，并显示所需空间和剩余空间。
@@ -600,6 +602,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - 检测架构：glibc（`.glibc-arch` 标记）或 Bionic（旧版）
 - 如需要，迁移旧目录名（`.openclaw-lite` → `.openclaw-android` — 旧版兼容）
 - **Phantom Process Killer**（Android 12+）：显示提示信息，附带 [禁用指南](docs/disable-phantom-process-killer.md) 链接
+- **同一时间只运行一次**：安装、更新或工具安装同一时间只会运行一个。第二次运行会输出 `[FAIL] Another update, setup or tools run is in progress. Try again when it has finished.`，并在不更改安装内容的情况下以退出码 2 结束
 
 ### [2/5] 下载最新版本
 
@@ -633,6 +636,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 
 - 如果锁定版本发生了变化：安装后检查 OpenClaw 的配置和数据状态，仅当需要数据迁移且本次运行创建了备份时，运行一次 `openclaw doctor --fix`（参见[更新](#更新)）
 - 安装后、配置检查之前，修复指向其他应用文件夹的路径（参见[备份与恢复](#备份与恢复)）
+- 最后的数据检查（`openclaw config validate` 和 `openclaw doctor --non-interactive`）：如果网关正在使用 OpenClaw 的数据，且本次运行没有替换 OpenClaw，则跳过该检查而不是判为失败，更新继续进行，并输出 `[WARN] The gateway is using the OpenClaw state, so the data check was skipped. Stop the gateway, then run: openclaw doctor`
 - 安装 `binutils`（用于原生模块构建）
 - 再次检查 Node.js 锁定版本作为安全网（纵深防御——[3/5] 已经做过门控）
 - 将 `openclaw` 收敛到锁定版本——已安装版本更低时安装锁定版本。除非设置 `OA_ALLOW_OPENCLAW_DOWNGRADE=1`，否则不会把 OpenClaw 降到更低的版本

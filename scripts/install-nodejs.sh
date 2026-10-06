@@ -25,6 +25,10 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+# Tell the updater (update-core.sh) why this script stopped: it APPENDS lines to $OA_RESULT_NOTES
+# (reason=<code>, changed=true|false); with no variable (install.sh, a manual run) they go nowhere.
+oa_note() { { printf '%s\n' "$1" >> "${OA_RESULT_NOTES:-/dev/null}"; } 2>/dev/null || true; }
+
 OPENCLAW_DIR="$HOME/.openclaw-android"
 NODE_DIR="$OPENCLAW_DIR/node"
 NODE_NEW="$OPENCLAW_DIR/node.new"
@@ -40,6 +44,7 @@ if [ -z "$NODE_VERSION" ]; then
     # update-core.sh served right after a release).
     echo -e "${RED}[FAIL]${NC} The updater is out of date (a cached copy was downloaded)."
     echo "       Run 'oa --update' again in a few minutes."
+    oa_note "reason=cache_old_updater"; oa_note "changed=false"
     exit 1
 fi
 if [[ ! "$NODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -188,6 +193,7 @@ refuse_unmarked_node_change() {
     if [ "$proto" -lt 2 ]; then
         echo -e "${RED}[FAIL]${NC} The updater downloaded an older copy of itself (cache). Nothing was changed."
         echo "       Run 'oa --update' again in a few minutes."
+        oa_note "reason=cache_old_updater"; oa_note "changed=false"
         exit 1
     fi
 }
@@ -561,6 +567,7 @@ trap cleanup EXIT
 if ! curl -fL --max-time 300 "$NODE_DIST_BASE/$NODE_TARBALL" -o "$TMP_DIR/$NODE_TARBALL"; then
     echo -e "${RED}[FAIL]${NC} Failed to download Node.js v${NODE_VERSION}"
     echo "       Check your network connection and try again."
+    oa_note "reason=node_download"; oa_note "changed=false"
     exit 1
 fi
 echo -e "${GREEN}[OK]${NC}   Downloaded $NODE_TARBALL"
@@ -568,6 +575,7 @@ echo -e "${GREEN}[OK]${NC}   Downloaded $NODE_TARBALL"
 # Checksum list comes from the same place as the tarball
 if ! curl -fsSL --max-time 60 "$NODE_DIST_BASE/SHASUMS256.txt" -o "$TMP_DIR/SHASUMS256.txt"; then
     echo -e "${RED}[FAIL]${NC} Failed to download SHASUMS256.txt for Node.js v${NODE_VERSION}"
+    oa_note "reason=node_download"; oa_note "changed=false"
     exit 1
 fi
 EXPECTED_SHA=$(awk -v f="$NODE_TARBALL" '$2 == f { print $1; exit }' "$TMP_DIR/SHASUMS256.txt")
@@ -576,6 +584,7 @@ if [ -z "$EXPECTED_SHA" ] || [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
     echo -e "${RED}[FAIL]${NC} Checksum mismatch for $NODE_TARBALL"
     echo "       expected: ${EXPECTED_SHA:-<not listed>}"
     echo "       actual:   $ACTUAL_SHA"
+    oa_note "reason=checksum"; oa_note "changed=false"
     exit 1
 fi
 echo -e "${GREEN}[OK]${NC}   sha256 verified"
@@ -618,6 +627,7 @@ fi
 
 # ── Step 3: Swap into place ───────────────────
 
+oa_note "changed=true"     # from here the installed Node.js is replaced (restored on failure, but touched)
 if [ -d "$NODE_DIR" ]; then
     mv "$NODE_DIR" "$NODE_OLD"
 fi

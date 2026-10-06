@@ -307,6 +307,30 @@ oa --update && source ~/.bashrc
 
 이 검사는 명령줄이 `openclaw.*gateway` 와 맞는 프로세스를 찾으므로 `tail -f …gateway.log` 같은 명령에도 걸릴 수 있습니다. 게이트웨이가 실행 중이 아닌 것이 확실하면 `OA_SKIP_GATEWAY_CHECK=1 oa --update` 로 실행하세요.
 
+## `oa --update` 가 "Another update, setup or tools run is in progress" 로 멈춤
+
+```
+[FAIL] Another update, setup or tools run is in progress. Try again when it has finished.
+```
+
+새 설치는 `Another setup, update or tools run is in progress. Try again when it has finished.` 를, Claw 앱의 도구 설치는 `Another tools run is in progress. Try again when it has finished.` 를 출력합니다. 세 경우 모두 종료 코드는 2 이며, 설치 상태는 바뀌지 않았습니다.
+
+### 원인
+
+새 설치, `oa --update`, Claw 앱의 도구 설치는 한 번에 하나만 실행됩니다. 이 실행들은 폴더 `~/.openclaw-android/.tools.lock` 이라는 잠금 하나를 공유하며, 다른 실행이 이 잠금을 쥐고 있으면 즉시 멈춥니다.
+
+### 해결 방법
+
+터미널이나 Claw 앱에서 진행 중인 다른 실행이 끝날 때까지 기다린 뒤 명령을 다시 실행하세요.
+
+다른 실행이 없는데도 이 메시지가 나오면(예: 실행이 강제 종료된 경우) 대개 아무것도 할 필요가 없습니다. 잠금은 소유자의 프로세스 ID 를 `pid` 파일에 기록하며, 그 프로세스가 사라졌으면 새 실행이 잠금을 자동으로 넘겨받습니다. `pid` 파일이 없는 잠금(만드는 도중 소유자가 멈춘 경우)은 약 1분 뒤에 넘겨받습니다. 그래도 이 메시지가 계속 나오면 약 1분 기다린 뒤 명령을 다시 실행하세요.
+
+최후의 수단으로 잠금 폴더를 삭제할 수 있습니다. 터미널에서든 Claw 앱에서든 다른 설치·업데이트·도구 설치가 실행 중이지 않다고 확신할 때만 삭제하세요:
+
+```bash
+rm -rf ~/.openclaw-android/.tools.lock
+```
+
 ## "state database schema migration required" 또는 업데이트 뒤 게이트웨이가 시작되지 않음
 
 ```
@@ -329,6 +353,12 @@ openclaw gateway
 문제가 생기면 `oa --restore` 의 목록에서 `pre-update/` 백업(업데이트 전의 데이터)을 선택할 수 있습니다. 복구는 데이터만 되돌리고 프로그램은 되돌리지 않습니다.
 
 `oa --update` 가 이전을 직접 실행했다가 실패한 경우, `openclaw doctor --fix` 의 전체 출력이 `~/.openclaw-android/doctor-fix.log` 에 저장됩니다.
+
+`oa --update` 가 다음 줄과 함께 끝나면 데이터 확인은 실패한 것이 아니라 건너뛴 것입니다. 게이트웨이가 OpenClaw 상태를 사용 중이어서 OpenClaw 자체의 확인이 그 상태를 볼 수 없었습니다. 업데이트 자체는 끝났습니다. 게이트웨이를 멈춘 뒤 `openclaw doctor` 를 실행하세요.
+
+```
+[WARN] The gateway is using the OpenClaw state, so the data check was skipped. Stop the gateway, then run: openclaw doctor
+```
 
 ## `Hard-link patch: not complete`, `linkat … Permission denied` 또는 `FICLONE: Permission denied`
 
@@ -460,6 +490,8 @@ oa --update && source ~/.bashrc
 ### 해결 방법
 
 공간을 확보한 뒤(예: 다른 앱의 캐시 삭제, 사용하지 않는 파일 삭제, `~/.npm/_cacache` 제거) 명령을 다시 실행하세요. 아무것도 바뀌지 않았으므로 안전하게 다시 시도할 수 있습니다.
+
+저장 공간이 완전히 찼으면 `oa --update` 가 그보다 먼저 `[FAIL] Could not create the run lock in … (is the storage full?)` 를 출력하고 멈출 수 있습니다. 원인과 해결 방법은 같습니다.
 
 ## Android 10 이하에서 OpenClaw 의 데스크톱 자동화 도구가 동작하지 않음
 

@@ -422,11 +422,20 @@ internal class ToolInstallStructureTest {
                 .readLines()
                 .filter { it.contains("(error=env)") || it.contains("(error=lock)") }
                 .map { Regex("""echo "([^"]*)"""").find(it)!!.groupValues[1] }
-        assertEquals(2, lines.size, lines.toString())
-        val env = lines.single { it.contains("error=env") }.replace("\$OCA_DIR", "/h/.openclaw-android")
-        val lock = lines.single { it.contains("error=lock") }.replace("\$OCA_DIR", "/h/.openclaw-android")
-        assertEquals(ToolFailure.ENV, ToolInstallVerdict.hintFromOutput(env), env)
-        assertEquals(ToolFailure.LOCK, ToolInstallVerdict.hintFromOutput(lock), lock)
+        // one env line; a lock line for the tools lock and one for the shared run lock (R5)
+        val env = lines.filter { it.contains("error=env") }
+        val locks = lines.filter { it.contains("error=lock") }
+        assertEquals(1, env.size, lines.toString())
+        assertTrue(locks.size >= 2, "expected the tools lock and the run lock lines: $lines")
+        assertTrue(locks.any { it.contains("tools lock") } && locks.any { it.contains("run lock") }, locks.toString())
+        for (line in env) {
+            val printed = line.replace("\$OCA_DIR", "/h/.openclaw-android")
+            assertEquals(ToolFailure.ENV, ToolInstallVerdict.hintFromOutput(printed), printed)
+        }
+        for (line in locks) {
+            val printed = line.replace("\$OCA_DIR", "/h/.openclaw-android")
+            assertEquals(ToolFailure.LOCK, ToolInstallVerdict.hintFromOutput(printed), printed)
+        }
     }
 
     // ── compiled class access ───────────────────────────────────────────────

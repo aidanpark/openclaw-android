@@ -158,13 +158,33 @@ internal class ToolsUiContractTest {
         assertFalse(tools.contains("install_progress"), "SettingsTools mentions install_progress")
     }
 
+    /**
+     * The platform and update screens that listened to `install_progress` were replaced by
+     * Settings → Install & Update (status screen, stage A). What the old test protected — tool
+     * events never reach another screen and each kind of run has its own event — now reads: only
+     * SettingsTools hears `tool_progress`, only SettingsStatus hears `run_progress`/`gateway_state`,
+     * and no screen listens to `install_progress` any more.
+     */
     @Test
-    fun `the OpenClaw platform and update screens keep install_progress and never see tool events`() {
-        for (screen in listOf("screens/SettingsPlatforms.tsx", "screens/SettingsUpdates.tsx")) {
-            val src = www(screen)
-            assertEquals(setOf("install_progress"), listened(src), screen)
-            assertFalse(src.contains("tool_progress"), "$screen mentions tool_progress")
-        }
+    fun `each run kind has its own listener - tools, managed runs, and nobody on install_progress`() {
+        val sources =
+            File("../www/src")
+                .walkTopDown()
+                .filter { it.isFile && (it.name.endsWith(".ts") || it.name.endsWith(".tsx")) }
+                .associate { it.name to it.readText() }
+        assertTrue(sources.size > 10, sources.keys.toString())
+        val listeners = sources.mapValues { listened(it.value) }
+
+        fun who(event: String) = listeners.filterValues { event in it }.keys
+        assertEquals(setOf("SettingsTools.tsx"), who("tool_progress"))
+        assertEquals(setOf("SettingsStatus.tsx"), who("run_progress"))
+        assertEquals(setOf("SettingsStatus.tsx"), who("gateway_state"))
+        assertEquals(emptySet<String>(), who("install_progress"))
+        assertEquals(setOf("run_progress", "gateway_state"), listened(sources.getValue("SettingsStatus.tsx")))
+        assertFalse(sources.getValue("SettingsStatus.tsx").contains("tool_progress"))
+        assertFalse(sources.getValue("SettingsStatus.tsx").contains("install_progress"))
+        assertFalse(File("../www/src/screens/SettingsPlatforms.tsx").exists(), "SettingsPlatforms.tsx is back")
+        assertFalse(File("../www/src/screens/SettingsUpdates.tsx").exists(), "SettingsUpdates.tsx is back")
     }
 
     @Test

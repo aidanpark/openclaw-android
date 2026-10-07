@@ -178,9 +178,10 @@ internal class ToolsCheckWwwContractTest {
     fun `the shipped bundle keeps only the newest answers and lets only failed join broken`() {
         val listener =
             Regex(
-                """useCallback\((\w+)=>\{const (\w+)=\1,\{target:(\w+),status:(\w+)}=\2;""" +
-                    """\2\.callbackId!==(\w+)\.current\|\|!\3\|\|!\4\|\|""" +
-                    """[\w$]+\((\w+)=>\(\{\.\.\.\6,\[\3]:\4}\)\)},\[]\);""" +
+                // minified names may contain `$` (e.g. `$t`): every name is [\w$]+
+                """useCallback\(([\w$]+)=>\{const ([\w$]+)=\1,\{target:([\w$]+),status:([\w$]+)}=\2;""" +
+                    """\2\.callbackId!==([\w$]+)\.current\|\|!\3\|\|!\4\|\|""" +
+                    """[\w$]+\(([\w$]+)=>\(\{\.\.\.\6,\[\3]:\4}\)\)},\[]\);""" +
                     """[\w$]+\("tools_check",""",
             ).find(bundle)
         assertNotNull(listener, "bundle lacks the newest-answer filter (rebuild www)")
@@ -189,8 +190,8 @@ internal class ToolsCheckWwwContractTest {
         assertTrue(Regex("""$ref\.current=$fn\(\)""").containsMatchIn(bundle), "filter uses another ref")
         assertTrue(
             Regex(
-                """new Set\(\[\.\.\.\w+\.broken,""" +
-                    """\.\.\.Object\.keys\((\w+)\)\.filter\((\w+)=>\1\[\2]==="failed"\)]\)""",
+                """new Set\(\[\.\.\.[\w$]+\.broken,""" +
+                    """\.\.\.Object\.keys\(([\w$]+)\)\.filter\(([\w$]+)=>\1\[\2]==="failed"\)]\)""",
             ).containsMatchIn(bundle),
             "bundle's broken is not native broken plus failed checks only (rebuild www)",
         )

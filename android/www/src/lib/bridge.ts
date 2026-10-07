@@ -17,20 +17,23 @@ interface OpenClawBridge {
   getSetupState(): string
   saveToolSelections(json: string): void
   getAvailablePlatforms(): string
-  installPlatform(id: string): void
-  uninstallPlatform(id: string): void
-  switchPlatform(id: string): void
   getActivePlatform(): string
   getInstalledTools(): string
   installTool(id: string): void
   cancelToolInstall(): void
   getToolInstallState(): string
   checkInstalledToolsAsync(callbackId: string): void
+  // Managed runs (`oa --update` as a child process); progress arrives as `run_progress`
+  startRun(kind: string, stopGateway: boolean): void
+  cancelRun(): void
+  getRunState(): string
+  getLastRun(): string
+  // Gateway status and stop; a stop's outcome arrives as `gateway_state`
+  getGatewayStatus(): string
+  stopGateway(force: boolean): void
   uninstallTool(id: string): void
   isToolInstalled(id: string): string
   runProbeAsync(callbackId: string, commandId: string): void
-  checkForUpdates(): string
-  applyUpdate(component: string): void
   getApkUpdateInfoAsync(callbackId: string): void
   getAppInfo(): string
   getBatteryOptimizationStatus(): string

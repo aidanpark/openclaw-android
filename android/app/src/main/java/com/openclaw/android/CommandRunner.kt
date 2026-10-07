@@ -253,19 +253,22 @@ object CommandRunner {
     private fun resolveExecutable(
         executable: String,
         env: Map<String, String>,
-    ): String {
-        val found =
-            if (executable.contains(File.separatorChar)) {
-                File(executable).takeIf { it.exists() }
-            } else {
-                env["PATH"]
-                    ?.split(File.pathSeparator)
-                    ?.asSequence()
-                    ?.map { File(it, executable) }
-                    ?.firstOrNull { it.exists() && it.canExecute() }
-            }
-        return found?.path ?: throw java.io.IOException("Executable not found: $executable")
-    }
+    ): String = findExecutable(executable, env)?.path ?: throw java.io.IOException("Executable not found: $executable")
+
+    /** The file [executable] names on [env]'s PATH (or the path itself), null when there is none. */
+    internal fun findExecutable(
+        executable: String,
+        env: Map<String, String>,
+    ): File? =
+        if (executable.contains(File.separatorChar)) {
+            File(executable).takeIf { it.exists() }
+        } else {
+            env["PATH"]
+                ?.split(File.pathSeparator)
+                ?.asSequence()
+                ?.map { File(it, executable) }
+                ?.firstOrNull { it.exists() && it.canExecute() }
+        }
 
     private const val READER_JOIN_MS = 2_000L
     private const val DRAIN_BUFFER_CHARS = 4096

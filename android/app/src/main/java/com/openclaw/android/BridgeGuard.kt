@@ -107,6 +107,9 @@ internal object BridgeGuard {
     val toolSelectionIds: Set<String> =
         setOf("tmux", "ttyd", "dufs", "code-server", "playwright", "claude-code", "gemini-cli", "codex-cli")
 
+    /** Managed runs the page may start by kind (`startRun`); the command behind each is in [RunKinds]. */
+    val runKinds: Set<String> = setOf(RunKinds.UPDATE)
+
     /** Fixed texts the UI may copy to the clipboard, by ID. */
     val clipboardTexts: Map<String, String> =
         mapOf(

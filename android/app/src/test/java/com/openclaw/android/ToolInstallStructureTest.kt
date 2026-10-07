@@ -344,14 +344,15 @@ internal class ToolInstallStructureTest {
     }
 
     @Test
-    fun `tool events use their own event name, and the OpenClaw platform install keeps install_progress`() {
+    fun `tool events use their own event name, and nothing emits install_progress any more`() {
         assertTrue(jsBridgeSource.contains("TOOL_EVENT = \"tool_progress\""))
         val toolFunctions =
             listOf("installTool", "emitNotSupported", "emitToolState", "runToolInstall", "cancelToolInstall")
         for (name in toolFunctions) {
             assertFalse(body(jsBridgeSource, name).contains("\"install_progress\""), "$name emits install_progress")
         }
-        assertTrue(body(jsBridgeSource, "installPlatform").contains("\"install_progress\""))
+        // The platform install stub that used it is gone; managed runs and tool installs have their own events
+        assertFalse(jsBridgeSource.contains("\"install_progress\""), "JsBridge still emits install_progress")
     }
 
     // ── id lists agree ──────────────────────────────────────────────────────

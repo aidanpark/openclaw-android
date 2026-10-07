@@ -186,7 +186,7 @@ internal object ToolSignal {
         lockPidFile: java.io.File,
         token: String,
         procDir: java.io.File = java.io.File("/proc"),
-        send: (Int, Int) -> Unit = { pid, sig -> android.os.Process.sendSignal(pid, sig) },
+        send: (Int, Int) -> Unit = { pid, sig -> SafeSignal.send(pid, sig) },
     ): Boolean {
         val pid = readPid(lockPidFile)
         val ours = token.isNotEmpty() && pid != null && pid > 1 && isOurRun(procDir, pid, token)

@@ -63,6 +63,7 @@ AndroidでOpenClawを実行する一般的な方法では、proot-distroでLinux
 - ワンタップセットアップ: bootstrap、Node.js、OpenClawをアプリ内からまとめてインストール
 - ゲートウェイ制御、ランタイム情報、ツール管理を行うダッシュボードを内蔵
 - ツールのインストール: 設定 → 追加ツール（Settings → Additional Tools）画面から、インストールスクリプト（`post-setup.sh --tools-only`）でtmux、ttyd、dufs、Android Tools、Playwright、Claude Code、Gemini CLI、Codex CLIをインストールできます。tmux、ttyd、dufs、Android Toolsは署名済みのTermuxパッケージリストで検証します。インストールに失敗したツールや `--version` の確認に失敗したツールは「動作していません」と再インストールボタンで表示します。code-server、OpenCode、SSHサーバー、Chromiumはまだアプリからインストールできません。code-serverはアプリのターミナルで `oa --install` を使ってインストールできます
+- インストールと更新: 設定 → インストールと更新（Settings → Install & Update）画面から、アプリが `oa --update` を実行し、進捗と結果を表示します。キャンセルできるのは初期のステップ（ステップ3、コアファイルの置き換えより前）だけです。この画面には、OpenClawとNode.jsのバージョン、アプリから最後に実行した更新の結果、ゲートウェイの状態と「ゲートウェイを停止」（Stop gateway）ボタンも表示されます（アプリのターミナルで起動したゲートウェイのみ対象）
 - Termuxとは独立して動作 — アプリをインストールしても既存のTermux + `oa` 環境には影響しません
 
 APKは[Releases](https://github.com/AidanPark/openclaw-android/releases)ページからダウンロードできます。
@@ -226,7 +227,7 @@ oa --update && source ~/.bashrc
 **固定バージョンが変わるアップデート**（例: Script v1.2.0 でNode.js 24.21.0とOpenClaw 2026.9.8に変わる場合）では、`oa --update` が次の安全策を追加で実行します。
 
 - 空き容量が2000MB必要です。不足している場合は、何も変更する前に停止し、必要量と残量を表示します。
-- OpenClawゲートウェイが動作中の場合は、何も変更せずに停止します。ゲートウェイを停止（Ctrl+C）してから `oa --update` をもう一度実行してください。
+- OpenClawゲートウェイが動作中の場合は、何も変更せずに停止します。ゲートウェイを停止（Ctrl+C）してから `oa --update` をもう一度実行してください。Claw アプリでは、設定 → インストールと更新（Install & Update）→「ゲートウェイを停止」（Stop gateway）で、アプリのターミナルで起動したゲートウェイを停止できます。アプリの「更新」（Update）ボタンも、そのようなゲートウェイを先に停止してから実行します。アプリが更新のためにゲートウェイを停止した場合は、更新の後でダッシュボードから再起動してください。
 - 先に `~/.openclaw-android/backup/pre-update/` にデータのバックアップを作成します（保持するのは最新の3件のみ）。
 - インストール後にOpenClawの設定とデータの状態を確認します。データ移行が必要で、かつ今回の実行でバックアップを作成した場合に限り、`openclaw doctor --fix` を1回自動実行します（最大2分）。失敗した場合は、バックアップの場所と手動の手順（ゲートウェイを停止して `openclaw doctor --fix` を実行）を表示し、失敗として終了します。
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { bridge } from '../lib/bridge'
+import { useRoute } from '../lib/router'
 import { useRuntimeProbes, type ProbeSpec } from '../lib/useRuntimeProbes'
 import { t } from '../i18n'
 
@@ -22,9 +23,19 @@ function getCommands() {
   ]
 }
 
-function getManagement() {
+interface ManagementItem {
+  label: string
+  desc: string
+  // Either a screen of the app (shows desc) or a command typed into the terminal (shows cmd)
+  route?: string
+  commandId?: string
+  cmd?: string
+}
+
+function getManagement(): ManagementItem[] {
   return [
-    { label: 'Update', commandId: 'oaUpdate', cmd: 'oa --update', desc: t('cmd_update') },
+    // Updates run in the app now (progress, result, gateway stop); the terminal path stays on that screen
+    { label: 'Update', route: '/settings/status', desc: t('cmd_update') },
     { label: 'Install Tools', commandId: 'oaInstall', cmd: 'oa --install', desc: t('cmd_install_tools') },
   ]
 }
@@ -36,6 +47,7 @@ const RUNTIME_PROBES: ProbeSpec[] = [
 ]
 
 export function Dashboard() {
+  const { navigate } = useRoute()
   const [status, setStatus] = useState<BootstrapStatus | null>(null)
   const [platform, setPlatform] = useState<PlatformInfo | null>(null)
   const runtimeInfo = useRuntimeProbes(RUNTIME_PROBES)
@@ -122,14 +134,21 @@ export function Dashboard() {
       <div className="card">
         {getManagement().map((item, i) => (
           <div
-            key={item.cmd}
+            key={item.label}
             className="card-row"
             style={{ cursor: 'pointer', borderTop: i > 0 ? '1px solid var(--border)' : 'none', padding: '10px 0' }}
-            onClick={() => runInTerminal(item.commandId)}
+            onClick={() => {
+              if (item.route) navigate(item.route)
+              else if (item.commandId) runInTerminal(item.commandId)
+            }}
           >
             <div className="card-content">
               <div className="card-label">{item.label}</div>
-              <div className="card-desc" style={{ fontFamily: 'monospace', fontSize: 12 }}>{item.cmd}</div>
+              {item.route ? (
+                <div className="card-desc">{item.desc}</div>
+              ) : (
+                <div className="card-desc" style={{ fontFamily: 'monospace', fontSize: 12 }}>{item.cmd}</div>
+              )}
             </div>
             <div className="card-chevron">›</div>
           </div>

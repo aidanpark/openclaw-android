@@ -295,7 +295,9 @@ This update changes the pinned Node.js or OpenClaw version. A running gateway ca
 
 ### Solution
 
-In the Claw app, press Ctrl+C in the terminal tab where the gateway runs, or use Android Settings > Apps > Claw > Force stop. Swiping the app away from the recent apps list does not stop the gateway, because the app keeps a foreground service.
+In the Claw app, open Settings → Install & Update and tap Stop gateway. The app can stop only a gateway that was started in its own terminal; a gateway detached with `nohup`, `tmux` or `setsid` cannot be stopped from the app, so stop it with `kill <PID>` in a terminal. Alternatively, press Ctrl+C in the terminal tab where the gateway runs. As a last resort, use Android Settings > Apps > Claw > Force stop. Swiping the app away from the recent apps list does not stop the gateway, because the app keeps a foreground service.
+
+The app's own Update button on that screen also stops a gateway it started before it updates. If the app stopped the gateway for the update, start it again from the Dashboard afterwards.
 
 Stop the gateway (press Ctrl+C in the terminal where it runs), then run the update again:
 
@@ -305,7 +307,7 @@ oa --update && source ~/.bashrc
 
 If you cannot find where the gateway is running, see [Gateway won't start](#gateway-wont-start-gateway-already-running-or-port-is-already-in-use).
 
-The check looks for a process whose command line matches `openclaw.*gateway`, so a command such as `tail -f …gateway.log` can also trigger it. If you are sure no gateway is running, run `OA_SKIP_GATEWAY_CHECK=1 oa --update`.
+The check looks for a process whose command line matches `openclaw.*gateway`, so a command such as `tail -f …gateway.log` can also trigger it. If you are sure no gateway is running, run `OA_SKIP_GATEWAY_CHECK=1 oa --update`. The app cannot pass environment variables to its own update, so in the Claw app use the Open in terminal option on the Install & Update screen and run `OA_SKIP_GATEWAY_CHECK=1 oa --update` there.
 
 ## `oa --update` stops with "Another update, setup or tools run is in progress"
 
@@ -354,7 +356,7 @@ If something went wrong, `oa --restore` lists the `pre-update/` backup (your dat
 
 If `oa --update` ran the migration itself and it failed, the full output of `openclaw doctor --fix` is saved in `~/.openclaw-android/doctor-fix.log`.
 
-If `oa --update` finishes with the following line, the data check was skipped, not failed: the gateway is using the OpenClaw state, so OpenClaw's own check could not look at it. The update itself finished. Stop the gateway, then run `openclaw doctor`.
+If `oa --update` finishes with the following line, the data check was skipped, not failed: the gateway is using the OpenClaw state, so OpenClaw's own check could not look at it. The update itself finished. Stop the gateway, then run `openclaw doctor`. In the Claw app, you can stop a gateway started in the app's terminal with Settings → Install & Update → Stop gateway.
 
 ```
 [WARN] The gateway is using the OpenClaw state, so the data check was skipped. Stop the gateway, then run: openclaw doctor

@@ -265,46 +265,6 @@ class JsBridge(
         )
     }
 
-    /**
-     * Platforms are installed and pinned by the install scripts (`oa --update`), whose version pin
-     * is the single source of truth — the app does not run npm itself, so it cannot install
-     * `@latest` around that pin. Only known platform ids are acknowledged.
-     */
-    @JavascriptInterface
-    fun installPlatform(id: String) {
-        if (!BridgeGuard.isPlatform(id)) return
-        eventBridge.emit(
-            "install_progress",
-            mapOf(
-                "target" to id,
-                "progress" to PROGRESS_START,
-                "message" to "Platforms are managed by the install scripts. Run 'oa --update' in the terminal.",
-            ),
-        )
-    }
-
-    @JavascriptInterface
-    fun uninstallPlatform(id: String) {
-        if (!BridgeGuard.isPlatform(id)) return
-        eventBridge.emit(
-            "install_progress",
-            mapOf(
-                "target" to id,
-                "progress" to PROGRESS_START,
-                "message" to "Platforms are managed by the install scripts.",
-            ),
-        )
-    }
-
-    @JavascriptInterface
-    fun switchPlatform(id: String) {
-        if (!BridgeGuard.isPlatform(id)) return
-        // Write active platform marker
-        val markerFile = java.io.File(bootstrapManager.homeDir, ".openclaw-android/.platform")
-        markerFile.parentFile?.mkdirs()
-        markerFile.writeText(id)
-    }
-
     @JavascriptInterface
     fun getActivePlatform(): String {
         val markerFile = java.io.File(bootstrapManager.homeDir, ".openclaw-android/.platform")
@@ -404,11 +364,9 @@ class JsBridge(
         }
         val scriptId = BridgeGuard.toolInstallIds[id] ?: return
         val startedAtSec = System.currentTimeMillis() / MILLIS_PER_SECOND
-        if (!ToolInstallGuard.tryStart(id, startedAtSec)) {
-            AppLogger.w(TAG, "installTool ignored: another tool install is running")
-            emitToolState() // tell the page what is running instead of staying silent
-            return
-        }
+        // One run that changes the install at a time, tool install or update (released in the finally below)
+        val leased = RunLease.tryAcquire(RunLease.TOOLS)
+        if (!leased || !ToolInstallGuard.tryStart(id, startedAtSec)) return refuseToolInstall(id, leased)
         launchWithErrorHandling(
             errorEventType = TOOL_EVENT,
             errorContext =
@@ -443,6 +401,8 @@ class JsBridge(
             } finally {
                 longRunning.cancel()
                 cancelPump.cancel()
+                // The script has ended: another run may start (before anything below can throw)
+                RunLease.release(RunLease.TOOLS)
                 try {
                     // A display aid only: nothing that goes wrong here may keep the guard held
                     try {
@@ -599,6 +559,32 @@ class JsBridge(
 
     private fun emitToolState() = eventBridge.emit(TOOL_EVENT, toolStateEvent(ToolInstallGuard.snapshot()))
 
+    /**
+     * The install did not start. Another tool install is running: tell the page what is running
+     * instead of staying silent (as before). The run lease is held by a managed run (an update):
+     * this install says BUSY. [leased]: the lease was taken for this call and must be given back.
+     */
+    private fun refuseToolInstall(
+        id: String,
+        leased: Boolean,
+    ) {
+        if (leased) RunLease.release(RunLease.TOOLS)
+        AppLogger.w(TAG, "installTool ignored: ${RunLease.owner() ?: "another tool install"} is running")
+        if (ToolInstallGuard.isRunning()) return emitToolState()
+        eventBridge.emit(
+            TOOL_EVENT,
+            mapOf(
+                "target" to id,
+                "phase" to ToolInstallGuard.FAILED,
+                "progress" to PROGRESS_START,
+                "message" to "",
+                "cancelRequested" to false,
+                "longRunning" to false,
+                "reason" to ToolFailure.BUSY.name,
+            ),
+        )
+    }
+
     /** No work is done: a plain, honest "not from the app" for a tool or action with no safe path. */
     private fun emitNotSupported(
         id: String,
@@ -622,6 +608,106 @@ class JsBridge(
     fun uninstallTool(id: String) {
         if (id !in BridgeGuard.toolIds) return
         emitNotSupported(id, "UNINSTALL_UNSUPPORTED", "Removing $id is not supported from the app yet")
+    }
+
+    // ═══════════════════════════════════════════
+    // Managed runs domain (`oa --update` as a child process) and the gateway
+    // ═══════════════════════════════════════════
+
+    private val runs by lazy {
+        ManagedRunner(
+            homeDir = bootstrapManager.homeDir,
+            environment = { EnvironmentBuilder.build(activity) },
+            outcomes = RunOutcomeStore(java.io.File(activity.filesDir, "last-run.conf")),
+            // The app's own process is a root too: after the Activity is recreated the terminal
+            // shells (its children) are still below it, though the new session manager lists none.
+            // Other apps' processes have another uid and are not visible in /proc.
+            gateway = GatewayControl(sessionPids = { sessionManager.sessionPids() + android.os.Process.myPid() }),
+            emit = { type, data -> eventBridge.emit(type, data) },
+        )
+    }
+
+    /**
+     * Start a managed run by kind ([BridgeGuard.runKinds]; the command behind it is native's). Its
+     * progress and end arrive as `run_progress` events. With [stopGateway] a running gateway the app
+     * started is stopped first; otherwise a running gateway refuses the run (GATEWAY_RUNNING).
+     */
+    @Suppress("TooGenericExceptionCaught") // a runner that cannot be built must not leave the lease held
+    @JavascriptInterface
+    fun startRun(
+        kind: String,
+        stopGateway: Boolean,
+    ) {
+        // The runner is built before the lease is taken: if building it fails, nothing is left held
+        val runner =
+            try {
+                runs
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "startRun: the managed runner could not be created", e)
+                // Nothing was taken or started: say so, so the page does not wait for a run that never begins
+                eventBridge.emit(
+                    ManagedRunner.RUN_EVENT,
+                    ManagedRunner.stateEvent(
+                        ManagedRunGuard.State(
+                            null,
+                            ManagedRunner.REFUSED,
+                            0,
+                            0,
+                            "",
+                            0L,
+                            reason = UpdateReason.UNKNOWN.name,
+                        ),
+                    ),
+                )
+                return
+            }
+        if (kind !in BridgeGuard.runKinds) return runner.emitRefused(null, UpdateReason.UNKNOWN)
+        // Taken here, on the caller thread, before anything is launched; ManagedRunner.run releases it
+        if (!RunLease.tryAcquire(kind)) {
+            AppLogger.w(TAG, "startRun ignored: ${RunLease.owner()} is running")
+            return runner.emitBusy(kind)
+        }
+        launchWithErrorHandling(
+            errorEventType = ManagedRunner.RUN_EVENT,
+            errorContext =
+                mapOf(
+                    "kind" to kind,
+                    "phase" to ManagedRunGuard.FAILED,
+                    "reason" to UpdateReason.UNKNOWN.name,
+                ),
+        ) {
+            runner.run(kind, stopGateway)
+        }
+    }
+
+    /** Ask the managed run to stop; refused once it is past its cancelable stages (an update after `[2/5]`). */
+    @JavascriptInterface
+    fun cancelRun() = runs.cancel()
+
+    /** Where the managed run is, in the shape of `run_progress` — for a page created while one runs or after. */
+    @JavascriptInterface
+    fun getRunState(): String = gson.toJson(ManagedRunner.stateEvent(ManagedRunGuard.snapshot()))
+
+    /** How the last run of each kind ended, kept across app restarts (`last-run.conf`). */
+    @JavascriptInterface
+    fun getLastRun(): String = gson.toJson(runs.lastRuns())
+
+    /** `{running, ours, pids}` — `running` when a gateway process exists, `ours` when one is below the app. */
+    @JavascriptInterface
+    fun getGatewayStatus(): String = gson.toJson(runs.gatewayStatus())
+
+    /**
+     * Stop the gateway the app's terminal started (never one started elsewhere, never by name).
+     * [force] = SIGKILL, only after the page asked a second time. Answers on `gateway_state`.
+     */
+    @JavascriptInterface
+    fun stopGateway(force: Boolean) {
+        launchWithErrorHandling(
+            errorEventType = ManagedRunner.GATEWAY_EVENT,
+            errorContext = mapOf("phase" to ManagedRunner.GATEWAY_DONE),
+        ) {
+            runs.stopGatewayAndReport(force)
+        }
     }
 
     // ═══════════════════════════════════════════
@@ -704,14 +790,6 @@ class JsBridge(
     // Updates domain
     // ═══════════════════════════════════════════
 
-    /**
-     * Over-the-air component updates (www / bootstrap) were removed: the update channel no longer
-     * exists, www always ships inside the APK, and downloads were not integrity-checked. The app
-     * itself updates through APK releases and the scripts through `oa --update`.
-     */
-    @JavascriptInterface
-    fun checkForUpdates(): String = gson.toJson(emptyList<Map<String, String>>())
-
     /** Check GitHub for a newer app release without blocking the WebView; answers with an `apk_update_info` event. */
     @JavascriptInterface
     fun getApkUpdateInfoAsync(callbackId: String) {
@@ -751,18 +829,6 @@ class JsBridge(
         } catch (e: Exception) {
             mapOf("error" to e.message)
         }
-
-    @JavascriptInterface
-    fun applyUpdate(component: String) {
-        eventBridge.emit(
-            "install_progress",
-            mapOf(
-                "target" to component,
-                "progress" to PROGRESS_START,
-                "message" to "Over-the-air updates are no longer supported. Update the app instead.",
-            ),
-        )
-    }
 
     // ═══════════════════════════════════════════
     // System domain

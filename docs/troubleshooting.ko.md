@@ -295,7 +295,9 @@ export FS_SAFE_NATIVE_MODE=off
 
 ### 해결 방법
 
-Claw 앱에서는 게이트웨이가 실행 중인 터미널 탭에서 Ctrl+C 를 누르거나, Android 설정 > 앱 > Claw > 강제 종료를 사용하세요. 최근 앱 목록에서 앱을 밀어 닫아도 앱이 포그라운드 서비스를 유지하므로 게이트웨이는 멈추지 않습니다.
+Claw 앱에서는 설정 → 설치·갱신 화면을 열고 「게이트웨이 중지」를 누르세요. 앱은 자신의 터미널에서 시작한 게이트웨이만 멈출 수 있습니다. `nohup`, `tmux`, `setsid` 로 분리해 실행한 게이트웨이는 앱에서 멈출 수 없으므로 터미널에서 `kill <PID>` 로 멈추세요. 또는 게이트웨이가 실행 중인 터미널 탭에서 Ctrl+C 를 누를 수도 있습니다. 마지막 수단으로 Android 설정 > 앱 > Claw > 강제 종료를 사용하세요. 최근 앱 목록에서 앱을 밀어 닫아도 앱이 포그라운드 서비스를 유지하므로 게이트웨이는 멈추지 않습니다.
+
+같은 화면의 앱 「업데이트」 버튼도 앱이 시작한 게이트웨이가 있으면 먼저 멈춘 뒤 업데이트합니다. 앱이 업데이트를 위해 게이트웨이를 멈췄다면 업데이트가 끝난 뒤 대시보드에서 다시 시작하세요.
 
 게이트웨이를 멈추고(실행 중인 터미널에서 Ctrl+C) 업데이트를 다시 실행하세요:
 
@@ -305,7 +307,7 @@ oa --update && source ~/.bashrc
 
 게이트웨이가 어디에서 실행 중인지 찾을 수 없으면 [게이트웨이가 시작되지 않음](#게이트웨이가-시작되지-않음-gateway-already-running-또는-port-is-already-in-use) 섹션을 참고하세요.
 
-이 검사는 명령줄이 `openclaw.*gateway` 와 맞는 프로세스를 찾으므로 `tail -f …gateway.log` 같은 명령에도 걸릴 수 있습니다. 게이트웨이가 실행 중이 아닌 것이 확실하면 `OA_SKIP_GATEWAY_CHECK=1 oa --update` 로 실행하세요.
+이 검사는 명령줄이 `openclaw.*gateway` 와 맞는 프로세스를 찾으므로 `tail -f …gateway.log` 같은 명령에도 걸릴 수 있습니다. 게이트웨이가 실행 중이 아닌 것이 확실하면 `OA_SKIP_GATEWAY_CHECK=1 oa --update` 로 실행하세요. 앱은 자신의 업데이트에 환경 변수를 전달할 수 없으므로, Claw 앱에서는 설치·갱신 화면의 「터미널에서 실행」을 사용해 그 터미널에서 `OA_SKIP_GATEWAY_CHECK=1 oa --update` 를 실행하세요.
 
 ## `oa --update` 가 "Another update, setup or tools run is in progress" 로 멈춤
 
@@ -354,7 +356,7 @@ openclaw gateway
 
 `oa --update` 가 이전을 직접 실행했다가 실패한 경우, `openclaw doctor --fix` 의 전체 출력이 `~/.openclaw-android/doctor-fix.log` 에 저장됩니다.
 
-`oa --update` 가 다음 줄과 함께 끝나면 데이터 확인은 실패한 것이 아니라 건너뛴 것입니다. 게이트웨이가 OpenClaw 상태를 사용 중이어서 OpenClaw 자체의 확인이 그 상태를 볼 수 없었습니다. 업데이트 자체는 끝났습니다. 게이트웨이를 멈춘 뒤 `openclaw doctor` 를 실행하세요.
+`oa --update` 가 다음 줄과 함께 끝나면 데이터 확인은 실패한 것이 아니라 건너뛴 것입니다. 게이트웨이가 OpenClaw 상태를 사용 중이어서 OpenClaw 자체의 확인이 그 상태를 볼 수 없었습니다. 업데이트 자체는 끝났습니다. 게이트웨이를 멈춘 뒤 `openclaw doctor` 를 실행하세요. Claw 앱에서는 설정 → 설치·갱신 → 「게이트웨이 중지」로 앱 터미널에서 시작한 게이트웨이를 멈출 수 있습니다.
 
 ```
 [WARN] The gateway is using the OpenClaw state, so the data check was skipped. Stop the gateway, then run: openclaw doctor

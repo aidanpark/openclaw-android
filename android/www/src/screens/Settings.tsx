@@ -11,9 +11,8 @@ interface MenuItem {
 
 function getMenu(): MenuItem[] {
   return [
+    { icon: '🔄', label: t('status_title'), desc: t('status_menu_desc'), route: '/settings/status' },
     { icon: '🧰', label: t('settings_tools'), desc: t('settings_tools_desc'), route: '/settings/tools' },
-    { icon: '📱', label: t('settings_platforms'), desc: t('settings_platforms_desc'), route: '/settings/platforms' },
-    { icon: '🔄', label: t('settings_updates'), desc: t('settings_updates_desc'), route: '/settings/updates', badge: false },
     { icon: '⚡', label: t('settings_keep_alive'), desc: t('settings_keep_alive_desc'), route: '/settings/keep-alive' },
     { icon: '💾', label: t('settings_storage'), desc: t('settings_storage_desc'), route: '/settings/storage' },
     { icon: 'ℹ️', label: t('settings_about'), desc: t('settings_about_desc'), route: '/settings/about' },

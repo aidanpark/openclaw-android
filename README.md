@@ -63,6 +63,7 @@ A standalone Android app is also available. It bundles a terminal emulator and a
 - One-tap setup: bootstrap, Node.js, and OpenClaw installed from within the app
 - Built-in dashboard for gateway control, runtime info, and tool management
 - Tool installation: Settings → Additional Tools installs tmux, ttyd, dufs, Android Tools, Playwright, Claude Code, Gemini CLI, and Codex CLI through the setup script (`post-setup.sh --tools-only`); tmux, ttyd, dufs, and Android Tools are checked against the signed Termux package list. A tool whose install failed or whose `--version` check fails is shown as not working, with a Reinstall button. code-server, OpenCode, the SSH server, and Chromium cannot be installed from the app yet; code-server can be installed in the app's terminal with `oa --install`
+- Install & Update: Settings → Install & Update runs `oa --update` from the app and shows its progress and result. It can be cancelled only in the early steps (before step 3, replacing the core files). The screen also shows the OpenClaw and Node.js versions, the result of the last update run from the app, and the gateway status with a Stop gateway button (only for a gateway started in the app's terminal)
 - Works independently of Termux — installing the app does not affect an existing Termux + `oa` setup
 
 Download the APK from the [Releases](https://github.com/AidanPark/openclaw-android/releases) page.
@@ -226,7 +227,7 @@ Only one setup, update or tools run happens at a time (a new install, `oa --upda
 **When an update changes the pinned versions** (for example the move to Node.js 24.21.0 and OpenClaw 2026.9.8 in Script v1.2.0), `oa --update` adds these safeguards:
 
 - It needs 2000 MB of free space. If there is not enough, it stops before changing anything and shows the space needed and the space left.
-- If the OpenClaw gateway is running, it stops without changing anything. Stop the gateway (Ctrl+C) and run `oa --update` again.
+- If the OpenClaw gateway is running, it stops without changing anything. Stop the gateway (Ctrl+C) and run `oa --update` again. In the Claw app, you can stop a gateway started in the app's terminal with Settings → Install & Update → Stop gateway; the app's Update button also stops such a gateway first. If the app stopped the gateway for the update, start it again from the Dashboard afterwards.
 - It first creates a data backup in `~/.openclaw-android/backup/pre-update/` (only the latest 3 are kept).
 - After the install, it checks the OpenClaw configuration and data. If a data migration is needed and this run made the backup, it runs `openclaw doctor --fix` once automatically (up to 2 minutes). If that fails, it shows the backup location and the manual steps (stop the gateway, then run `openclaw doctor --fix`) and ends as a failure.
 

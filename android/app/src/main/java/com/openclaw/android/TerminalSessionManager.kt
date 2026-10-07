@@ -158,5 +158,16 @@ class TerminalSessionManager(
 
     fun isSessionFinished(handleId: String): Boolean = handleId in finishedSessionIds
 
+    /**
+     * Shell pids of the live sessions (an ended one reports -1 and is left out) — the roots below
+     * which a gateway counts as the app's own. Read from a worker thread: a copy of the list, never
+     * an iteration over it while the UI thread changes it.
+     */
+    fun sessionPids(): List<Int> =
+        sessions
+            .toTypedArray<TerminalSession?>()
+            .mapNotNull { it?.pid }
+            .filter { it > 0 }
+
     val sessionCount: Int get() = sessions.size
 }

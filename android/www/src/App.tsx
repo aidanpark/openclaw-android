@@ -9,15 +9,13 @@ import { Settings } from './screens/Settings'
 import { SettingsKeepAlive } from './screens/SettingsKeepAlive'
 import { SettingsStorage } from './screens/SettingsStorage'
 import { SettingsAbout } from './screens/SettingsAbout'
-import { SettingsUpdates } from './screens/SettingsUpdates'
-import { SettingsPlatforms } from './screens/SettingsPlatforms'
 import { SettingsTools } from './screens/SettingsTools'
+import { SettingsStatus } from './screens/SettingsStatus'
 
 type Tab = 'terminal' | 'dashboard' | 'settings'
 
 export function App() {
   const { path, navigate } = useRoute()
-  const [hasUpdates, setHasUpdates] = useState(false)
 
   // Check setup status on mount
   const [setupDone, setSetupDone] = useState<boolean | null>(null)
@@ -37,16 +35,7 @@ export function App() {
       // Bridge not available (dev mode) — assume setup done
       setSetupDone(true)
     }
-
-    // Check for updates
-    const updates = bridge.callJson<unknown[]>('checkForUpdates')
-    if (updates && updates.length > 0) setHasUpdates(true)
   }, [])
-
-  const onUpdateAvailable = useCallback(() => {
-    setHasUpdates(true)
-  }, [])
-  useNativeEvent('update_available', onUpdateAvailable)
 
   // An install is running (the page was recreated mid-install, or it started elsewhere): show it,
   // whichever tab this page happens to open on
@@ -100,7 +89,6 @@ export function App() {
           onClick={() => handleTabClick('settings')}
         >
           {t('tab_settings')}
-          {hasUpdates && <span className="badge" />}
         </button>
       </nav>
 
@@ -125,7 +113,6 @@ function SettingsRouter() {
   if (path === '/settings/tools') return <SettingsTools />
   if (path === '/settings/storage') return <SettingsStorage />
   if (path === '/settings/about') return <SettingsAbout />
-  if (path === '/settings/updates') return <SettingsUpdates />
-  if (path === '/settings/platforms') return <SettingsPlatforms />
+  if (path === '/settings/status') return <SettingsStatus />
   return <Settings />
 }

@@ -63,6 +63,7 @@ Android 也配拥有一个 Shell。
 - 一键安装：在应用内完成 bootstrap、Node.js 和 OpenClaw 的安装
 - 内置仪表盘：控制网关、查看运行状态、管理工具
 - 工具安装：在应用的“设置 → 附加工具”（Settings → Additional Tools）页面，通过安装脚本（`post-setup.sh --tools-only`）安装 tmux、ttyd、dufs、Android Tools、Playwright、Claude Code、Gemini CLI 和 Codex CLI；其中 tmux、ttyd、dufs 和 Android Tools 会对照已签名的 Termux 软件包列表进行验证。安装失败或 `--version` 检查失败的工具会显示为“无法运行”，并提供重新安装按钮。code-server、OpenCode、SSH 服务器和 Chromium 暂时无法在应用中安装；code-server 可在应用的终端中使用 `oa --install` 安装
+- 安装与更新：在“设置 → 安装与更新”（Settings → Install & Update）页面，应用会运行 `oa --update` 并显示进度和结果。只有在早期步骤（第 3 步替换核心文件之前）才能取消。该页面还会显示 OpenClaw 和 Node.js 的版本、上次在应用中更新的结果，以及网关状态和“停止网关”按钮（仅限在应用终端中启动的网关）
 - 独立于 Termux 运行 — 安装此应用不会影响已有的 Termux + `oa` 环境
 
 前往 [Releases](https://github.com/AidanPark/openclaw-android/releases) 页面下载 APK。
@@ -231,7 +232,7 @@ oa --update && source ~/.bashrc
 **更改锁定版本的更新**（例如 Script v1.2.0 中改为 Node.js 24.21.0 和 OpenClaw 2026.9.8），`oa --update` 会额外执行以下保护措施：
 
 - 需要 2000MB 可用空间。空间不足时，会在更改任何内容之前停止，并显示所需空间和剩余空间。
-- 如果 OpenClaw 网关正在运行，会在不做任何更改的情况下停止。请先停止网关（Ctrl+C），再重新运行 `oa --update`。
+- 如果 OpenClaw 网关正在运行，会在不做任何更改的情况下停止。请先停止网关（Ctrl+C），再重新运行 `oa --update`。在 Claw 应用中，可以通过“设置 → 安装与更新 → 停止网关”停止在应用终端中启动的网关；应用的“更新”按钮也会先停止这样的网关再继续。如果应用为更新而停止了网关，请在更新结束后从仪表盘重新启动它。
 - 先在 `~/.openclaw-android/backup/pre-update/` 创建数据备份（只保留最新的 3 个）。
 - 安装后检查 OpenClaw 的配置和数据状态。仅当需要数据迁移，且本次运行创建了备份时，才会自动运行一次 `openclaw doctor --fix`（最长 2 分钟）。如果失败，会显示备份位置和手动方法（停止网关后运行 `openclaw doctor --fix`），并以失败结束。
 

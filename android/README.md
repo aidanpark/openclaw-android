@@ -82,12 +82,13 @@ android/
 | Domain | Methods | Description |
 |--------|---------|-------------|
 | Terminal | 7 | show/hide, create/switch/close sessions |
-| Setup | 3 | bootstrap status, start setup |
-| Platform | 6 | install/uninstall/switch platforms |
-| Tools | 5 | install/uninstall CLI tools |
-| Commands | 2 | allow-listed command execution |
-| Updates | 2 | script and app update checks |
-| System | 6 | app info, battery, settings, storage |
+| Setup | 5 | bootstrap status, start setup, setup state, tool selections |
+| Platform | 2 | read-only: available and active platform |
+| Tools | 7 | install/uninstall/cancel CLI tools, installed state |
+| Managed runs / Gateway | 6 | `startRun`, `cancelRun`, `getRunState`, `getLastRun` (`oa --update` as a child process), `getGatewayStatus`, `stopGateway` |
+| Commands | 1 | allow-listed version probes (`runProbeAsync`) |
+| Updates | 1 | app (APK) update check (`getApkUpdateInfoAsync`) |
+| System | 8 | app info, battery, settings, storage |
 
 ## License
 

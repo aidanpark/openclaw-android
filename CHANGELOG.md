@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [App v0.4.4] - 2026-10-07
+
+### Added
+
+- **Settings → Install & Update**: update OpenClaw on Android from the app without typing commands. The screen shows the OpenClaw and Node.js versions, the result of the last update run from the app, and the gateway status. Update runs `oa --update` with step-by-step progress and explains why an update stopped (another run in progress, gateway running, not enough storage, data check or migration failed, and so on). You can cancel during the first two steps. After that, the update cannot be cancelled because it is replacing files.
+- The gateway can be stopped from this screen. This works only for a gateway started in the app's terminal; a gateway detached with `nohup`, `tmux` or `setsid` must be stopped with `kill <PID>` in that terminal. If the app stops the gateway for an update, the result card says so, and you start it again from the Dashboard.
+- When an update finishes with a warning that asks you to do something (for example, stopping the gateway and running `openclaw doctor`), the result card shows that warning.
+
+### Changed
+
+- The Dashboard's Update button opens Settings → Install & Update.
+- An update started from the app and a tool install from the app (Settings → Additional Tools) exclude each other, so they no longer run at the same time. With Script v1.2.2 or later, an `oa --update` started in the terminal and a tool install from the app also exclude each other.
+
+### Removed
+
+- The unused Platforms and Updates screens in Settings, and the update badge on the Settings tab.
+
 ## [Script v1.2.2] - 2026-10-06
 
 ### Added

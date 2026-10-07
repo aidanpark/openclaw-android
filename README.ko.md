@@ -63,6 +63,7 @@
 - 원탭 설치: 앱 안에서 부트스트랩, Node.js, OpenClaw 자동 설치
 - 내장 대시보드: 게이트웨이 제어, 런타임 정보, 도구 관리
 - 도구 설치: 설정 → 추가 도구(Settings → Additional Tools) 화면에서 tmux, ttyd, dufs, Android Tools, Playwright, Claude Code, Gemini CLI, Codex CLI를 설치 스크립트(`post-setup.sh --tools-only`)로 설치합니다. tmux, ttyd, dufs, Android Tools는 서명된 Termux 패키지 목록으로 검증합니다. 설치에 실패했거나 `--version` 확인이 실패한 도구는 「동작하지 않음」과 다시 설치 버튼으로 표시합니다. code-server, OpenCode, SSH 서버, Chromium은 아직 앱에서 설치할 수 없으며, code-server는 앱 터미널에서 `oa --install` 로 설치할 수 있습니다
+- 설치·갱신: 설정 → 설치·갱신(Settings → Install & Update) 화면에서 앱이 `oa --update` 를 실행하고 진행 상황과 결과를 표시합니다. 취소는 초기 단계(3단계, 핵심 파일 교체 이전)에서만 가능합니다. 이 화면에는 OpenClaw 와 Node.js 버전, 앱에서 마지막으로 실행한 업데이트의 결과, 게이트웨이 상태와 「게이트웨이 중지」 버튼도 표시됩니다(앱 터미널에서 시작한 게이트웨이만 해당)
 - Termux와 독립 실행 — 앱 설치가 기존 Termux + `oa` 환경에 영향을 주지 않음
 
 [Releases](https://github.com/AidanPark/openclaw-android/releases) 페이지에서 APK를 다운로드하세요.
@@ -226,7 +227,7 @@ oa --update && source ~/.bashrc
 **고정 버전이 바뀌는 업데이트**(예: Script v1.2.0 에서 Node.js 24.21.0 과 OpenClaw 2026.9.8 로 바뀌는 경우)에서 `oa --update` 는 다음 안전장치를 추가로 적용합니다:
 
 - 여유 공간 2000MB 가 필요합니다. 부족하면 아무것도 바꾸기 전에 멈추고 필요한 양과 남은 양을 알려 줍니다.
-- OpenClaw 게이트웨이가 실행 중이면 아무것도 바꾸지 않고 멈춥니다. 게이트웨이를 멈추고(Ctrl+C) `oa --update` 를 다시 실행하세요.
+- OpenClaw 게이트웨이가 실행 중이면 아무것도 바꾸지 않고 멈춥니다. 게이트웨이를 멈추고(Ctrl+C) `oa --update` 를 다시 실행하세요. Claw 앱에서는 설정 → 설치·갱신 → 「게이트웨이 중지」로 앱 터미널에서 시작한 게이트웨이를 멈출 수 있으며, 앱의 「업데이트」 버튼도 그런 게이트웨이를 먼저 멈춘 뒤 진행합니다. 앱이 업데이트를 위해 게이트웨이를 멈췄다면 업데이트가 끝난 뒤 대시보드에서 다시 시작하세요.
 - 먼저 `~/.openclaw-android/backup/pre-update/` 에 데이터 백업을 만듭니다(최신 3개만 보관).
 - 설치 뒤 OpenClaw 설정과 데이터 상태를 확인합니다. 데이터 이전이 필요하고 이번 실행에서 백업을 만들었을 때만 `openclaw doctor --fix` 를 한 번 자동으로 실행합니다(최대 2분). 실패하면 백업 위치와 수동 방법(게이트웨이를 멈추고 `openclaw doctor --fix` 실행)을 안내하고 실패로 끝납니다.
 

@@ -107,8 +107,8 @@ internal class ToolsFailureDetailContractTest {
         assertEquals(3, Regex("""\bfailureText\(""").findAll(tools).count(), "declared once, called twice")
         assertTrue(
             tools.contains(
-                "setNotice(d.phase === 'done' ? '' : d.phase === 'cancelled' ? t('tool_cancelled') : " +
-                    "failureText(d.reason, d.message))",
+                "setNotice(d.phase === 'done' ? doneNotice(d.reason) : " +
+                    "d.phase === 'cancelled' ? t('tool_cancelled') : failureText(d.reason, d.message))",
             ),
             "the end event notice does not use failureText",
         )

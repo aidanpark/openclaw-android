@@ -82,7 +82,7 @@ internal class ManagedRunnerPrecheckTest {
     @Test
     fun `an unknown kind runs nothing and is refused UNKNOWN without a kind`() {
         w.fakeOa(w.successBody)
-        for (kind in listOf("SETUP", "", "update", "UPDATE\n", "\$(touch pwned)", "`touch pwned`")) {
+        for (kind in listOf("INSTALL", "", "update", "UPDATE\n", "\$(touch pwned)", "`touch pwned`")) {
             w.events.clear()
             assertTrue(RunLease.tryAcquire(kind.ifEmpty { "x" }))
             kotlinx.coroutines.runBlocking { w.runner().run(kind, stopGateway = true) }

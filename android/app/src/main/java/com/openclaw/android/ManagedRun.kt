@@ -13,14 +13,29 @@ internal data class RunSpec(
     val stageTotal: Int,
     val lastCancelableStage: Int,
     val stagePattern: Regex,
+    /** A script in the home directory, appended to [command] as an absolute path; null for none. */
+    val homeScript: String? = null,
+    /** Set in the run's environment besides the run token ([ToolSignal.ENV_NAME]). */
+    val env: Map<String, String> = emptyMap(),
+    /** The script's result file, relative to the home directory. */
+    val resultFile: String = ManagedRunner.RESULT_FILE,
+    /** A running gateway must be stopped (or refuses the run) before the script starts. */
+    val gatewayCheck: Boolean = true,
+    /** Line starts that open a failure block ([FailLineCollector]). */
+    val failMarkers: List<String> = listOf(FailLineCollector.MARKER),
 ) {
     /** True while the run has not reached a stage after [lastCancelableStage]. */
     fun cancelableAt(stage: Int): Boolean = stage <= lastCancelableStage
+
+    /** The arguments of the process: [command], then [homeScript] under [homeDir] when there is one. */
+    fun argv(homeDir: java.io.File): List<String> =
+        command + listOfNotNull(homeScript?.let { java.io.File(homeDir, it).absolutePath })
 }
 
 /** The managed runs the app knows. The page may start only these ([BridgeGuard.runKinds]). */
 internal object RunKinds {
     const val UPDATE = "UPDATE"
+    const val SETUP = "SETUP"
 
     /**
      * `oa --update`: `update-core.sh` prints `[N/5] <title>` per stage. Only `[1/5] Pre-flight Check`
@@ -34,9 +49,33 @@ internal object RunKinds {
             stageTotal = 5,
             lastCancelableStage = 2,
             stagePattern = UpdateStageParser.pattern,
+            env = mapOf(ManagedRunner.ASSUME_YES to "1"),
         )
 
-    private val specs = mapOf(UPDATE to update)
+    /**
+     * The first install's second half: `bash ~/.openclaw-android/post-setup.sh` (full mode, no
+     * arguments) prints `▸ [N/7] <title>` per stage ([ManagedSetup.stagePattern]). Every stage may be
+     * cancelled: a later run continues where this one stopped (each stage skips what is already
+     * there), the script's TERM trap writes `error=interrupted`, and it holds signals off while it
+     * writes the marker and the final result. `OA_NO_ONBOARD=1` ends the script with exit 0 after the
+     * install instead of starting the interactive `openclaw onboard`. A first install has no gateway.
+     * The script also prints `✗ …` (not only `[FAIL] …`) for the failure that stops it.
+     */
+    private val setup =
+        RunSpec(
+            kind = SETUP,
+            command = listOf("bash"),
+            stageTotal = ManagedSetup.STAGE_TOTAL,
+            lastCancelableStage = ManagedSetup.STAGE_TOTAL,
+            stagePattern = ManagedSetup.stagePattern,
+            homeScript = ManagedSetup.SCRIPT,
+            env = mapOf(ManagedSetup.NO_ONBOARD to "1"),
+            resultFile = ManagedSetup.RESULT,
+            gatewayCheck = false,
+            failMarkers = listOf(FailLineCollector.MARKER, ManagedSetup.CROSS_MARKER),
+        )
+
+    private val specs = mapOf(UPDATE to update, SETUP to setup)
 
     fun spec(kind: String?): RunSpec? = kind?.let { specs[it] }
 }
@@ -62,12 +101,36 @@ internal enum class UpdateReason {
     CANCELLED,
     NOT_INSTALLED,
     UNKNOWN,
+
+    /** SETUP only ([SetupReasons]): a download failed. */
+    NETWORK,
+
+    /** SETUP only: a package list, package or Node.js archive failed its signature or checksum check. */
+    VERIFY_FAILED,
+
+    /** SETUP only: the app's own folders could not be written (`error=env`). */
+    ENV,
+
+    /**
+     * SETUP only: OpenClaw was installed, installed once more, and is still incomplete — files are
+     * missing or it does not start (`error=openclaw-incomplete`, post-setup.sh v1.2.3).
+     */
+    OPENCLAW_INCOMPLETE,
+    ;
+
+    companion object {
+        /** Reasons only a SETUP run gives; the Install & Update screen (UPDATE) never sees them. */
+        val SETUP_ONLY: Set<UpdateReason> = setOf(NETWORK, VERIFY_FAILED, ENV, OPENCLAW_INCOMPLETE)
+    }
 }
 
 /** How one managed run ended. [exit] is the process's exit code (null when it never ran). */
 internal sealed interface RunVerdict {
     val exit: Int?
     val warnings: Int
+
+    /** What a SETUP run's result file said besides its verdict; null for every other kind. */
+    val setup: SetupFacts?
 
     /**
      * The script's own words for the page, as printed (English, never translated): for a failure the
@@ -80,6 +143,7 @@ internal sealed interface RunVerdict {
         override val exit: Int,
         override val warnings: Int,
         override val detail: String = "",
+        override val setup: SetupFacts? = null,
     ) : RunVerdict
 
     data class Failure(
@@ -87,18 +151,19 @@ internal sealed interface RunVerdict {
         override val exit: Int?,
         override val detail: String,
         override val warnings: Int,
+        override val setup: SetupFacts? = null,
     ) : RunVerdict
 }
 
 /**
- * Process-wide: where the managed run (`oa --update`) is, for the page that started it and for a
- * page created later (the Activity was recreated). Same rules as [ToolInstallGuard]: an `object`
- * so no instance member can shadow it, immutable snapshots, state changes under the monitor, and
- * /proc reads and signals OUTSIDE it.
+ * Process-wide: where the managed run (`oa --update`, or the first install's `post-setup.sh`) is,
+ * for the page that started it and for a page created later (the Activity was recreated). Same
+ * rules as [ToolInstallGuard]: an `object` so no instance member can shadow it, immutable
+ * snapshots, state changes under the monitor, and /proc reads and signals OUTSIDE it.
  *
  * Phases: idle → running → (cancelling →) done | failed | cancelled. A cancel is accepted only
- * while the run is [State.cancelable] (an update before `[3/5]`); once a run has left that range it
- * never becomes cancelable again, and a cancel that could not be delivered by then is withdrawn
+ * while the run is [State.cancelable] (an update before `[3/5]`, a setup always); once a run has
+ * left that range it never becomes cancelable again, and a cancel that could not be delivered by then is withdrawn
  * (the phase goes back to running) instead of reading as "cancel requested" until the end.
  */
 internal object ManagedRunGuard {
@@ -130,6 +195,8 @@ internal object ManagedRunGuard {
          * ([ManagedRunner.emitRefused]), since a refusal never reaches the guard.
          */
         val gatewayStopped: Boolean = false,
+        /** A SETUP run's end ([RunVerdict.setup]): `need_mb`/`have_mb` and the `warn=` list. Null otherwise. */
+        val setup: SetupFacts? = null,
     ) {
         val busy: Boolean get() = phase == RUNNING || phase == CANCELLING
         val cancelRequested: Boolean get() = phase == CANCELLING
@@ -314,7 +381,7 @@ internal object ManagedRunGuard {
         val now = state
         if (now.busy) {
             val ended =
-                now.copy(cancelable = false, exit = verdict.exit, warnings = verdict.warnings)
+                now.copy(cancelable = false, exit = verdict.exit, warnings = verdict.warnings, setup = verdict.setup)
             state =
                 when (verdict) {
                     is RunVerdict.Success -> ended.copy(phase = DONE, reason = null, detail = verdict.detail)

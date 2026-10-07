@@ -81,6 +81,11 @@ class MainActivity : AppCompatActivity() {
         val isInstalled = bootstrapManager.isInstalled() && !SetupGuard.isRunning()
         AppLogger.i(TAG, "Bootstrap installed: $isInstalled, needsPostSetup: ${bootstrapManager.needsPostSetup()}")
 
+        // A bootstrap killed mid-extraction leaves usr-staging behind, and nothing else removes it
+        // when the next step is only the managed SETUP. Off the UI thread; never throws; skipped
+        // while an install runs in this process (an Activity recreated mid-install).
+        Thread { bootstrapManager.cleanStaleStaging(SetupGuard::isRunning) }.start()
+
         // Sync www assets and check for APK version upgrade
         var scriptUpdate = false
         if (isInstalled) {
@@ -103,12 +108,16 @@ class MainActivity : AppCompatActivity() {
      * Open the terminal for an installed bootstrap. Script downloads run off the main thread
      * (NetworkOnMainThreadException otherwise). An unfinished setup waits for the download
      * before running the script, bounded by the download timeouts; a finished one just
-     * updates in the background.
+     * updates in the background. An unfinished setup whose script the app can run itself
+     * (managed SETUP, [ManagedSetup.shouldRunInTerminal]) is left to the page: nothing is typed
+     * and the page stays in front.
      */
     private fun startInstalledTerminal(scriptUpdate: Boolean) {
-        showTerminal()
-        val session = sessionManager.createSession()
         val needsPostSetup = bootstrapManager.needsPostSetup()
+        // Decided again once the script is refreshed (below); the copy in place picks the first screen
+        val terminalFirst = !needsPostSetup || !bootstrapManager.setupScriptCapable()
+        if (terminalFirst) showTerminal()
+        val session = sessionManager.createSession()
         // Background threads must not throw: an uncaught exception would take the whole app down
         val updateScripts = {
             try {
@@ -126,13 +135,8 @@ class MainActivity : AppCompatActivity() {
                     runCatching { bootstrapManager.refreshPostSetupScript() }
                         .onFailure { AppLogger.w(TAG, "post-setup refresh failed", it) }
                 }
-                runOnUiThread {
-                    if (!isFinishing) {
-                        AppLogger.i(TAG, "Running post-setup script in terminal")
-                        val script = bootstrapManager.postSetupScript.absolutePath
-                        binding.terminalView.post { session.write("bash $script\n") }
-                    }
-                }
+                val capable = bootstrapManager.setupScriptCapable()
+                runOnUiThread { if (!isFinishing) continueUnfinishedSetup(session, capable, terminalFirst) }
             }.start()
             return
         }
@@ -143,7 +147,45 @@ class MainActivity : AppCompatActivity() {
             val saved = if (platformFile.exists()) platformFile.readText() else null
             val platformId = BridgeGuard.sanitizePlatformId(saved)
             AppLogger.i(TAG, "Boot launch \u2014 auto-starting $platformId gateway")
-            binding.terminalView.post { session.write("$platformId gateway\n") }
+            // Written once the shell has started (the view lays the session out later than onCreate)
+            sessionManager.writeWhenReady(session, "$platformId gateway\n")
+        }
+    }
+
+    /**
+     * After the script refresh of an unfinished setup (UI thread): type `bash <script>` only when the
+     * terminal runs the setup ([ManagedSetup.shouldRunInTerminal] — never while a managed run goes
+     * on: two runs of the script would fight over its lock). [capable]: the refreshed script can run
+     * as a managed run; [terminalShown]: the terminal was opened before the refresh.
+     */
+    private fun continueUnfinishedSetup(
+        session: TerminalSession,
+        capable: Boolean,
+        terminalShown: Boolean,
+    ) {
+        val markerPresent = bootstrapManager.setupMarkerPresent()
+        val typeIt =
+            ManagedSetup.shouldRunInTerminal(
+                scriptCapable = capable,
+                markerPresent = markerPresent,
+                managedRunActive = ManagedSetup.managedRunActive(),
+            )
+        if (typeIt) {
+            AppLogger.i(TAG, "Running post-setup script in terminal")
+            if (!terminalShown) showTerminal()
+            val script = bootstrapManager.postSetupScript.absolutePath
+            // Written once the shell has started, and asked again then: the marker may have appeared
+            // or a managed run started while the text waited
+            sessionManager.writeWhenReady(session, "bash $script\n") {
+                ManagedSetup.shouldRunInTerminal(
+                    scriptCapable = capable,
+                    markerPresent = bootstrapManager.setupMarkerPresent(),
+                    managedRunActive = ManagedSetup.managedRunActive(),
+                )
+            }
+        } else if (terminalShown && capable && !markerPresent) {
+            // The refreshed script can run as a managed run: the page carries on
+            showWebView()
         }
     }
 
@@ -591,10 +633,12 @@ class MainActivity : AppCompatActivity() {
 
         override fun onTerminalCursorStateChange(state: Boolean) = Unit
 
+        // The shell runs from here on: what the app typed before it started is written now
+        // (TerminalSessionManager.writeWhenReady)
         override fun setTerminalShellPid(
             session: TerminalSession,
             pid: Int,
-        ) = Unit
+        ) = sessionManager.onShellStarted(session, pid)
 
         override fun getTerminalCursorStyle(): Int = 0
 

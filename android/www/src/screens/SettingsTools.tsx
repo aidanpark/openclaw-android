@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { useRoute } from '../lib/router'
 import { bridge } from '../lib/bridge'
 import { useNativeEvent } from '../lib/useNativeEvent'
+import { useVisibleAgain } from '../lib/useVisibleAgain'
 import { t } from '../i18n'
 
 interface Tool {
@@ -90,6 +91,14 @@ function failureText(reason?: string | null, message?: string): string {
   return reason && DETAIL_REASONS.includes(reason) && detail ? `${base}\n${t('tool_last_output')}: ${detail}` : base
 }
 
+// reason of a done run that a cancel was asked for (ToolInstallGuard.CANCEL_TOO_LATE): the install had
+// already finished when the cancel could act, so the tool is installed and the page must not say "cancelled"
+const CANCEL_TOO_LATE = 'CANCEL_TOO_LATE'
+
+function doneNotice(reason?: string | null): string {
+  return reason === CANCEL_TOO_LATE ? t('tools_cancel_too_late') : ''
+}
+
 interface InstalledInfo {
   installed: Set<string>
   // Files are there, but the tool's last install ended "does not work" (native remembers it across
@@ -113,8 +122,13 @@ function lastEndNotice(): string {
   const name = getTools().find(x => x.id === last.target)?.name ?? last.target
   if (last.phase === 'failed') return `${name}: ${failureText(last.reason, last.message)}`
   if (last.phase === 'cancelled') return `${name}: ${t('tool_cancelled')}`
+  if (last.phase === 'done' && doneNotice(last.reason)) return `${name}: ${doneNotice(last.reason)}`
   return ''
 }
+
+// How long a check started on returning to the page may still be answering (native runs the
+// `--version` checks side by side, each stopped after 10 s); no new one is asked before that
+const CHECK_ANSWER_MS = 15_000
 
 let checkCounter = 0
 // Ask native to run each installed tool's check; the answers carry this id back
@@ -142,6 +156,8 @@ export function SettingsTools() {
   // installed some other way, or break later): a tool that does not run must not read as "installed"
   const [checked, setChecked] = useState<Record<string, string>>({})
   const checkRef = useRef('')
+  // When the last check on returning to the page was asked (-Infinity: none yet)
+  const checkAskedAt = useRef(-Infinity)
   const { installed } = info
   const broken = new Set([...info.broken, ...Object.keys(checked).filter(id => checked[id] === 'failed')])
   // A page created while an install runs (the Activity was recreated) asks native where it is
@@ -182,7 +198,7 @@ export function SettingsTools() {
       // An earlier check of this tool is stale now; check everything again
       setChecked({})
       checkRef.current = startCheck()
-      setNotice(d.phase === 'done' ? '' : d.phase === 'cancelled' ? t('tool_cancelled') : failureText(d.reason, d.message))
+      setNotice(d.phase === 'done' ? doneNotice(d.reason) : d.phase === 'cancelled' ? t('tool_cancelled') : failureText(d.reason, d.message))
     }
   }, [])
   useNativeEvent('tool_progress', onToolEvent)
@@ -205,8 +221,22 @@ export function SettingsTools() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setRunning(busy && now ? toRunning(now) : null)
     setInfo(readInstalled())
+    // A focus event right after the page opened must not replace this check
+    checkAskedAt.current = Date.now()
     checkRef.current = startCheck()
   }, [])
+
+  // Back on the page (from the terminal, another app): a tool may have been installed or removed
+  // there. Never while an install goes on (it owns the list; native skips the check then), and not
+  // again while the last such check may still be answering — a newer request would make its answers
+  // count for nothing.
+  useVisibleAgain(() => {
+    if (running) return
+    setInfo(readInstalled())
+    if (Date.now() - checkAskedAt.current < CHECK_ANSWER_MS) return
+    checkAskedAt.current = Date.now()
+    checkRef.current = startCheck()
+  })
 
   const nameOf = (id: string) => tools.find(x => x.id === id)?.name ?? id
   const categories = [...new Set(tools.map(x => x.category()))]

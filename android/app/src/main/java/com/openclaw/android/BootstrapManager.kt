@@ -35,6 +35,14 @@ class BootstrapManager(
         private const val STALE_TEMP_AGE_MS = 10L * 60 * 1000
         private const val PREFS_NAME = "openclaw"
         private const val PREF_VERSION_CODE = "versionCode"
+
+        /**
+         * Process-wide (BootstrapManager is created per Activity): [cleanStaleStaging] holds it across
+         * its "is an install running?" check and the delete; [startSetup] takes it before it first
+         * touches the staging dir. An install started during a cleanup therefore cannot begin
+         * extracting until the cleanup is done, and a cleanup that comes later sees the install.
+         */
+        private val STAGING_LOCK = Any()
     }
 
     val prefixDir = File(context.filesDir, "usr")
@@ -52,6 +60,16 @@ class BootstrapManager(
 
     val postSetupScript: File
         get() = File(homeDir, ".openclaw-android/post-setup.sh")
+
+    /** `post-setup.sh` writes this marker last, when the first install is complete. */
+    fun setupMarkerPresent(): Boolean = File(homeDir, ManagedSetup.MARKER).exists()
+
+    /**
+     * The setup script can run as the app's managed SETUP ([ManagedSetup.capable]): the copy in the
+     * home directory, or the bundled one while there is none yet. Reads files only (no network).
+     */
+    fun setupScriptCapable(): Boolean =
+        ManagedSetup.capableScript(postSetupScript) { context.assets.open("post-setup.sh") }
 
     data class SetupStatus(
         val bootstrapInstalled: Boolean,
@@ -78,10 +96,14 @@ class BootstrapManager(
             onProgress(PROGRESS_PREPARING, "Preparing bootstrap...")
             val bootstrapArchive = getBootstrapArchive(onProgress)
 
-            // Clean up any incomplete previous attempt
-            if (stagingDir.exists()) {
-                AppLogger.i(TAG, "Removing incomplete staging dir from previous attempt")
-                stagingDir.deleteRecursively()
+            // Clean up any incomplete previous attempt. Under STAGING_LOCK: a startup cleanup
+            // (cleanStaleStaging) that is mid-delete finishes before this install extracts.
+            synchronized(STAGING_LOCK) {
+                if (stagingDir.exists()) {
+                    AppLogger.i(TAG, "Removing incomplete staging dir from previous attempt")
+                    // Never follows a link: SYMLINKS.txt links in a half-extracted staging dir point into usr
+                    SafeTree.deleteNoFollow(stagingDir)
+                }
             }
             // Step 2: Extract bootstrap
             onProgress(PROGRESS_EXTRACTING, "Extracting bootstrap...")
@@ -94,9 +116,13 @@ class BootstrapManager(
 
             // Step 4: Swap in the new prefix. The old one is only removed now that the new one has
             // been downloaded, verified, extracted and configured — a failure above leaves it intact.
-            if (isInstalled()) {
-                AppLogger.i(TAG, "Incomplete bootstrap detected, reinstalling...")
-                prefixDir.deleteRecursively()
+            // Any prefix is removed, not only a complete one: an attempt that died after the delete
+            // began (no usr/bin/sh any more, so not "installed") leaves a partial usr behind, and the
+            // rename below can never succeed over it.
+            if (prefixDir.exists()) {
+                AppLogger.i(TAG, "Removing the old or incomplete bootstrap before the swap")
+                // Never follows a link: one from usr into home must not take the home files with it
+                if (!SafeTree.deleteNoFollow(prefixDir)) AppLogger.w(TAG, "The old bootstrap was not fully removed")
             }
             if (!stagingDir.renameTo(prefixDir)) {
                 throw java.io.IOException("Could not move the new bootstrap into place")
@@ -109,6 +135,43 @@ class BootstrapManager(
             saveCurrentVersionCode()
 
             onProgress(1f, "Setup complete")
+        }
+
+    /**
+     * Remove a `usr-staging` left by a bootstrap that was interrupted (app killed while extracting)
+     * when the next step is only the managed SETUP run, so no new bootstrap clears it ([startSetup]
+     * still does when one runs). Call it off the UI thread. Best-effort: never throws.
+     *
+     * Leaves the directory alone while [isBootstrapRunning] reports an install working in this
+     * process — an Activity recreated mid-install must not delete the live staging dir. The check
+     * and the delete run under [STAGING_LOCK], which [startSetup] also takes. Symlinks inside are
+     * removed, never followed, so nothing outside the staging dir (`usr`, home) is touched.
+     *
+     * @return true if a stale staging dir was removed; false if there was none, an install is
+     *   running, or it could not be removed completely.
+     */
+    fun cleanStaleStaging(isBootstrapRunning: () -> Boolean): Boolean =
+        synchronized(STAGING_LOCK) {
+            try {
+                when {
+                    !stagingDir.exists() -> false
+                    isBootstrapRunning() -> {
+                        AppLogger.i(TAG, "Staging dir kept: an install is running")
+                        false
+                    }
+                    SafeTree.deleteNoFollow(stagingDir) -> {
+                        AppLogger.i(TAG, "Removed a stale staging dir from an interrupted install")
+                        true
+                    }
+                    else -> {
+                        AppLogger.w(TAG, "A stale staging dir could not be removed completely")
+                        false
+                    }
+                }
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "Stale staging cleanup failed", e)
+                false
+            }
         }
 
     // --- Bootstrap source ---
@@ -148,7 +211,7 @@ class BootstrapManager(
     // --- Extraction ---
 
     private fun extractBootstrap(inputStream: InputStream) {
-        stagingDir.deleteRecursively()
+        SafeTree.deleteNoFollow(stagingDir)
         stagingDir.mkdirs()
 
         ZipInputStream(inputStream).use { zip ->

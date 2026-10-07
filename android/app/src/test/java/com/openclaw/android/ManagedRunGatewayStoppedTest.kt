@@ -437,7 +437,7 @@ internal class ManagedRunGatewayStoppedTest {
         assertRefusedWithoutFlag(UpdateReason.NOT_INSTALLED)
         w.events.clear()
         assertTrue(RunLease.tryAcquire("x"))
-        runBlocking { w.runner().run("SETUP", stopGateway = true) }
+        runBlocking { w.runner().run("INSTALL", stopGateway = true) }
         RunLease.release("x")
         assertEquals(listOf(false), flags())
         assertEquals("UNKNOWN", w.runEvents().single().data["reason"])

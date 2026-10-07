@@ -168,6 +168,24 @@ internal class StatusScreenBehaviorTest {
     // ── the last-update line ────────────────────────────────────────────────
 
     @Test
+    fun `shown again, the page reads the gateway and the last update again`() {
+        val before = keys("visibleAgain", "before")
+        assertTrue("status_gw_not_running" in before && "status_last_none" in before, before.toString())
+        val after = keys("visibleAgain", "after")
+        assertTrue("status_gw_running" in after && "status_last_success" in after, after.toString())
+    }
+
+    @Test
+    fun `shown again during a run, the run stays and only the gateway is read again`() {
+        val k = keys("visibleAgain", "busy")
+        assertTrue("status_updating" in k && "status_gw_running" in k, k.toString())
+        assertFalse("status_reason_migration_failed" in k || "status_last_failure" in k, k.toString())
+        @Suppress("UNCHECKED_CAST")
+        val calls = result("visibleAgain")["busyCalls"] as List<Any?>
+        assertTrue(calls.isEmpty(), calls.toString())
+    }
+
+    @Test
     fun `while a run goes on the last-update line says updating and hides the start record's reason`() {
         val k = keys("lastUpdateLine", "busy")
         assertTrue("status_updating" in k, k.toString())
@@ -667,6 +685,9 @@ internal class StatusScreenBehaviorTest {
                 "stub-native-event.mjs" to
                     "export function useNativeEvent(type, handler) { globalThis.__fr.listeners[type] = handler }\n",
                 "stub-probes.mjs" to "export function useRuntimeProbes() { return {} }\n",
+                // The newest callback of the page, called by emit('visible-again') (the page shown again)
+                "stub-visible-again.mjs" to
+                    "export function useVisibleAgain(fn) { globalThis.__fr.listeners['visible-again'] = fn }\n",
                 // `{key}` always (the tests read which text was chosen); with `globalThis.__lang` set, the
                 // real translation of that locale follows it (the tests read what the user would see)
                 "stub-i18n.mjs" to
@@ -708,6 +729,7 @@ internal class StatusScreenBehaviorTest {
             |  '../lib/router': stub('stub-router.mjs'),
             |  '../lib/useNativeEvent': stub('stub-native-event.mjs'),
             |  '../lib/useRuntimeProbes': stub('stub-probes.mjs'),
+            |  '../lib/useVisibleAgain': stub('stub-visible-again.mjs'),
             |  '../components/ConfirmCard': stub('stub-confirm-card.mjs'),
             |  '../i18n': stub('stub-i18n.mjs'),
             |  'real-i18n-en': path.join(wwwSrc, 'i18n/en.ts'),
@@ -906,6 +928,21 @@ internal class StatusScreenBehaviorTest {
             |    p.press('status_update_btn')
             |    p.press('status_confirm_start')
             |    return { stopDisabledBefore, stopDisabledWhilePreparing: p.disabled('status_gw_stop') }
+            |  },
+            |  visibleAgain() {
+            |    const failed = { UPDATE: { at: 1700000000, verdict: 'failure', reason: 'MIGRATION_FAILED', exit: 1, warnings: 0 } }
+            |    const p = mount({})
+            |    const before = p.keys()
+            |    // The gateway was started and an update ran in the terminal while the page was away
+            |    p.native.gateway = { running: true, ours: true, pids: [7] }
+            |    p.native.lastRun = { UPDATE: { at: 1700000000, verdict: 'success', warnings: 0 } }
+            |    p.emit('visible-again')
+            |    const after = p.keys()
+            |    const q = mount({ runState: busy(3) })
+            |    q.native.gateway = { running: true, ours: true, pids: [7] }
+            |    q.native.lastRun = failed
+            |    q.emit('visible-again')
+            |    return { before, after, busy: q.keys(), busyCalls: q.native.calls }
             |  },
             |  lastUpdateLine() {
             |    const interrupted = { UPDATE: { at: 1700000000, verdict: 'failure', reason: 'INTERRUPTED', warnings: 0 } }

@@ -41,16 +41,22 @@ internal object UpdateStageParser {
  * One exception: the Node.js gate (`Node.js v… is required (found: …)`) always follows a failed
  * Node.js step as its consequence — the step's own `[FAIL]` (download, checksum, cached updater)
  * is the cause, so a gate block does not replace a block already kept.
+ *
+ * [markers] are the line starts that open a block: `[FAIL]` by default; `post-setup.sh` also says
+ * `✗ …` for the failure that stops a first install ([RunSpec.failMarkers]).
  */
-internal class FailLineCollector {
+internal class FailLineCollector(
+    private val markers: List<String> = listOf(MARKER),
+) {
     private val lines = mutableListOf<String>()
     private var collecting = false
 
     fun accept(raw: String) {
         val line = RunText.clean(raw)
         val text = line.trim()
-        if (text.startsWith(MARKER)) {
-            val sentence = text.removePrefix(MARKER).trim()
+        val marker = markers.firstOrNull { text.startsWith(it) }
+        if (marker != null) {
+            val sentence = text.removePrefix(marker).trim()
             if (lines.isNotEmpty() && GATE_PHRASE in sentence) {
                 collecting = false
                 return
@@ -89,7 +95,7 @@ internal class FailLineCollector {
 internal class RunOutputWatcher(
     private val spec: RunSpec,
 ) {
-    private val fails = FailLineCollector()
+    private val fails = FailLineCollector(spec.failMarkers)
     private var lastWarning = ""
     private var lastAdvice = ""
 

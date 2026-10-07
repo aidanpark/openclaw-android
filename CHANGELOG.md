@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [App v0.4.5] - 2026-10-07
+
+### Added
+
+- **The first install runs in the app.** After the base system is installed, the app runs the rest of the setup itself and shows its progress in seven steps; no command is typed into the terminal. You can cancel during any of the seven steps. When the setup is done, a button types `openclaw onboard` into the terminal for you (press Enter to start onboarding). Script v1.2.2 or later is needed; with an older setup script the app uses the terminal as before.
+- **Continue the installation.** When an earlier setup did not finish (cancelled, the app was closed, or Android stopped it), the app opens a screen that shows why and continues from where it stopped, instead of starting over. If the setup fails, the screen explains the cause (storage, network, a component that could not be installed, another run in progress, and so on).
+- **Reinstall the base system** from the continue and failure screens, after a confirmation that says what is replaced and what is kept. This repairs a broken base system without clearing the app's data; the home folder is not deleted.
+
+### Changed
+
+- When the update stopped the gateway, the message now also says to press Enter in the terminal after tapping Gateway on the Dashboard.
+- Cancelling a tool install that had already finished now says that it was not cancelled, and the Install & Update and Additional Tools screens refresh their status when you return to them.
+- When the setup finishes with a warning that the hard-link patch did not apply completely, the completion screen shows a warning that OpenClaw may be incomplete.
+
+### Fixed
+
+- Text typed into a new terminal session before its shell had started (the setup command, a Dashboard command, or the gateway command at boot) could be lost; it is now sent when the shell is ready.
+- Closing a terminal session before its shell had started could stop the app and its other processes.
+- An interrupted base system replacement could leave the app unable to install until its data was cleared.
+- Deleting folders during a base system reinstall followed symbolic links and could delete files outside the base system, such as files in the home folder.
+
 ## [Script v1.2.3] - 2026-10-07
 
 ### Fixed

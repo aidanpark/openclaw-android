@@ -73,7 +73,7 @@ internal class JsBridgeManagedRunTest : JsBridgeToolInstallFixture() {
             listOf(
                 "",
                 "update",
-                "SETUP",
+                "INSTALL",
                 "TOOLS",
                 "UPDATE ",
                 "UPDATE\n",

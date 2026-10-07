@@ -15,6 +15,8 @@ interface OpenClawBridge {
   getBootstrapStatus(): string
   startSetup(): void
   getSetupState(): string
+  // The last full setup's result file and whether the app can run the setup itself (`managed`)
+  getSetupResult(): string
   saveToolSelections(json: string): void
   getAvailablePlatforms(): string
   getActivePlatform(): string
@@ -23,7 +25,8 @@ interface OpenClawBridge {
   cancelToolInstall(): void
   getToolInstallState(): string
   checkInstalledToolsAsync(callbackId: string): void
-  // Managed runs (`oa --update` as a child process); progress arrives as `run_progress`
+  // Managed runs (`oa --update`, the first install's `post-setup.sh` as a child process); progress
+  // arrives as `run_progress`
   startRun(kind: string, stopGateway: boolean): void
   cancelRun(): void
   getRunState(): string

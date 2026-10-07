@@ -162,7 +162,7 @@ internal class JsBridgeGatewayStoppedTest : JsBridgeToolInstallFixture() {
     @Test
     fun `an unknown kind refused by the bridge carries false`() {
         val (bridge, web) = page()
-        bridge.startRun("SETUP", true)
+        bridge.startRun("INSTALL", true)
         val events = web.events("run_progress")
         assertEquals(1, events.size, web.scripts.toString())
         assertEquals(false, events.single().data["gatewayStopped"])

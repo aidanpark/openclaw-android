@@ -61,6 +61,7 @@ Android 也配拥有一个 Shell。
 还提供了独立的 Android 应用。它将终端模拟器和基于 WebView 的界面打包成一个 APK，无需 Termux。
 
 - 一键安装：在应用内完成 bootstrap、Node.js 和 OpenClaw 的安装
+- 首次安装在应用内完成（v0.4.5 及以上）：应用自行运行首次安装，以 7 个步骤显示进度，任何一步都可以取消。未完成的安装（已取消、应用被关闭或被 Android 中止）会在“继续完成安装”界面从中断处继续。“重新安装基础环境”可在不清除应用数据的情况下修复损坏的基础环境（主目录会保留）。安装完成后，按钮会把 `openclaw onboard` 输入到终端，按 Enter 即可开始引导
 - 内置仪表盘：控制网关、查看运行状态、管理工具
 - 工具安装：在应用的“设置 → 附加工具”（Settings → Additional Tools）页面，通过安装脚本（`post-setup.sh --tools-only`）安装 tmux、ttyd、dufs、Android Tools、Playwright、Claude Code、Gemini CLI 和 Codex CLI；其中 tmux、ttyd、dufs 和 Android Tools 会对照已签名的 Termux 软件包列表进行验证。安装失败或 `--version` 检查失败的工具会显示为“无法运行”，并提供重新安装按钮。code-server、OpenCode、SSH 服务器和 Chromium 暂时无法在应用中安装；code-server 可在应用的终端中使用 `oa --install` 安装
 - 安装与更新：在“设置 → 安装与更新”（Settings → Install & Update）页面，应用会运行 `oa --update` 并显示进度和结果。只有在早期步骤（第 3 步替换核心文件之前）才能取消。该页面还会显示 OpenClaw 和 Node.js 的版本、上次在应用中更新的结果，以及网关状态和“停止网关”按钮（仅限在应用终端中启动的网关）
@@ -530,7 +531,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 9. 安装 `clawdhub`（技能管理器）以及 `undici` 依赖（如需要）
 10. 关闭网关的 "update available" 提示（`openclaw config set update.checkOnStart false`），除非你已自行设置过该值
 
-**如果之前的安装被中断：** 安装程序会记录安装正在进行，并且只有在安装、postinstall、补丁和检查全部通过之后才删除该记录。安装后如果 OpenClaw 仍不完整，Termux 安装程序会输出 `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).` 和 `Run the installer again.` 并停止。Claw 应用的设置脚本（`post-setup.sh`）会检测到未完成的先前安装（`[WARN] OpenClaw <version> is incomplete (an earlier install was cut off): installing it again`），即使版本相同也会重新安装 OpenClaw；不会触及你的数据。如果之后 OpenClaw 仍不完整，设置会以如下错误停止：`OpenClaw <version> is still incomplete (files are missing or it does not start). Restart the app to try again.`
+**如果之前的安装被中断：** 安装程序会记录安装正在进行，并且只有在安装、postinstall、补丁和检查全部通过之后才删除该记录。安装后如果 OpenClaw 仍不完整，Termux 安装程序会输出 `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).` 和 `Run the installer again.` 并停止。Claw 应用的设置脚本（`post-setup.sh`）会检测到未完成的先前安装（`[WARN] OpenClaw <version> is incomplete (an earlier install was cut off): installing it again`），即使版本相同也会重新安装 OpenClaw；不会触及你的数据。如果之后 OpenClaw 仍不完整，设置会以如下错误停止：`OpenClaw <version> is still incomplete (files are missing or it does not start). Restart the app to try again.` Claw 应用（v0.4.5 及以上）会在其安装界面显示该失败，并提供重试按钮。
 
 **[6.5] 环境变量 + CLI + 标记文件：**
 

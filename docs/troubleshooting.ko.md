@@ -181,7 +181,7 @@ Script v1.2.3 부터 `oa --update` 는 불완전한 OpenClaw 를 감지하여 �
        Your data is untouched. Run: oa --update
 ```
 
-Termux 설치 프로그램은 같은 `[FAIL]` 줄 뒤에 `Run the installer again.` 를 표시합니다. Claw 앱에서는 설정이 `OpenClaw 2026.9.8 is still incomplete (files are missing or it does not start). Restart the app to try again.` 와 함께 중단됩니다.
+Termux 설치 프로그램은 같은 `[FAIL]` 줄 뒤에 `Run the installer again.` 를 표시합니다. Claw 앱에서는 설정이 `OpenClaw 2026.9.8 is still incomplete (files are missing or it does not start). Restart the app to try again.` 와 함께 중단됩니다. Claw 앱(v0.4.5 이상)은 이 실패를 설정 화면에 표시하며, 다시 시도하는 버튼을 제공합니다.
 
 ### 원인
 
@@ -189,7 +189,7 @@ npm 오류 없이 설치가 끝났지만 OpenClaw 패키지가 불완전한 상�
 
 ### 해결 방법
 
-저장 공간([“Not enough free storage”](#not-enough-free-storage) 참고)과 네트워크 연결을 확인한 뒤 `oa --update` 를 다시 실행하세요. Claw 앱에서는 앱을 다시 시작하거나, 설정 → 설치·갱신 화면을 열어 업데이트를 실행하세요. 데이터는 건드리지 않습니다. 같은 메시지가 다시 나타나면 출력을 첨부해 [이슈](https://github.com/AidanPark/openclaw-android/issues)를 남겨 주세요.
+저장 공간([“Not enough free storage”](#not-enough-free-storage) 참고)과 네트워크 연결을 확인한 뒤 `oa --update` 를 다시 실행하세요. Claw 앱(v0.4.5 이상)에서는 설정 화면이 실패를 표시하며, 「다시 시도」 버튼(설치가 중단된 경우에는 「이어서 설치」 버튼)을 누르면 설치를 다시 실행합니다. 기본 환경 자체가 손상되었다면 같은 화면의 「기본 환경 다시 설치」를 사용하세요. 홈 폴더는 유지됩니다. 설치를 마친 앱에서는 설정 → 설치·갱신 화면을 열어 업데이트를 실행하세요. 데이터는 건드리지 않습니다. 같은 메시지가 다시 나타나면 출력을 첨부해 [이슈](https://github.com/AidanPark/openclaw-android/issues)를 남겨 주세요.
 
 ## "Cannot find module glibc-compat.js" 에러
 

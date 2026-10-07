@@ -43,7 +43,7 @@ internal class RunOutcomeStoreTest {
 
     @Test
     fun `an unknown kind is not recorded`() {
-        store().record("SETUP", 1, RunVerdict.Success(0, 0))
+        store().record("INSTALL", 1, RunVerdict.Success(0, 0))
         store().record("", 1, RunVerdict.Success(0, 0))
         assertFalse(file.exists())
     }
@@ -105,7 +105,7 @@ internal class RunOutcomeStoreTest {
                 "",
                 "garbage",
                 "UPDATE|1|success",
-                "SETUP|1|success||0|0|",
+                "INSTALL|1|success||0|0|",
                 "UPDATE|x|success||0|0|",
                 "UPDATE|-1|success||0|0|",
                 "UPDATE|1|maybe||0|0|",

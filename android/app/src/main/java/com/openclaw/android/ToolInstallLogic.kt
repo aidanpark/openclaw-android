@@ -305,6 +305,30 @@ internal class ToolOutcomeStore(
     }
 }
 
+/**
+ * A cancel that came too late. The app's SIGTERM reaches bash at once, but bash runs the TERM trap
+ * only after the foreground step (npm, curl) has ended: an install that finishes in that step ends
+ * as `error=interrupted` with no `<id>=ok` line, although the tool is in place. Such a run is worth
+ * the tool's own `--version` check (the same [BridgeGuard.toolVerifyCommands] check the list runs)
+ * only when a cancel was requested, the script itself reported the interruption ([ToolFailure.INTERRUPTED]
+ * — NOT_RUN means the script never got to install anything) and the tool's files are on disk.
+ * When that check says [ToolProbe.OK], the run counts as installed: done with
+ * [ToolInstallGuard.CANCEL_TOO_LATE], never "cancelled".
+ */
+internal object ToolCancelCheck {
+    fun worthProbing(
+        verdict: ToolVerdict,
+        cancelRequested: Boolean,
+        installedOnDisk: Boolean,
+    ): Boolean = cancelRequested && installedOnDisk && verdict == ToolVerdict.Failure(ToolFailure.INTERRUPTED)
+
+    /** The verdict once the check ran: [probeStatus] [ToolProbe.OK] turns the interrupted run into a success. */
+    fun settle(
+        verdict: ToolVerdict,
+        probeStatus: String,
+    ): ToolVerdict = if (probeStatus == ToolProbe.OK) ToolVerdict.Success else verdict
+}
+
 /** Turns the exit code of a tool's `--version` check into a verdict the page can show. */
 internal object ToolProbe {
     const val OK = "ok"

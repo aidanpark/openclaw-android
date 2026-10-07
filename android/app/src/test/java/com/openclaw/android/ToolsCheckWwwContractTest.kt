@@ -74,8 +74,12 @@ internal class ToolsCheckWwwContractTest {
 
     @Test
     fun `a check is started when the page is made and after every install end, and nowhere else`() {
-        assertEquals(2, Regex("""checkRef\.current = startCheck\(\)""").findAll(tools).count())
-        assertEquals(3, Regex("""\bstartCheck\(\)""").findAll(tools).count(), "declared once, called twice")
+        // Mount, install end, and the return to the page (useVisibleAgain, never while an install runs)
+        assertEquals(3, Regex("""checkRef\.current = startCheck\(\)""").findAll(tools).count())
+        assertEquals(4, Regex("""\bstartCheck\(\)""").findAll(tools).count(), "declared once, called three times")
+        val back = blockAfter(tools, "useVisibleAgain(() => {")
+        assertTrue(back.trimStart().startsWith("if (running) return"), back)
+        assertTrue(back.contains("checkRef.current = startCheck()"), back)
 
         // Mount: after the tools_check listener is on, so no answer can be missed
         val listen = tools.indexOf("useNativeEvent('tools_check', onToolsCheck)")
@@ -159,7 +163,8 @@ internal class ToolsCheckWwwContractTest {
     fun `the shipped bundle starts a check on mount and after an install end`() {
         val fn = bundleStartCheck()
         assertEquals(1, Regex(""""checkInstalledToolsAsync"""").findAll(bundle).count())
-        assertEquals(2, Regex("""\.current=$fn\(\)""").findAll(bundle).count(), "bundle starts the check elsewhere")
+        // Mount, install end, and the return to the page
+        assertEquals(3, Regex("""\.current=$fn\(\)""").findAll(bundle).count(), "bundle starts the check elsewhere")
         assertTrue(
             Regex(
                 """\.phase==="done"\|\|\w+\.phase==="failed"\|\|\w+\.phase==="cancelled"\)&&\([^;]*?""" +

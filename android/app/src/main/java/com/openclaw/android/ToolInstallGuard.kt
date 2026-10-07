@@ -21,6 +21,13 @@ internal object ToolInstallGuard {
     const val FAILED = "failed"
     const val CANCELLED = "cancelled"
 
+    /**
+     * `reason` of a [DONE] run that a cancel was requested for: the install had already finished
+     * when the cancel could act (bash runs the TERM trap only after the foreground step), so the
+     * tool is installed — the page says so instead of "cancelled".
+     */
+    const val CANCEL_TOO_LATE = "CANCEL_TOO_LATE"
+
     /** Immutable snapshot: readers never see a half-updated state. */
     data class State(
         val phase: String,
@@ -154,7 +161,8 @@ internal object ToolInstallGuard {
         val cancelled = now.phase == CANCELLING
         state =
             when {
-                verdict is ToolVerdict.Success -> now.copy(phase = DONE, progress = 1f, reason = null)
+                verdict is ToolVerdict.Success ->
+                    now.copy(phase = DONE, progress = 1f, reason = if (cancelled) CANCEL_TOO_LATE else null)
                 cancelled && (verdict as ToolVerdict.Failure).reason in cancelOutcomes ->
                     now.copy(phase = CANCELLED, progress = 0f, reason = ToolFailure.INTERRUPTED.name)
                 else -> now.copy(phase = FAILED, progress = 0f, reason = (verdict as ToolVerdict.Failure).reason.name)

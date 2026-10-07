@@ -20,6 +20,9 @@ class TerminalSessionManager(
     private val sessions = mutableListOf<TerminalSession>()
     private var activeSessionIndex = -1
     private val finishedSessionIds = mutableSetOf<String>()
+
+    /** What the app typed into a session before its shell started (see [writeWhenReady]). */
+    private val pendingInput = TerminalInputQueue()
     var onSessionsChanged: (() -> Unit)? = null
 
     val activeSession: TerminalSession?
@@ -112,7 +115,11 @@ class TerminalSessionManager(
 
         finishedSessionIds.remove(handleId)
         val session = sessions.removeAt(index)
-        session.finishIfRunning()
+        // Only a shell that started (reported by setTerminalShellPid) is signalled: for one that never
+        // started the pid is 0, and signalling it would SIGKILL pid 0 — the app's own process group.
+        // One that started and already exited is not running, so the call below does nothing for it.
+        // A shell that starts after this close is ended by onShellStarted.
+        if (pendingInput.forget(handleId)) session.finishIfRunning()
 
         eventBridge.emit(
             "session_changed",
@@ -135,12 +142,43 @@ class TerminalSessionManager(
      * Called when a session's process exits.
      */
     fun onSessionFinished(session: TerminalSession) {
+        pendingInput.forget(session.mHandle)
         finishedSessionIds.add(session.mHandle)
         eventBridge.emit(
             "session_changed",
             mapOf("id" to session.mHandle, "action" to "finished"),
         )
         activity.runOnUiThread { onSessionsChanged?.invoke() }
+    }
+
+    /**
+     * Type [text] into [session] once its shell runs — the only way the app types into a session.
+     * `TerminalSession.write` drops what is written before the shell has started, and the shell
+     * starts only when the view lays the session out: until then the text waits, in order, and
+     * [onShellStarted] writes it (no timer). [stillWanted] is asked at the moment of writing; false
+     * drops the text. A session that ends or is closed first drops it. Any thread. False when the
+     * text was dropped (see [TerminalInputQueue]).
+     */
+    fun writeWhenReady(
+        session: TerminalSession,
+        text: String,
+        stillWanted: () -> Boolean = { true },
+    ): Boolean =
+        pendingInput.submit(session.mHandle, text, stillWanted) { session.write(it) } !=
+            TerminalInputQueue.Outcome.DROPPED
+
+    /**
+     * The session's shell started (`TerminalSessionClient.setTerminalShellPid`, UI thread, called by
+     * `TerminalSession.initializeEmulator` right after the pid is set): write what waited for it.
+     * A session closed before its shell started (its view laid it out only afterwards) gets no
+     * input and its shell is ended now — on this thread, where the pid was just set.
+     */
+    fun onShellStarted(
+        session: TerminalSession,
+        pid: Int,
+    ) {
+        val accepted = pendingInput.shellStarted(session.mHandle, pid) { session.write(it) }
+        if (!accepted && pid > 0) session.finishIfRunning()
     }
 
     /**

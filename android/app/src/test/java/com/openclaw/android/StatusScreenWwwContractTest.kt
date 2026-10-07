@@ -72,9 +72,11 @@ internal class StatusScreenWwwContractTest {
     fun `REASON_KEYS covers exactly the native reasons except UNKNOWN, which falls back`() {
         // 14 since CANCELLED (the user's cancel) was split from INTERRUPTED (a stop from elsewhere)
         assertEquals(14, reasonKeys.size, reasonKeys.toString())
-        assertEquals(UpdateReason.entries.size - 1, reasonKeys.size, "one key per native reason but UNKNOWN")
+        // SETUP-only reasons (NETWORK, VERIFY_FAILED, ENV) belong to the first-install screen, not this one
+        val updateReasons = UpdateReason.entries - UpdateReason.SETUP_ONLY
+        assertEquals(updateReasons.size - 1, reasonKeys.size, "one key per native reason but UNKNOWN")
         assertEquals("status_reason_cancelled", reasonKeys["CANCELLED"])
-        assertEquals(UpdateReason.entries.map { it.name }.toSet() - "UNKNOWN", reasonKeys.keys)
+        assertEquals(updateReasons.map { it.name }.toSet() - "UNKNOWN", reasonKeys.keys)
         reasonKeys.forEach { (reason, key) -> assertEquals("status_reason_" + reason.lowercase(), key) }
         assertTrue(status.contains("|| 'status_reason_unknown'"), "no fallback to status_reason_unknown")
     }
@@ -295,7 +297,14 @@ internal class StatusScreenWwwContractTest {
         assertEquals(2, Regex("""\bstartUpdate\b""").findAll(status).count())
         val card = confirmCards.single { it.second.contains("onConfirm={startUpdate}") }.second
         assertTrue(card.contains("confirmLabel={t('status_confirm_start')}"), card)
-        val others = allSources.filterKeys { !it.endsWith("SettingsStatus.tsx") && !it.endsWith("bridge.ts") }
+        // Setup.tsx starts the first install's SETUP run (stage B) — that kind only, never UPDATE
+        val setup = allSources.entries.single { it.key.endsWith("screens/Setup.tsx") }.value
+        val setupStarts = Regex("""bridge\.call\('startRun'[^)]*\)""").findAll(setup).map { it.value }.toList()
+        assertEquals(listOf("bridge.call('startRun', SETUP_KIND, false)"), setupStarts)
+        val others =
+            allSources.filterKeys {
+                !it.endsWith("SettingsStatus.tsx") && !it.endsWith("bridge.ts") && !it.endsWith("screens/Setup.tsx")
+            }
         assertEquals(emptyList<String>(), others.filterValues { it.contains("'startRun'") }.keys.toList())
     }
 
@@ -344,12 +353,15 @@ internal class StatusScreenWwwContractTest {
     }
 
     @Test
-    fun `only SettingsStatus listens to run_progress and gateway_state`() {
-        for (event in listOf("run_progress", "gateway_state")) {
-            val listeners = allSources.filterValues { it.contains("useNativeEvent('$event'") }.keys
-            assertEquals(1, listeners.size, "$event: $listeners")
-            assertTrue(listeners.single().endsWith("screens/SettingsStatus.tsx"))
-        }
+    fun `only SettingsStatus listens to gateway_state, and run_progress only it and the setup screen`() {
+        val gateway = allSources.filterValues { it.contains("useNativeEvent('gateway_state'") }.keys
+        assertEquals(1, gateway.size, "gateway_state: $gateway")
+        assertTrue(gateway.single().endsWith("screens/SettingsStatus.tsx"))
+        // Setup.tsx shows the first install's SETUP run (stage B)
+        val runs = allSources.filterValues { it.contains("useNativeEvent('run_progress'") }.keys
+        assertEquals(2, runs.size, "run_progress: $runs")
+        assertTrue(runs.any { it.endsWith("screens/SettingsStatus.tsx") }, "$runs")
+        assertTrue(runs.any { it.endsWith("screens/Setup.tsx") }, "$runs")
     }
 
     // ── route, menu, dashboard ──────────────────────────────────────────────

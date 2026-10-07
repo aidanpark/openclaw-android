@@ -181,7 +181,7 @@ From Script v1.2.3 on, `oa --update` detects an incomplete OpenClaw and installs
        Your data is untouched. Run: oa --update
 ```
 
-The Termux installer prints the same `[FAIL]` line followed by `Run the installer again.` In the Claw app, the setup stops with `OpenClaw 2026.9.8 is still incomplete (files are missing or it does not start). Restart the app to try again.`
+The Termux installer prints the same `[FAIL]` line followed by `Run the installer again.` In the Claw app, the setup stops with `OpenClaw 2026.9.8 is still incomplete (files are missing or it does not start). Restart the app to try again.` The Claw app (v0.4.5 or later) shows this failure on its setup screen with a button to try again.
 
 ### Cause
 
@@ -189,7 +189,7 @@ The install ended without an npm error, yet the OpenClaw package is incomplete: 
 
 ### Solution
 
-Check the free storage (see ["Not enough free storage"](#not-enough-free-storage)) and the network connection, then run `oa --update` again. In the Claw app, restart the app, or open Settings → Install & Update and run the update. Your data is not touched. If the message appears again, please [open an issue](https://github.com/AidanPark/openclaw-android/issues) with the output.
+Check the free storage (see ["Not enough free storage"](#not-enough-free-storage)) and the network connection, then run `oa --update` again. In the Claw app (v0.4.5 or later), the setup screen shows the failure with a Try again button (or Continue installation, when the installation was interrupted); tap it to run the setup again. If the base system itself is broken, use Reinstall the base system on that screen; the home folder is kept. In an app whose setup has finished, open Settings → Install & Update and run the update. Your data is not touched. If the message appears again, please [open an issue](https://github.com/AidanPark/openclaw-android/issues) with the output.
 
 ## "Cannot find module glibc-compat.js" error
 

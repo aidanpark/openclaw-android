@@ -3,6 +3,7 @@ import { useRoute } from '../lib/router'
 import { bridge } from '../lib/bridge'
 import { useNativeEvent } from '../lib/useNativeEvent'
 import { useRuntimeProbes, type ProbeSpec } from '../lib/useRuntimeProbes'
+import { useVisibleAgain } from '../lib/useVisibleAgain'
 import { ConfirmCard } from '../components/ConfirmCard'
 import { t, getLocale, type TranslationKey } from '../i18n'
 
@@ -360,6 +361,14 @@ export function SettingsStatus() {
   const gwOurs = gateway?.ours !== false
   // A run, or a start waiting for native's answer: nothing else may be started meanwhile
   const busyUi = run !== null || prechecking
+
+  // Back on the page (from the terminal, another app): the gateway may have been started or stopped
+  // there. Only what changes outside the page is read again — a run's state keeps coming from its
+  // events, and the last result is left alone while a run is shown.
+  useVisibleAgain(() => {
+    setGateway(readGateway())
+    if (!busyUi) setLastRun(readLastRun())
+  })
 
   function openUpdateConfirm() {
     // What the consent says about the gateway must be the state now, not the one from page load

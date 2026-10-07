@@ -69,12 +69,13 @@ internal class ManagedRunLogicTest {
     }
 
     @Test
-    fun `RunKinds knows only UPDATE`() {
+    fun `RunKinds knows only UPDATE and SETUP`() {
         assertNotNull(RunKinds.spec("UPDATE"))
-        listOf(null, "", "update", "SETUP", "TOOLS", "UPDATE ", "UPDATE\n", "\$(UPDATE)").forEach {
+        assertNotNull(RunKinds.spec("SETUP"))
+        listOf(null, "", "update", "setup", "INSTALL", "TOOLS", "UPDATE ", "UPDATE\n", "\$(UPDATE)").forEach {
             assertNull(RunKinds.spec(it), "$it")
         }
-        assertEquals(setOf("UPDATE"), BridgeGuard.runKinds)
+        assertEquals(setOf("UPDATE", "SETUP"), BridgeGuard.runKinds)
     }
 
     // ── FailLineCollector ───────────────────────────────────────────────────

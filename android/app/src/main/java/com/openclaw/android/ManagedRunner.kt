@@ -10,8 +10,11 @@ import java.io.File
  * process, its progress as `run_progress` events, and its end — recorded in [outcomes] and held by
  * [ManagedRunGuard] for a page created later. Also stops the gateway on request (`gateway_state`).
  * JsBridge validates the kind and takes the [RunLease] on the caller thread; [run] releases it.
- * [processes] (the /proc reader and the signal) is injectable for tests.
+ * [processes] (the /proc reader and the signal) is injectable for tests. [refreshSetupScript] fetches
+ * the newest `post-setup.sh` before a SETUP run ([BootstrapManager.refreshPostSetupScript]: the
+ * public copy, else the copy in place, else the bundled one); blocking, called on the run's thread.
  */
+@Suppress("LongParameterList") // the runner's collaborators, each replaced in tests
 internal class ManagedRunner(
     private val homeDir: File,
     private val environment: () -> Map<String, String>,
@@ -19,6 +22,7 @@ internal class ManagedRunner(
     private val gateway: GatewayControl,
     private val emit: (String, Map<String, Any?>) -> Unit,
     private val processes: RunProcesses = RunProcesses(),
+    private val refreshSetupScript: () -> Unit = {},
 ) {
     companion object {
         private const val TAG = "ManagedRunner"
@@ -44,24 +48,34 @@ internal class ManagedRunner(
         private const val MAX_LINE_CHARS = 300
         private const val MILLIS_PER_SECOND = 1000L
 
-        /** The one shape of `run_progress` and `getRunState()`: the guard's snapshot is the truth. */
+        /**
+         * The one shape of `run_progress` and `getRunState()`: the guard's snapshot is the truth. A
+         * SETUP state also carries `needMb`/`haveMb` (null unless `error=free-space`) and `warn` (the
+         * `warn=` list, empty until the end), before `gatewayStopped`; other kinds never have them.
+         */
         fun stateEvent(now: ManagedRunGuard.State): Map<String, Any?> =
-            mapOf(
-                "kind" to now.kind,
-                "phase" to now.phase,
-                "stage" to now.stage,
-                "stageTotal" to now.stageTotal,
-                "progress" to now.progress,
-                "message" to now.message,
-                "cancelable" to now.cancelable,
-                "cancelRequested" to now.cancelRequested,
-                "longRunning" to now.longRunning,
-                "reason" to now.reason,
-                "exit" to now.exit,
-                "detail" to now.detail,
-                "warnings" to now.warnings,
-                "gatewayStopped" to now.gatewayStopped,
-            )
+            buildMap {
+                put("kind", now.kind)
+                put("phase", now.phase)
+                put("stage", now.stage)
+                put("stageTotal", now.stageTotal)
+                put("progress", now.progress)
+                put("message", now.message)
+                put("cancelable", now.cancelable)
+                put("cancelRequested", now.cancelRequested)
+                put("longRunning", now.longRunning)
+                put("reason", now.reason)
+                put("exit", now.exit)
+                put("detail", now.detail)
+                put("warnings", now.warnings)
+                if (now.kind == RunKinds.SETUP) {
+                    val facts = now.setup ?: SetupFacts()
+                    put("needMb", facts.needMb)
+                    put("haveMb", facts.haveMb)
+                    put("warn", facts.warn)
+                }
+                put("gatewayStopped", now.gatewayStopped)
+            }
 
         private fun nowSec(): Long = System.currentTimeMillis() / MILLIS_PER_SECOND
     }
@@ -126,8 +140,9 @@ internal class ManagedRunner(
     }
 
     /**
-     * Reasons not to start at all: no `oa`, an updater already running elsewhere, a gateway in the way.
-     * [onGatewayStopped] is called when the checks stopped a running gateway ([gatewayRefusal]).
+     * Reasons not to start at all: no `oa`, an updater already running elsewhere, a setup script that
+     * cannot be run this way, a gateway in the way. [onGatewayStopped] is called when the checks
+     * stopped a running gateway ([gatewayRefusal]).
      */
     private fun precheck(
         spec: RunSpec,
@@ -138,8 +153,26 @@ internal class ManagedRunner(
         when {
             CommandRunner.findExecutable(spec.command.first(), environment()) == null -> UpdateReason.NOT_INSTALLED
             processes.scan.externalRunners(token).isNotEmpty() -> UpdateReason.BUSY
+            !scriptReady(spec) -> UpdateReason.NOT_INSTALLED
+            !spec.gatewayCheck -> null
             else -> gatewayRefusal(stopGateway, onGatewayStopped)
         }
+
+    /**
+     * A run of a script in the home directory (SETUP) needs that script refreshed and able to run as
+     * a managed run ([ManagedSetup.capable]). An older script would start the interactive onboard and
+     * write no result file: the page keeps the terminal flow for it.
+     */
+    @Suppress("TooGenericExceptionCaught") // the refresh is best effort: the copy in place is checked either way
+    private fun scriptReady(spec: RunSpec): Boolean {
+        val script = spec.homeScript ?: return true
+        try {
+            refreshSetupScript()
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "Could not refresh the setup script", e)
+        }
+        return ManagedSetup.capable(File(homeDir, script))
+    }
 
     /**
      * A running gateway is stopped only when the page asked for it; one the app does not own is never
@@ -214,19 +247,24 @@ internal class ManagedRunner(
         }
     }
 
-    /** The script itself. Its result file is removed first, so only this run's can be read after. */
+    /**
+     * The script itself. An update's result file is removed first, so only this run's can be read
+     * after. A setup's is kept: the script replaces it once it holds the lock, and a run refused as
+     * busy (exit 2) must not remove the file of the run that holds it (it is read by its `run=`).
+     */
     private suspend fun runScript(
         spec: RunSpec,
         startedAtSec: Long,
     ): RunVerdict {
-        val resultFile = File(homeDir, RESULT_FILE)
-        deleteQuietly(resultFile)
+        val setup = spec.kind == RunKinds.SETUP
+        val resultFile = File(homeDir, spec.resultFile)
+        if (!setup) deleteQuietly(resultFile)
         val watcher = RunOutputWatcher(spec)
         var lastEmitMs = 0L
-        val env = environment() + (ToolSignal.ENV_NAME to ManagedRunGuard.runToken) + (ASSUME_YES to "1")
+        val env = environment() + (ToolSignal.ENV_NAME to ManagedRunGuard.runToken) + spec.env
         recordStarted(spec.kind, startedAtSec)
         val exitCode =
-            CommandRunner.streamLong(spec.command, env, homeDir, ManagedRunGuard.process) { raw ->
+            CommandRunner.streamLong(spec.argv(homeDir), env, homeDir, ManagedRunGuard.process) { raw ->
                 val line = watcher.accept(raw)
                 val before = ManagedRunGuard.snapshot()
                 val message = if (line.isBlank()) before.message else line.takeLast(MAX_LINE_CHARS)
@@ -244,6 +282,16 @@ internal class ManagedRunner(
                 }
                 ManagedRunGuard.retryCancel(::sendCancelSignal)
             }
+        if (setup) {
+            return SetupVerdict.decide(
+                SetupResultParser.read(resultFile),
+                exitCode,
+                startedAtSec,
+                File(homeDir, ManagedSetup.MARKER).exists(),
+                watcher.failLines(),
+                watcher.lastWarning(),
+            )
+        }
         return UpdateVerdict.decide(
             readResult(resultFile),
             exitCode,

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Route, useRoute } from './lib/router'
 import { bridge } from './lib/bridge'
 import { useNativeEvent } from './lib/useNativeEvent'
+import { routeFor, type SetupStatus } from './lib/setupRoute'
 import { t } from './i18n'
 import { Setup } from './screens/Setup'
 import { Dashboard } from './screens/Dashboard'
@@ -21,20 +22,12 @@ export function App() {
   const [setupDone, setSetupDone] = useState<boolean | null>(null)
 
   useEffect(() => {
-    const status = bridge.callJson<{ bootstrapInstalled?: boolean; platformInstalled?: string }>(
-      'getSetupStatus'
-    )
+    const status = bridge.callJson<SetupStatus>('getSetupStatus')
     const setupState = bridge.callJson<{ running?: boolean }>('getSetupState')
-    if (status && setupState?.running) {
-      // Existing pattern: one-shot read of native state on mount
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSetupDone(false)
-    } else if (status) {
-      setSetupDone(!!status.bootstrapInstalled && !!status.platformInstalled)
-    } else {
-      // Bridge not available (dev mode) — assume setup done
-      setSetupDone(true)
-    }
+    // Both 'setup' and 'resume' open the setup page; it tells them apart itself (Setup.tsx)
+    // Existing pattern: one-shot read of native state on mount
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSetupDone(routeFor(status, setupState) === 'main')
   }, [])
 
   // An install is running (the page was recreated mid-install, or it started elsewhere): show it,

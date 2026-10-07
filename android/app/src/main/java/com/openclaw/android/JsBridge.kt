@@ -37,7 +37,6 @@ class JsBridge(
     companion object {
         private const val TAG = "JsBridge"
 
-        private const val SHELL_INIT_DELAY_MS = 500L
         private const val API_TIMEOUT_MS = 5000
         private const val MILLIS_PER_SECOND = 1000L
         private const val LONG_RUNNING_MS = 30L * 60 * 1000
@@ -91,12 +90,18 @@ class JsBridge(
             val session = sessionManager.createSession()
             if (bootstrapManager.needsPostSetup()) {
                 val script = bootstrapManager.postSetupScript.absolutePath
-                // Delay write until after attachSession() initializes the shell process.
-                // createSession() posts attachSession() via runOnUiThread; writing before
-                // that runs silently drops the data (mShellPid is still 0).
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    session.write("bash $script\n")
-                }, SHELL_INIT_DELAY_MS)
+                // A script the app can run itself is run by the page (managed SETUP), not typed here
+                val capable = bootstrapManager.setupScriptCapable()
+                // The new session's shell starts only once the view lays it out: the text waits for
+                // it (writeWhenReady), and the decision is asked at write time — the marker may have
+                // appeared or a managed run started meanwhile
+                sessionManager.writeWhenReady(session, "bash $script\n") {
+                    ManagedSetup.shouldRunInTerminal(
+                        scriptCapable = capable,
+                        markerPresent = bootstrapManager.setupMarkerPresent(),
+                        managedRunActive = ManagedSetup.managedRunActive(),
+                    )
+                }
             }
         }
         activity.showTerminal()
@@ -128,12 +133,14 @@ class JsBridge(
     /**
      * Type one of the dashboard's fixed commands into the active terminal. The WebView names a
      * command ID; it can no longer send arbitrary text to the shell. No newline is added — the
-     * user reviews the command and presses Enter.
+     * user reviews the command and presses Enter. A session that [showTerminal] has just created
+     * gets the command once its shell has started (writeWhenReady), so the page needs no wait.
      */
     @JavascriptInterface
     fun writeCommandToTerminal(commandId: String) {
         val command = BridgeGuard.terminalCommands[commandId] ?: return
-        sessionManager.activeSession?.write(command)
+        val session = sessionManager.activeSession ?: return
+        sessionManager.writeWhenReady(session, command)
     }
 
     // ═══════════════════════════════════════════
@@ -227,6 +234,17 @@ class JsBridge(
             ),
         )
     }
+
+    /**
+     * The last full setup (`post-setup-result.conf`) for the page that offers to continue an
+     * unfinished install, and whether the app can run the setup itself (`managed`; else the page
+     * keeps the terminal flow). Shape: [ManagedSetup.resultState].
+     */
+    @JavascriptInterface
+    fun getSetupResult(): String =
+        gson.toJson(
+            ManagedSetup.resultState(bootstrapManager.homeDir, ProcScan(), bootstrapManager.setupScriptCapable()),
+        )
 
     @JavascriptInterface
     fun saveToolSelections(json: String) {
@@ -396,6 +414,8 @@ class JsBridge(
             try {
                 emitToolState()
                 verdict = runToolInstall(id, scriptId, startedAtSec)
+                // Apart, so a check that throws leaves the interrupted verdict in place
+                verdict = settleLateCancel(id, verdict)
             } catch (e: Exception) {
                 AppLogger.w(TAG, "Tool install failed unexpectedly: $id", e)
             } finally {
@@ -457,6 +477,34 @@ class JsBridge(
             }
         val facts = ToolRunFacts(startedAtSec, scriptId, exitCode, toolOnDisk(id), hint)
         return ToolInstallVerdict.decide(readToolResult(ocaDir), facts)
+    }
+
+    /**
+     * A cancelled run whose install had already finished ([ToolCancelCheck]): the tool's own
+     * `--version` check decides. OK → success, which [ToolInstallGuard.finish] ends as done with
+     * reason CANCEL_TOO_LATE; anything else (no check for the tool, failed, timeout) keeps [verdict].
+     */
+    private suspend fun settleLateCancel(
+        id: String,
+        verdict: ToolVerdict,
+    ): ToolVerdict {
+        val cmd = BridgeGuard.toolVerifyCommands[id]
+        if (cmd == null || !ToolCancelCheck.worthProbing(verdict, ToolInstallGuard.cancelRequested(), toolOnDisk(id))) {
+            return verdict
+        }
+        val result =
+            ProbeLimiter.semaphore.withPermit {
+                CommandRunner.runExecutable(
+                    cmd.executable,
+                    cmd.args,
+                    probeEnvironment(),
+                    bootstrapManager.homeDir,
+                    VERIFY_TIMEOUT_MS,
+                )
+            }
+        val status = ToolProbe.status(result.exitCode, result.stderr.startsWith(CommandRunner.TIMEOUT_PREFIX))
+        AppLogger.i(TAG, "Cancelled install of $id: its check after the run says $status")
+        return ToolCancelCheck.settle(verdict, status)
     }
 
     /** Marker, updated installer, `--tools-only` support — each step may be cut short by a cancel. */
@@ -611,7 +659,7 @@ class JsBridge(
     }
 
     // ═══════════════════════════════════════════
-    // Managed runs domain (`oa --update` as a child process) and the gateway
+    // Managed runs domain (`oa --update`, the first install's `post-setup.sh` as a child process) and the gateway
     // ═══════════════════════════════════════════
 
     private val runs by lazy {
@@ -624,13 +672,16 @@ class JsBridge(
             // Other apps' processes have another uid and are not visible in /proc.
             gateway = GatewayControl(sessionPids = { sessionManager.sessionPids() + android.os.Process.myPid() }),
             emit = { type, data -> eventBridge.emit(type, data) },
+            refreshSetupScript = { bootstrapManager.refreshPostSetupScript() },
         )
     }
 
     /**
      * Start a managed run by kind ([BridgeGuard.runKinds]; the command behind it is native's). Its
      * progress and end arrive as `run_progress` events. With [stopGateway] a running gateway the app
-     * started is stopped first; otherwise a running gateway refuses the run (GATEWAY_RUNNING).
+     * started is stopped first; otherwise a running gateway refuses the run (GATEWAY_RUNNING). A SETUP
+     * run has no gateway check ([stopGateway] is ignored); it is refused NOT_INSTALLED when the script
+     * cannot be run by the app (`getSetupResult().managed` is false) — the page uses the terminal then.
      */
     @Suppress("TooGenericExceptionCaught") // a runner that cannot be built must not leave the lease held
     @JavascriptInterface
@@ -942,7 +993,8 @@ class JsBridge(
 
     @JavascriptInterface
     fun clearCache() {
-        activity.cacheDir.deleteRecursively()
+        // Never follows a link out of the cache dir (into files/, usr or home)
+        SafeTree.deleteNoFollow(activity.cacheDir)
         activity.cacheDir.mkdirs()
     }
 

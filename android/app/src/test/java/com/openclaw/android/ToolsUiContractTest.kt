@@ -177,7 +177,8 @@ internal class ToolsUiContractTest {
 
         fun who(event: String) = listeners.filterValues { event in it }.keys
         assertEquals(setOf("SettingsTools.tsx"), who("tool_progress"))
-        assertEquals(setOf("SettingsStatus.tsx"), who("run_progress"))
+        // Setup.tsx shows the first install's managed SETUP run (stage B)
+        assertEquals(setOf("SettingsStatus.tsx", "Setup.tsx"), who("run_progress"))
         assertEquals(setOf("SettingsStatus.tsx"), who("gateway_state"))
         assertEquals(emptySet<String>(), who("install_progress"))
         assertEquals(setOf("run_progress", "gateway_state"), listened(sources.getValue("SettingsStatus.tsx")))
@@ -320,13 +321,15 @@ internal class ToolsUiContractTest {
                 "const name = getTools().find(x => x.id === last.target)?.name ?? last.target",
                 "if (last.phase === '$failed') return `\${name}: \${failureText(last.reason, last.message)}`",
                 "if (last.phase === '$cancelled') return `\${name}: \${t('tool_cancelled')}`",
+                "if (last.phase === '${ToolInstallGuard.DONE}' && doneNotice(last.reason)) " +
+                    "return `\${name}: \${doneNotice(last.reason)}`",
                 "return ''",
             ),
             lines,
         )
-        // done, running and cancelling restore nothing
+        // running and cancelling restore nothing; done only with a notice (a cancel that came too late)
         val phases = Regex("""last\.phase === '([a-z]+)'""").findAll(fn.value).map { it.groupValues[1] }.toSet()
-        assertEquals(setOf(failed, cancelled), phases)
+        assertEquals(setOf(failed, cancelled, ToolInstallGuard.DONE), phases)
     }
 
     @Test
@@ -344,7 +347,8 @@ internal class ToolsUiContractTest {
                 """callJson\("getToolInstallState"\);if\(!(\w+)\|\|!\1\.target\)return"";""" +
                     """const (\w+)=[^;]*;return \1\.phase==="failed"\?""" +
                     """`\$\{\2}: \$\{([\w$]+)\(\1\.reason,\1\.message\)}`""" +
-                    """:\1\.phase==="cancelled"\?`\$\{\2}: \$\{\w+\("tool_cancelled"\)}`:""""",
+                    """:\1\.phase==="cancelled"\?`\$\{\2}: \$\{\w+\("tool_cancelled"\)}`""" +
+                    """:\1\.phase==="done"&&([\w$]+)\(\1\.reason\)\?`\$\{\2}: \$\{\4\(\1\.reason\)}`:""""",
             ).find(bundle)
         assertNotNull(notice, "bundle lacks lastEndNotice (rebuild www)")
         // The function it calls is the bundle's failureText (reason text + the last output line)
@@ -427,6 +431,8 @@ internal class ToolsUiContractTest {
                 "tool_terminal_only",
                 "tool_uninstall_unsupported",
                 "tool_err_unknown",
+                // a done run whose cancel came too late (ToolInstallGuard.CANCEL_TOO_LATE)
+                "tools_cancel_too_late",
             )
         fixed + ToolFailure.entries.map { "tool_err_" + it.name.lowercase() }
     }
@@ -482,9 +488,10 @@ internal class ToolsUiContractTest {
     @Test
     fun `App tsx sends a page to setup when getSetupState says running`() {
         assertTrue(app.contains("bridge.callJson<{ running?: boolean }>('getSetupState')"))
-        assertTrue(
-            Regex("""if \(status && setupState\?\.running\)\s*\{[^}]*setSetupDone\(false\)""").containsMatchIn(app),
-        )
+        // The decision moved to routeFor (lib/setupRoute.ts, stage B): a running install routes to setup first
+        assertTrue(app.contains("setSetupDone(routeFor(status, setupState) === 'main')"))
+        val route = File("../www/src/lib/setupRoute.ts").readText()
+        assertTrue(Regex("""if \(setupState\?\.running\) return 'setup'""").containsMatchIn(route))
         assertTrue(
             Regex(
                 """if \(!setupDone && !path\.startsWith\('/setup'\)\)\s*\{\s*navigate\('/setup'\)""",

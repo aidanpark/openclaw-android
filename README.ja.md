@@ -61,6 +61,7 @@ AndroidでOpenClawを実行する一般的な方法では、proot-distroでLinux
 スタンドアロンのAndroidアプリも提供されています。ターミナルエミュレータとWebViewベースのUIを単一のAPKにバンドルしており、Termuxは不要です。
 
 - ワンタップセットアップ: bootstrap、Node.js、OpenClawをアプリ内からまとめてインストール
+- アプリ内での初回インストール（v0.4.5以降）: アプリが初回インストールを自ら実行し、進捗を7つのステップで表示します。どのステップでもキャンセルできます。完了していないインストール（キャンセルした、アプリが閉じられた、またはAndroidに停止された場合）は、「インストールを続ける」（Continue the installation）画面で中断した箇所から続行します。「ベースシステムを再インストール」（Reinstall the base system）は、アプリのデータを消去せずに壊れたベースシステムを修復します（ホームフォルダーは保持されます）。セットアップが終わると、ボタンが端末に `openclaw onboard` を入力するので、Enterを押してオンボーディングを開始します
 - ゲートウェイ制御、ランタイム情報、ツール管理を行うダッシュボードを内蔵
 - ツールのインストール: 設定 → 追加ツール（Settings → Additional Tools）画面から、インストールスクリプト（`post-setup.sh --tools-only`）でtmux、ttyd、dufs、Android Tools、Playwright、Claude Code、Gemini CLI、Codex CLIをインストールできます。tmux、ttyd、dufs、Android Toolsは署名済みのTermuxパッケージリストで検証します。インストールに失敗したツールや `--version` の確認に失敗したツールは「動作していません」と再インストールボタンで表示します。code-server、OpenCode、SSHサーバー、Chromiumはまだアプリからインストールできません。code-serverはアプリのターミナルで `oa --install` を使ってインストールできます
 - インストールと更新: 設定 → インストールと更新（Settings → Install & Update）画面から、アプリが `oa --update` を実行し、進捗と結果を表示します。キャンセルできるのは初期のステップ（ステップ3、コアファイルの置き換えより前）だけです。この画面には、OpenClawとNode.jsのバージョン、アプリから最後に実行した更新の結果、ゲートウェイの状態と「ゲートウェイを停止」（Stop gateway）ボタンも表示されます（アプリのターミナルで起動したゲートウェイのみ対象）
@@ -525,7 +526,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 9. 必要に応じて `clawdhub`（スキルマネージャ）と `undici` 依存をインストール
 10. ゲートウェイの "update available" 通知をオフにする（`openclaw config set update.checkOnStart false`）。すでに自分で値を設定している場合はそのまま
 
-**以前のインストールが途中で中断された場合:** インストーラーはインストールが進行中であることを記録し、インストール・postinstall・パッチ・確認がすべて通過した後にのみその記録を削除します。インストール後もOpenClawが不完全な場合、Termuxインストーラーは `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).` と `Run the installer again.` を表示して停止します。Clawアプリのセットアップスクリプト（`post-setup.sh`）は、終わっていない以前のインストールを検出し（`[WARN] OpenClaw <version> is incomplete (an earlier install was cut off): installing it again`）、バージョンが同じでもOpenClawをインストールし直します。データには手を付けません。それでもOpenClawが不完全な場合、セットアップは次のエラーで停止します: `OpenClaw <version> is still incomplete (files are missing or it does not start). Restart the app to try again.`
+**以前のインストールが途中で中断された場合:** インストーラーはインストールが進行中であることを記録し、インストール・postinstall・パッチ・確認がすべて通過した後にのみその記録を削除します。インストール後もOpenClawが不完全な場合、Termuxインストーラーは `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).` と `Run the installer again.` を表示して停止します。Clawアプリのセットアップスクリプト（`post-setup.sh`）は、終わっていない以前のインストールを検出し（`[WARN] OpenClaw <version> is incomplete (an earlier install was cut off): installing it again`）、バージョンが同じでもOpenClawをインストールし直します。データには手を付けません。それでもOpenClawが不完全な場合、セットアップは次のエラーで停止します: `OpenClaw <version> is still incomplete (files are missing or it does not start). Restart the app to try again.` Clawアプリ（v0.4.5以降）は、この失敗をセットアップ画面に表示し、もう一度試すためのボタンを提供します。
 
 **[6.5] 環境変数 + CLI + マーカー:**
 

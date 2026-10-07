@@ -525,6 +525,8 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 9. 必要に応じて `clawdhub`（スキルマネージャ）と `undici` 依存をインストール
 10. ゲートウェイの "update available" 通知をオフにする（`openclaw config set update.checkOnStart false`）。すでに自分で値を設定している場合はそのまま
 
+**以前のインストールが途中で中断された場合:** インストーラーはインストールが進行中であることを記録し、インストール・postinstall・パッチ・確認がすべて通過した後にのみその記録を削除します。インストール後もOpenClawが不完全な場合、Termuxインストーラーは `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).` と `Run the installer again.` を表示して停止します。Clawアプリのセットアップスクリプト（`post-setup.sh`）は、終わっていない以前のインストールを検出し（`[WARN] OpenClaw <version> is incomplete (an earlier install was cut off): installing it again`）、バージョンが同じでもOpenClawをインストールし直します。データには手を付けません。それでもOpenClawが不完全な場合、セットアップは次のエラーで停止します: `OpenClaw <version> is still incomplete (files are missing or it does not start). Restart the app to try again.`
+
 **[6.5] 環境変数 + CLI + マーカー:**
 
 プラットフォームインストール後、オーケストレーターは次を行います。
@@ -637,6 +639,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - `binutils` をインストール（ネイティブモジュールのビルド用）
 - Node.jsの固定を安全策として再確認（多層防御 — [3/5] でもすでにゲートされています）
 - `openclaw` を固定バージョンに収束させる — インストール済みバージョンがより低い場合に固定バージョンをインストールする。`OA_ALLOW_OPENCLAW_DOWNGRADE=1` を設定しない限り、OpenClawをより低いバージョンに下げることはありません
+- OpenClawが不完全な場合（以前のインストールが途中で中断され、バージョンは合っているがファイルが欠けている状態）、固定バージョンと同じでもインストールし直します: `[WARN] openclaw <version> is incomplete (an earlier install was cut off): installing it again`。最後のデータ確認でOpenClaw自身のファイルが欠けていると報告された場合（OpenClawパッケージ内のパスに対する `Cannot find module` または `Cannot find package`）、1回だけインストールし直します: `[WARN] OpenClaw <version> is missing some of its own files (an earlier install was cut off): installing it again`。どちらの場合もデータには手を付けません。今回の実行でインストールした後もOpenClawが不完全な場合、アップデートは `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).` を表示して停止します。
 - プラットフォーム固有のパッチを再適用
 - `openclaw update` ガード（`openclaw-shim.sh`）を更新し、`openclaw update`/`--update` のブロックを維持（Node.jsラッパーはOpenClaw自身のアップデート経路もブロックします）
 - `clawdhub`（スキルマネージャ）を更新／インストール

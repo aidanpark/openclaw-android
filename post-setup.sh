@@ -2151,17 +2151,60 @@ echo -e "\033[0;32m[OK]\033[0m   openclaw version guard installed ($OC_BIN)"
 OPENCLAW_SHIM_SH
 chmod +x "$OC_SHIM_GEN"
 
-# Converge to the pinned OpenClaw (same rule as platforms/openclaw/update.sh):
-# install it whenever the installed version differs, in either direction.
-OPENCLAW_DIR="$(npm root -g)/openclaw"
-OC_CURRENT=""
-if [ -f "$OPENCLAW_DIR/package.json" ]; then
-    OC_CURRENT=$(node -p "require('$OPENCLAW_DIR/package.json').version" 2>/dev/null || echo "")
-fi
-OC_INSTALLED=false
-if [ "$OC_CURRENT" = "$PLATFORM_NPM_PACKAGE_VERSION" ]; then
-    echo -e "  ${GREEN}[SKIP]${NC} OpenClaw $OC_CURRENT already installed (pinned version)"
-else
+# ─── openclaw complete check ───
+# oa_openclaw_incomplete [<package dir>] [fresh]: 0 when the installed OpenClaw package is incomplete.
+# An install that was cut off (the app closed, the system stopped the process) can leave package.json in place with
+# files missing (npm unpacks it first): the version alone then looks right, and OpenClaw does not start. Four signs:
+#  1. our own mark "$HOME/.openclaw-android/.openclaw-install-pending": every installer creates it just before npm
+#     runs and removes it only after the install, postinstall, patch and checks all went through. It stays when
+#     the run was cut off - also when OpenClaw was started meanwhile (starting it finishes the package's own
+#     lifecycle and erases sign 2, whatever is missing).
+#  2. the lifecycle-pending mark OpenClaw's package carries until its first start (".openclaw-lifecycle-pending",
+#     older: "dist/openclaw-install-guard") is still there. Looked at BEFORE openclaw runs, which erases it.
+#     For installs made before sign 1 existed.
+#  3. the hard-link patch (when its script is there) reports a MISSING file
+#  4. `openclaw.mjs --version` fails and says so ("lifecycle is incomplete", a module that cannot be found);
+#     tried twice. Any other failure (Node does not start, a hiccup) is no sign of it: the health check reports that.
+# "fresh" (the caller has just installed, its own marks are still there by design): signs 1 and 2 are not looked at.
+# (scripts/lib.sh and post-setup.sh carry the same function between these marks: a pre-commit check keeps them identical.)
+oa_openclaw_incomplete() {
+    local dir="${1:-$(npm root -g)/openclaw}" fresh="${2:-}" out rc try
+    local hl="$HOME/.openclaw-android/platforms/openclaw/patches/openclaw-patch-hardlink.sh"
+    [ -f "$dir/openclaw.mjs" ] || return 0
+    if [ "$fresh" != fresh ]; then
+        [ ! -e "$HOME/.openclaw-android/.openclaw-install-pending" ] || return 0
+        if [ -e "$dir/.openclaw-lifecycle-pending" ] || [ -e "$dir/dist/openclaw-install-guard" ]; then
+            return 0
+        fi
+    fi
+    if [ -f "$hl" ]; then
+        # (a node started through the glibc loader can hang when it ends: never wait for it without a limit)
+        out=$(timeout 120 bash "$hl" --check "$dir" 2>&1 || true)
+        case "$out" in *MISSING*) return 0 ;; esac
+    fi
+    for try in 1 2; do
+        rc=0
+        out=$(timeout 90 node "$dir/openclaw.mjs" --version 2>&1) || rc=$?
+        [ "$rc" -ne 0 ] || return 1
+        printf '%s' "$out" | grep -qE 'lifecycle is incomplete|ERR_MODULE_NOT_FOUND|Cannot find (package|module)' || return 1
+        [ "$try" -eq 2 ] || sleep 2
+    done
+    return 0
+}
+# ─── end openclaw complete check ───
+
+# Remove an incomplete package (a process still writing into the folder - a leftover npm - makes the first
+# try fail: once more after a moment)
+oa_openclaw_remove() {
+    rm -rf "$OPENCLAW_DIR" 2>/dev/null || { sleep 2; rm -rf "$OPENCLAW_DIR" || true; }
+}
+
+# Install the pinned OpenClaw (npm unpacks it; --ignore-scripts, then the package's postinstall by hand).
+# A package folder that is in the way must be removed by the caller. Stops the whole run when npm fails.
+oa_openclaw_install() {
+    # Our mark that an install is going on: made before npm starts, removed only when everything has passed
+    # (the run may be cut off anywhere in between: the next run then installs again)
+    touch "$OCA_DIR/.openclaw-install-pending" 2>/dev/null || true
     # Clean npm cache tmp dir (leftover from previous failed installs)
     rm -rf "$HOME/.npm/_cacache/tmp" 2>/dev/null || true
     # A leftover guard with no package behind it makes npm fail with EEXIST
@@ -2175,13 +2218,34 @@ else
     }
     OC_INSTALLED=true
     echo -e "  ${GREEN}✓${NC} OpenClaw $PLATFORM_NPM_PACKAGE_VERSION (${OC_CURRENT:-new install})"
-fi
+    # Run the package postinstall that --ignore-scripts skipped (prunes stale dist
+    # files, applies bundled hotfixes)
+    if [ -d "$OPENCLAW_DIR" ]; then
+        echo "  Running OpenClaw postinstall..."
+        (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
+    fi
+}
 
-# Run the package postinstall that --ignore-scripts skipped (prunes stale dist
-# files, applies bundled hotfixes) — only after a fresh package install.
-if [ "$OC_INSTALLED" = true ] && [ -d "$OPENCLAW_DIR" ]; then
-    echo "  Running OpenClaw postinstall..."
-    (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
+# Converge to the pinned OpenClaw (same rule as platforms/openclaw/update.sh):
+# install it whenever the installed version differs, in either direction.
+OPENCLAW_DIR="$(npm root -g)/openclaw"
+OC_CURRENT=""
+if [ -f "$OPENCLAW_DIR/package.json" ]; then
+    OC_CURRENT=$(node -p "require('$OPENCLAW_DIR/package.json').version" 2>/dev/null || echo "")
+fi
+# The version in package.json is not proof of a complete install: npm unpacks package.json first, so an
+# install cut off half way (the app closed or killed meanwhile, the usual reason for a re-run) leaves the
+# right version and missing files. An incomplete package is removed so that the install below replaces it whole.
+OC_INSTALLED=false
+if [ "$OC_CURRENT" = "$PLATFORM_NPM_PACKAGE_VERSION" ] && oa_openclaw_incomplete "$OPENCLAW_DIR"; then
+    echo -e "  ${YELLOW}[WARN]${NC} OpenClaw $OC_CURRENT is incomplete (an earlier install was cut off): installing it again"
+    oa_openclaw_remove
+    OC_CURRENT=""
+fi
+if [ "$OC_CURRENT" = "$PLATFORM_NPM_PACKAGE_VERSION" ]; then
+    echo -e "  ${GREEN}[SKIP]${NC} OpenClaw $OC_CURRENT already installed (pinned version)"
+else
+    oa_openclaw_install
 fi
 
 # Hard links are denied on Android: let OpenClaw copy instead (its data migration and file
@@ -2471,7 +2535,27 @@ exit 0
 OPENCLAW_HARDLINK_SH
 chmod +x "$OC_HL_GEN"
 _oa_hl_out="$TMPDIR/oa-hl-patch.out"
-bash "$OC_HL_GEN" | { tee "$_oa_hl_out" || true; } | sed 's/^/  /'
+oa_run_hardlink_patch() {
+    bash "$OC_HL_GEN" | { tee "$_oa_hl_out" || true; } | sed 's/^/  /'
+}
+oa_run_hardlink_patch
+# A package that npm left incomplete (files MISSING, or OpenClaw does not start) is no finished install:
+# install it once more; if it is still incomplete the run fails (never a "done" with a broken OpenClaw).
+if grep -q 'MISSING' "$_oa_hl_out" 2>/dev/null || oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
+    echo -e "  ${YELLOW}[WARN]${NC} OpenClaw $PLATFORM_NPM_PACKAGE_VERSION is incomplete after the install (files are missing or it does not start): installing it again"
+    oa_openclaw_remove
+    OC_CURRENT=""
+    oa_openclaw_install
+    oa_run_hardlink_patch
+    if grep -q 'MISSING' "$_oa_hl_out" 2>/dev/null || oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
+        echo -e "  ${RED}✗${NC} OpenClaw $PLATFORM_NPM_PACKAGE_VERSION is still incomplete (files are missing or it does not start). Restart the app to try again."
+        OA_TOOLS_ERROR=openclaw-incomplete
+        exit 1
+    fi
+fi
+# Installed, patched and checked: the install is whole (and the first start of OpenClaw may now erase the
+# package's own mark without hiding anything)
+rm -f "$OCA_DIR/.openclaw-install-pending"
 if grep -qE 'WARN|problems=[1-9]' "$_oa_hl_out" 2>/dev/null; then oa_warn hardlink-patch; fi
 rm -f "$_oa_hl_out"
 

@@ -191,6 +191,9 @@ internal object UpdateOutput {
             "Checksum mismatch for " to UpdateReason.CHECKSUM,
             // platforms/openclaw/update.sh:99
             "Could not install openclaw " to UpdateReason.INSTALL_FAILED,
+            // platforms/openclaw/update.sh:143 (v1.2.3) — "OpenClaw <ver> was installed but is incomplete
+            // (files are missing or it does not start)."; the script's own code there is npm_install
+            "was installed but is incomplete" to UpdateReason.INSTALL_FAILED,
             // scripts/install-nodejs.sh:588
             "Failed to extract Node.js" to UpdateReason.INSTALL_FAILED,
             // scripts/install-nodejs.sh:599

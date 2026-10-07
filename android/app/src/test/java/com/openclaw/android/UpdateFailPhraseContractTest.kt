@@ -85,6 +85,12 @@ internal class UpdateFailPhraseContractTest {
                 UpdateReason.CACHE_STALE,
             ),
             Quote("platforms/openclaw/update.sh", "Could not install openclaw §PIN_VER", UpdateReason.INSTALL_FAILED),
+            // v1.2.3: installed in this run, yet files missing or no start (the script's reason=npm_install)
+            Quote(
+                "platforms/openclaw/update.sh",
+                "OpenClaw §PIN_VER was installed but is incomplete (files are missing or it does not start).",
+                UpdateReason.INSTALL_FAILED,
+            ),
             Quote(
                 "platforms/openclaw/update.sh",
                 "OpenClaw §{PIN_VER} is installed, but the patch that moves your chat history is not in place:",

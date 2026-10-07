@@ -83,7 +83,7 @@ REPO_BASE="$REPO_BASE_ORIGIN"
 
 BASHRC_MARKER_START="# >>> OpenClaw on Android >>>"
 BASHRC_MARKER_END="# <<< OpenClaw on Android <<<"
-OA_VERSION="1.2.2"
+OA_VERSION="1.2.3"
 
 # ── Platform detection ──
 # 1. Explicit marker file (new install and after first update)
@@ -413,3 +413,45 @@ oa_repair_config_paths() {
     ' "$state" 2>&1 | tail -1) || out="error: node failed"
     echo "${out:-error: no answer}"
 }
+
+# ─── openclaw complete check ───
+# oa_openclaw_incomplete [<package dir>] [fresh]: 0 when the installed OpenClaw package is incomplete.
+# An install that was cut off (the app closed, the system stopped the process) can leave package.json in place with
+# files missing (npm unpacks it first): the version alone then looks right, and OpenClaw does not start. Four signs:
+#  1. our own mark "$HOME/.openclaw-android/.openclaw-install-pending": every installer creates it just before npm
+#     runs and removes it only after the install, postinstall, patch and checks all went through. It stays when
+#     the run was cut off - also when OpenClaw was started meanwhile (starting it finishes the package's own
+#     lifecycle and erases sign 2, whatever is missing).
+#  2. the lifecycle-pending mark OpenClaw's package carries until its first start (".openclaw-lifecycle-pending",
+#     older: "dist/openclaw-install-guard") is still there. Looked at BEFORE openclaw runs, which erases it.
+#     For installs made before sign 1 existed.
+#  3. the hard-link patch (when its script is there) reports a MISSING file
+#  4. `openclaw.mjs --version` fails and says so ("lifecycle is incomplete", a module that cannot be found);
+#     tried twice. Any other failure (Node does not start, a hiccup) is no sign of it: the health check reports that.
+# "fresh" (the caller has just installed, its own marks are still there by design): signs 1 and 2 are not looked at.
+# (scripts/lib.sh and post-setup.sh carry the same function between these marks: a pre-commit check keeps them identical.)
+oa_openclaw_incomplete() {
+    local dir="${1:-$(npm root -g)/openclaw}" fresh="${2:-}" out rc try
+    local hl="$HOME/.openclaw-android/platforms/openclaw/patches/openclaw-patch-hardlink.sh"
+    [ -f "$dir/openclaw.mjs" ] || return 0
+    if [ "$fresh" != fresh ]; then
+        [ ! -e "$HOME/.openclaw-android/.openclaw-install-pending" ] || return 0
+        if [ -e "$dir/.openclaw-lifecycle-pending" ] || [ -e "$dir/dist/openclaw-install-guard" ]; then
+            return 0
+        fi
+    fi
+    if [ -f "$hl" ]; then
+        # (a node started through the glibc loader can hang when it ends: never wait for it without a limit)
+        out=$(timeout 120 bash "$hl" --check "$dir" 2>&1 || true)
+        case "$out" in *MISSING*) return 0 ;; esac
+    fi
+    for try in 1 2; do
+        rc=0
+        out=$(timeout 90 node "$dir/openclaw.mjs" --version 2>&1) || rc=$?
+        [ "$rc" -ne 0 ] || return 1
+        printf '%s' "$out" | grep -qE 'lifecycle is incomplete|ERR_MODULE_NOT_FOUND|Cannot find (package|module)' || return 1
+        [ "$try" -eq 2 ] || sleep 2
+    done
+    return 0
+}
+# ─── end openclaw complete check ───

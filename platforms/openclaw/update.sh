@@ -52,6 +52,12 @@ if [ -f "$OPENCLAW_DIR/package.json" ]; then
     CURRENT_VER=$(node -p "require('$OPENCLAW_DIR/package.json').version" 2>/dev/null || echo "")
 fi
 OPENCLAW_UPDATED=false
+OC_REINSTALL=false
+OC_SPACE_CHECKED=false
+# Our own mark that an install of the package is under way (outside the package, which npm replaces): made
+# right before npm, removed only when the install and the checks after it have passed. While it is there the
+# package counts as incomplete, whatever it looks like (see oa_openclaw_incomplete in lib.sh).
+OC_PENDING_MARK="$PROJECT_DIR/.openclaw-install-pending"
 
 # Never go back to an older OpenClaw by accident: a newer release may already have
 # migrated the data, and the older one cannot be trusted to read it. (An old cached
@@ -84,17 +90,44 @@ if [ -n "$CURRENT_VER" ] && [ "$CURRENT_VER" != "$PIN_VER" ] && [ "${OA_ALLOW_UN
     fi
 fi
 
+# An install that was cut off can leave package.json in place with files missing (see oa_openclaw_incomplete in
+# lib.sh): the version alone then looks right. The program is installed again; the data is not touched.
+if [ "$CURRENT_VER" = "$PIN_VER" ] && oa_openclaw_incomplete "$OPENCLAW_DIR"; then
+    echo -e "${YELLOW}[WARN]${NC} openclaw $CURRENT_VER is incomplete (an earlier install was cut off): installing it again"
+    # Room first, then delete: a refusal after the delete would say "not changed" about a package that is gone.
+    # The incomplete package is taken away by the install, so what it holds counts as free.
+    OC_RECLAIM_MB=$({ du -sm "$OPENCLAW_DIR" 2>/dev/null || true; } | awk 'NR==1 {print $1}')
+    [[ "${OC_RECLAIM_MB:-}" =~ ^[0-9]+$ ]] || OC_RECLAIM_MB=0
+    OC_NEED_MB=$(( ${OA_MIN_FREE_UPDATE_MB:-2000} - OC_RECLAIM_MB ))
+    [ "$OC_NEED_MB" -ge 0 ] || OC_NEED_MB=0
+    if declare -f oa_check_free_space >/dev/null && ! oa_check_free_space "$OC_NEED_MB" "install OpenClaw $PIN_VER"; then
+        bash "$SCRIPT_DIR/openclaw-shim.sh" || true
+        echo "       OpenClaw was not changed (the incomplete copy is still there)."
+        oa_note reason=no_space changed=false
+        exit 1
+    fi
+    # (a process that is still writing into the folder makes the first try fail: once more after a moment)
+    rm -rf "$OPENCLAW_DIR" 2>/dev/null || { sleep 2; rm -rf "$OPENCLAW_DIR" || true; }
+    CURRENT_VER=""
+    OC_REINSTALL=true
+    OC_SPACE_CHECKED=true   # the install below must not ask again: the folder is gone, "nothing was changed" would be false
+fi
+
 if [ "$CURRENT_VER" = "$PIN_VER" ]; then
     echo -e "${GREEN}[OK]${NC}   openclaw $CURRENT_VER matches the pinned version"
 else
     # Defense in depth (update-core.sh checks first): never start the install without room
-    if declare -f oa_check_free_space >/dev/null && ! oa_check_free_space "${OA_MIN_FREE_UPDATE_MB:-2000}" "install OpenClaw $PIN_VER"; then
+    if [ "$OC_SPACE_CHECKED" != true ] && declare -f oa_check_free_space >/dev/null && ! oa_check_free_space "${OA_MIN_FREE_UPDATE_MB:-2000}" "install OpenClaw $PIN_VER"; then
         bash "$SCRIPT_DIR/openclaw-shim.sh" || true
         echo "       OpenClaw was not changed."
         oa_note reason=no_space changed=false
         exit 1
     fi
-    echo "Installing pinned openclaw... (${CURRENT_VER:-none} → $PIN_VER)"
+    if [ "$OC_REINSTALL" = true ]; then
+        echo "Installing pinned openclaw... (installing $PIN_VER again)"
+    else
+        echo "Installing pinned openclaw... (${CURRENT_VER:-none} → $PIN_VER)"
+    fi
     echo "  (This may take several minutes depending on network speed)"
     # A leftover version guard with no package behind it (a plain file, not an
     # npm link) makes npm fail with EEXIST. When the package exists npm replaces
@@ -102,6 +135,7 @@ else
     if [ ! -f "$OPENCLAW_DIR/package.json" ] && [ -e "$PREFIX/bin/openclaw" ] && [ ! -L "$PREFIX/bin/openclaw" ]; then
         rm -f "$PREFIX/bin/openclaw"
     fi
+    touch "$OC_PENDING_MARK" 2>/dev/null || true
     if npm install -g "$PLATFORM_NPM_PACKAGE@$PIN_VER" --no-fund --no-audit --ignore-scripts; then
         echo -e "${GREEN}[OK]${NC}   openclaw $PIN_VER installed"
         OPENCLAW_UPDATED=true
@@ -124,7 +158,86 @@ if [ "$OPENCLAW_UPDATED" = true ] && [ -d "$OPENCLAW_DIR" ]; then
     (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
 fi
 
+# Installed in this run, yet incomplete (files missing, or OpenClaw does not start): that is no finished update.
+# Looked at before the patches are applied: with files missing the patch step would only report that "this
+# OpenClaw version does not match the patch", which is not the cause. (Our own mark stays until this is over.)
+oc_install_failed() {
+    bash "$SCRIPT_DIR/openclaw-shim.sh" || true
+    echo -e "${RED}[FAIL]${NC} OpenClaw $PIN_VER was installed but is incomplete (files are missing or it does not start)."
+    echo "       Your data is untouched. Run: oa --update"
+    oa_note reason=npm_install changed=true
+    exit 1
+}
+if [ "$OPENCLAW_UPDATED" = true ] && oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
+    oc_install_failed
+fi
+
+# A "cannot find module" line that points into the OpenClaw package. Node prints real paths: a link in the path to
+# the package (a folder reached through a symbolic link) makes the plain path differ, so both are compared.
+oc_module_missing_in_package() {
+    local real lines
+    lines=$(printf '%s\n' "$1" | grep -E 'Cannot find (module|package)|ERR_MODULE_NOT_FOUND' || true)
+    [ -n "$lines" ] || return 1
+    printf '%s\n' "$lines" | grep -qF "$OPENCLAW_DIR" && return 0
+    real=$(cd "$OPENCLAW_DIR" 2>/dev/null && pwd -P) || return 1
+    printf '%s\n' "$lines" | grep -qF "$real"
+}
+
+# Install the package again, from the health check below (an install cut off in the past leaves no mark of ours,
+# and its files are missing: the check then fails with "Cannot find module"). The same steps as above, in this
+# order: room (what the package holds counts as free), delete, install, postinstall, the checks, the patches.
+oc_reinstall() {
+    local reclaim need
+    reclaim=$({ du -sm "$OPENCLAW_DIR" 2>/dev/null || true; } | awk 'NR==1 {print $1}')
+    [[ "${reclaim:-}" =~ ^[0-9]+$ ]] || reclaim=0
+    need=$(( ${OA_MIN_FREE_UPDATE_MB:-2000} - reclaim ))
+    [ "$need" -ge 0 ] || need=0
+    if declare -f oa_check_free_space >/dev/null && ! oa_check_free_space "$need" "install OpenClaw $PIN_VER"; then
+        echo "       OpenClaw was not changed (the incomplete copy is still there)."
+        oa_note reason=no_space changed=false
+        exit 1
+    fi
+    echo "Installing pinned openclaw... (installing $PIN_VER again)"
+    rm -rf "$OPENCLAW_DIR" 2>/dev/null || { sleep 2; rm -rf "$OPENCLAW_DIR" || true; }
+    if [ ! -f "$OPENCLAW_DIR/package.json" ] && [ -e "$PREFIX/bin/openclaw" ] && [ ! -L "$PREFIX/bin/openclaw" ]; then
+        rm -f "$PREFIX/bin/openclaw"
+    fi
+    touch "$OC_PENDING_MARK" 2>/dev/null || true
+    if ! npm install -g "$PLATFORM_NPM_PACKAGE@$PIN_VER" --no-fund --no-audit --ignore-scripts; then
+        bash "$SCRIPT_DIR/openclaw-shim.sh" || true
+        echo -e "${RED}[FAIL]${NC} Could not install openclaw $PIN_VER"
+        echo "       Check your network and run: oa --update"
+        oa_note reason=npm_install changed=true
+        exit 1
+    fi
+    echo -e "${GREEN}[OK]${NC}   openclaw $PIN_VER installed"
+    OPENCLAW_UPDATED=true
+    echo "Running OpenClaw postinstall..."
+    (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
+    if oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
+        oc_install_failed
+    fi
+    bash "$SCRIPT_DIR/patches/openclaw-apply-patches.sh"
+    # (the output goes into a variable first: --check ends with status 3 on a MISSING, which would make the
+    # pipe false under pipefail)
+    OC_HL_CHECK=$(timeout 120 bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check 2>&1 || true)
+    if printf '%s' "$OC_HL_CHECK" | grep -q 'MISSING' || oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
+        oc_install_failed
+    fi
+    bash "$SCRIPT_DIR/openclaw-shim.sh"
+    rm -f "$OC_PENDING_MARK" 2>/dev/null || true
+}
+
 bash "$SCRIPT_DIR/patches/openclaw-apply-patches.sh"
+
+if [ "$OPENCLAW_UPDATED" = true ]; then
+    OC_HL_CHECK=$(timeout 120 bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check 2>&1 || true)
+    if printf '%s' "$OC_HL_CHECK" | grep -q 'MISSING' || oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
+        oc_install_failed
+    fi
+fi
+# the install and everything checked after it went through: the mark goes
+rm -f "$OC_PENDING_MARK" 2>/dev/null || true
 
 # Always re-check the `openclaw update` guard — a manual `npm install -g openclaw`
 # or the app's platform installer replaces $PREFIX/bin/openclaw.
@@ -228,6 +341,18 @@ if [ -f "${PLATFORM_DATA_DIR:-$HOME/.openclaw}/openclaw.json" ] && command -v op
     # before, with the way out that goes with it.
     if [ "$OC_HEALTH_RC" -eq 3 ] && [ "$OPENCLAW_UPDATED" = true ]; then
         OC_HEALTH_RC=1
+    fi
+    # The check fails because OpenClaw's own files are missing ("Cannot find module/package", with a path inside
+    # the OpenClaw package: a module of a plugin or skill of the user lies elsewhere and does not count): the
+    # install was cut off at some time, before our mark existed. Once, and only when this run did not install
+    # the package already: install it again and look again. The data is not touched.
+    if [ "$OC_HEALTH_RC" -eq 1 ] && [ "$OPENCLAW_UPDATED" != true ] \
+        && oc_module_missing_in_package "$OC_CHECK_OUT"; then
+        echo -e "${YELLOW}[WARN]${NC} OpenClaw $PIN_VER is missing some of its own files (an earlier install was cut off): installing it again"
+        oc_reinstall
+        OC_HEALTH_RC=0
+        oc_health_check || OC_HEALTH_RC=$?
+        if [ "$OC_HEALTH_RC" -eq 3 ]; then OC_HEALTH_RC=1; fi
     fi
 fi
 if [ "$OC_HEALTH_RC" -eq 0 ] && [ -f "${PLATFORM_DATA_DIR:-$HOME/.openclaw}/openclaw.json" ] && command -v openclaw &>/dev/null; then

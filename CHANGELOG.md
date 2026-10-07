@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.2.3] - 2026-10-07
+
+### Fixed
+
+- An OpenClaw install that was cut off (for example, when the Claw app was closed or Android stopped it while npm was unpacking OpenClaw) was treated as installed, because only the version number was checked. Running the setup again or `oa --update` skipped OpenClaw, and the setup could finish as complete although OpenClaw did not start ("package lifecycle is incomplete") or some of its files were missing. The setup and `oa --update` now mark an OpenClaw install as in progress until it has been checked, and install OpenClaw again when an earlier install did not finish; your data is not touched. `oa --update` also installs OpenClaw again once when its data check reports that OpenClaw's own files are missing (an install cut off before this version). If OpenClaw is still incomplete after that, the setup and `oa --update` stop with an error instead of reporting success. The Termux installer stops with an error when the new install is incomplete.
 ## [App v0.4.4] - 2026-10-07
 
 ### Added

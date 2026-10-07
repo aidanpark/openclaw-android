@@ -162,6 +162,35 @@ source ~/.bashrc
 
 또는 Termux 앱을 완전히 종료했다가 다시 여세요.
 
+### 원인: 이전 설치 또는 업데이트가 중간에 끊김
+
+출력에 `package lifecycle is incomplete` 가 있거나, OpenClaw 패키지 안의 경로에 대한 `Cannot find module` 또는 `Cannot find package` 가 있으면 환경변수는 원인이 아닙니다. 이전 설치 또는 업데이트가 중간에 끊겨(예: npm 이 OpenClaw 를 풀어 넣는 동안 앱이 닫혔거나 Android 가 앱을 종료함) OpenClaw 자체 파일 일부가 없는 상태입니다.
+
+### 해결 방법: OpenClaw 다시 설치
+
+```bash
+oa --update
+```
+
+Script v1.2.3 부터 `oa --update` 는 불완전한 OpenClaw 를 감지하여 버전이 고정 버전과 같아도 다시 설치합니다. 데이터는 건드리지 않습니다. Claw 앱에서는 설정 → 설치·갱신(Settings → Install & Update) 화면을 열어 업데이트를 실행하세요.
+
+## `[FAIL] OpenClaw … was installed but is incomplete …`
+
+```
+[FAIL] OpenClaw 2026.9.8 was installed but is incomplete (files are missing or it does not start).
+       Your data is untouched. Run: oa --update
+```
+
+Termux 설치 프로그램은 같은 `[FAIL]` 줄 뒤에 `Run the installer again.` 를 표시합니다. Claw 앱에서는 설정이 `OpenClaw 2026.9.8 is still incomplete (files are missing or it does not start). Restart the app to try again.` 와 함께 중단됩니다.
+
+### 원인
+
+npm 오류 없이 설치가 끝났지만 OpenClaw 패키지가 불완전한 상태입니다. 파일이 없거나 OpenClaw 가 시작되지 않습니다. 저장 공간 부족, 또는 npm 이 내려받는 동안 네트워크 연결이 끊긴 경우를 생각할 수 있으며, 스크립트는 어느 쪽인지 판별하지 않았습니다.
+
+### 해결 방법
+
+저장 공간([“Not enough free storage”](#not-enough-free-storage) 참고)과 네트워크 연결을 확인한 뒤 `oa --update` 를 다시 실행하세요. Claw 앱에서는 앱을 다시 시작하거나, 설정 → 설치·갱신 화면을 열어 업데이트를 실행하세요. 데이터는 건드리지 않습니다. 같은 메시지가 다시 나타나면 출력을 첨부해 [이슈](https://github.com/AidanPark/openclaw-android/issues)를 남겨 주세요.
+
 ## "Cannot find module glibc-compat.js" 에러
 
 ```

@@ -162,6 +162,35 @@ source ~/.bashrc
 
 Or fully close and reopen the Termux app.
 
+### Cause: an earlier install or update was cut off
+
+If the output contains `package lifecycle is incomplete`, or `Cannot find module` or `Cannot find package` with a path inside the OpenClaw package, the environment variables are not the problem. An earlier install or update was cut off (for example, the app was closed or Android stopped it while npm was unpacking OpenClaw), and some of OpenClaw's own files are missing.
+
+### Solution: install OpenClaw again
+
+```bash
+oa --update
+```
+
+From Script v1.2.3 on, `oa --update` detects an incomplete OpenClaw and installs it again, even when the version is the pinned one. Your data is not touched. In the Claw app, open Settings → Install & Update and run the update there.
+
+## `[FAIL] OpenClaw … was installed but is incomplete …`
+
+```
+[FAIL] OpenClaw 2026.9.8 was installed but is incomplete (files are missing or it does not start).
+       Your data is untouched. Run: oa --update
+```
+
+The Termux installer prints the same `[FAIL]` line followed by `Run the installer again.` In the Claw app, the setup stops with `OpenClaw 2026.9.8 is still incomplete (files are missing or it does not start). Restart the app to try again.`
+
+### Cause
+
+The install ended without an npm error, yet the OpenClaw package is incomplete: files are missing, or OpenClaw does not start. Possible reasons are too little free storage or a network connection that broke off while npm was downloading. The script has not determined which one applies.
+
+### Solution
+
+Check the free storage (see ["Not enough free storage"](#not-enough-free-storage)) and the network connection, then run `oa --update` again. In the Claw app, restart the app, or open Settings → Install & Update and run the update. Your data is not touched. If the message appears again, please [open an issue](https://github.com/AidanPark/openclaw-android/issues) with the output.
+
 ## "Cannot find module glibc-compat.js" error
 
 ```

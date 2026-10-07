@@ -525,6 +525,8 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 9. `clawdhub` (스킬 매니저) 및 필요 시 `undici` 의존성 설치
 10. 게이트웨이의 "update available" 알림 끄기(`openclaw config set update.checkOnStart false`) — 이미 직접 설정한 값이 있으면 그대로 둠
 
+**이전 설치가 중간에 끊긴 경우:** 설치 스크립트는 설치가 진행 중임을 기록하고, 설치·postinstall·패치·확인이 모두 통과한 뒤에만 그 기록을 삭제합니다. 설치 후에도 OpenClaw 가 불완전하면 Termux 설치 프로그램은 `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).` 와 `Run the installer again.` 를 표시하고 중단합니다. Claw 앱의 설정 스크립트(`post-setup.sh`)는 끝나지 않은 이전 설치를 감지하여(`[WARN] OpenClaw <version> is incomplete (an earlier install was cut off): installing it again`) 버전이 같아도 OpenClaw 를 다시 설치하며, 데이터는 건드리지 않습니다. 그 뒤에도 OpenClaw 가 불완전하면 설정은 다음 오류와 함께 중단됩니다: `OpenClaw <version> is still incomplete (files are missing or it does not start). Restart the app to try again.`
+
 **[6.5] 환경변수 + CLI + 마커:**
 
 플랫폼 설치 후 오케스트레이터가:
@@ -634,6 +636,7 @@ GitHub에서 전체 저장소 tarball을 다운로드하고 임시 디렉토리�
 - `binutils` 설치 (네이티브 모듈 빌드용)
 - 안전장치로 Node.js 고정 버전을 재확인 (방어적 이중 확인 — [3/5]에서 이미 게이트를 거침)
 - `openclaw`을 고정 버전으로 수렴 — 설치된 버전이 더 낮으면 고정 버전을 설치. `OA_ALLOW_OPENCLAW_DOWNGRADE=1` 을 설정하지 않으면 OpenClaw 를 더 낮은 버전으로 내리지 않음
+- OpenClaw 가 불완전하면(이전 설치가 중간에 끊겨 버전은 맞지만 파일이 빠진 상태) 버전이 고정 버전과 같아도 다시 설치합니다: `[WARN] openclaw <version> is incomplete (an earlier install was cut off): installing it again`. 마지막 데이터 확인에서 OpenClaw 자체의 파일이 없다고 보고하면(OpenClaw 패키지 안의 경로에 대한 `Cannot find module` 또는 `Cannot find package`) 한 번 다시 설치합니다: `[WARN] OpenClaw <version> is missing some of its own files (an earlier install was cut off): installing it again`. 어느 경우에도 데이터는 건드리지 않습니다. 이번 실행에서 설치한 뒤에도 OpenClaw 가 불완전하면 `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).` 를 표시하고 업데이트를 중단합니다.
 - 플랫폼별 패치 재적용
 - `openclaw update` 가드(`openclaw-shim.sh`) 갱신 — `openclaw update`/`--update`가 계속 차단되도록 유지 (Node.js 래퍼는 OpenClaw 의 자체 업데이트 경로도 차단)
 - `clawdhub` (스킬 매니저) 업데이트/설치

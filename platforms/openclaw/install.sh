@@ -42,6 +42,12 @@ if [ -e "$PREFIX/bin/openclaw" ] && [ ! -L "$PREFIX/bin/openclaw" ]; then
     rm -f "$PREFIX/bin/openclaw"
 fi
 
+# Our own mark that the install is under way (outside the package, which npm replaces): removed only after the
+# checks below have passed; while it is there the package counts as incomplete (see oa_openclaw_incomplete in lib.sh)
+OC_PENDING_MARK="$PROJECT_DIR/.openclaw-install-pending"
+mkdir -p "$PROJECT_DIR" 2>/dev/null || true
+touch "$OC_PENDING_MARK" 2>/dev/null || true
+
 echo "Running: npm install -g $OC_PIN --ignore-scripts"
 echo "This may take several minutes..."
 echo ""
@@ -59,7 +65,21 @@ if [ -d "$OPENCLAW_DIR" ]; then
     (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
 fi
 
+# npm exited 0, yet the package could be incomplete (a cut-off install): say so instead of finishing. Looked at
+# before the patches are applied: with files missing the patch step would only report that "this OpenClaw
+# version does not match the patch", which is not the cause. The patch script of this folder is asked
+# directly (a copy under ~/.openclaw-android may be missing or an older one).
+OC_HL_CHECK=$(timeout 120 bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check 2>&1 || true)
+if printf '%s' "$OC_HL_CHECK" | grep -q 'MISSING' || oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
+    echo -e "${RED}[FAIL]${NC} OpenClaw $PLATFORM_NPM_PACKAGE_VERSION was installed but is incomplete (files are missing or it does not start)."
+    echo "       Run the installer again."
+    exit 1
+fi
+
 bash "$SCRIPT_DIR/patches/openclaw-apply-patches.sh"
+
+# the install and everything checked after it went through: the mark goes
+rm -f "$OC_PENDING_MARK" 2>/dev/null || true
 
 # Block `openclaw update` so the pin holds (npm just rewrote $PREFIX/bin/openclaw)
 bash "$SCRIPT_DIR/openclaw-shim.sh"

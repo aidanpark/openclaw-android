@@ -298,4 +298,30 @@ if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$RL_A" -e "$RL_B"; then
     fi
 fi
 
+# --- openclaw complete check: scripts/lib.sh == post-setup.sh (post-setup runs alone, without lib.sh) ---
+
+OC_A="scripts/lib.sh"
+OC_B="post-setup.sh"
+if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$OC_A" -e "$OC_B"; then
+    oc_body() {
+        git show ":$1" 2>/dev/null | awk '
+            /^# ─── openclaw complete check ───$/      {m=1; next}
+            /^# ─── end openclaw complete check ───$/  {m=0}
+            m                                           {print}'
+    }
+    oc_has_end() {
+        git show ":$1" 2>/dev/null | grep -qE '^# ─── end openclaw complete check ───$'
+    }
+    OCA_BODY=$(oc_body "$OC_A")
+    OCB_BODY=$(oc_body "$OC_B")
+    if [ -z "$OCA_BODY" ] || [ -z "$OCB_BODY" ] || [ "$OCA_BODY" != "$OCB_BODY" ] || ! oc_has_end "$OC_A" || ! oc_has_end "$OC_B"; then
+        echo ""
+        echo "ERROR: openclaw complete check mismatch"
+        echo "  The function between the '# ─── openclaw complete check ───' and"
+        echo "  '# ─── end openclaw complete check ───' marks in $OC_A and $OC_B must be identical and"
+        echo "  non-empty (oa_openclaw_incomplete: lib.sh is the original, post-setup.sh runs without it)."
+        exit 1
+    fi
+fi
+
 echo "All checks passed."

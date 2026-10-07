@@ -9,7 +9,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.2.2"
+OA_VERSION="1.2.3"
 # Marks this updater as the current protocol for the scripts it runs from the downloaded copy
 # (install-nodejs.sh and platforms/*/update.sh refuse a version change without it: a cached older
 # update-core.sh must not combine with a newer download).

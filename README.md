@@ -525,6 +525,8 @@ Delegates to the platform's own install script. For OpenClaw, this:
 9. Installs `clawdhub` (skill manager) and `undici` dependency if needed
 10. Turns off the gateway's "update available" notice (`openclaw config set update.checkOnStart false`), unless you already set that value yourself
 
+**If an earlier install was cut off:** the installers record that an install is under way and remove that record only after the install, the postinstall, the patches and the checks have all passed. When OpenClaw is incomplete after the install, the Termux installer stops with `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).` followed by `Run the installer again.` The Claw app's setup (`post-setup.sh`) detects an unfinished earlier install (`[WARN] OpenClaw <version> is incomplete (an earlier install was cut off): installing it again`) and installs OpenClaw again even when the version matches; your data is not touched. If OpenClaw is still incomplete after that, the setup stops with an error: `OpenClaw <version> is still incomplete (files are missing or it does not start). Restart the app to try again.`
+
 **[6.5] Environment Variables + CLI + Marker:**
 
 After platform install, the orchestrator:
@@ -634,6 +636,7 @@ Delegates to `platforms/<platform>/update.sh`. For OpenClaw, this:
 - Installs `binutils` (for native module builds)
 - Re-checks the Node.js pin as a safety net (defense in depth — [3/5] already gates on this)
 - Converges `openclaw` to the pinned version — installs it when the installed version is lower. It never moves OpenClaw to a lower version unless `OA_ALLOW_OPENCLAW_DOWNGRADE=1` is set
+- If OpenClaw is incomplete (an earlier install was cut off, so files are missing although the version matches), installs it again even when the version is the pinned one: `[WARN] openclaw <version> is incomplete (an earlier install was cut off): installing it again`. If the final data check reports that OpenClaw's own files are missing (`Cannot find module` or `Cannot find package` with a path inside the OpenClaw package), installs it again once: `[WARN] OpenClaw <version> is missing some of its own files (an earlier install was cut off): installing it again`. Your data is not touched in either case. If OpenClaw is still incomplete after an install in this run, the update stops with `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).`
 - Re-applies platform-specific patches
 - Refreshes the `openclaw update` guard (`openclaw-shim.sh`) so `openclaw update`/`--update` stay blocked (the Node.js wrapper blocks OpenClaw's own update paths as well)
 - Updates/installs `clawdhub` (skill manager)

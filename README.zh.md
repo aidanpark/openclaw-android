@@ -530,6 +530,8 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 9. 安装 `clawdhub`（技能管理器）以及 `undici` 依赖（如需要）
 10. 关闭网关的 "update available" 提示（`openclaw config set update.checkOnStart false`），除非你已自行设置过该值
 
+**如果之前的安装被中断：** 安装程序会记录安装正在进行，并且只有在安装、postinstall、补丁和检查全部通过之后才删除该记录。安装后如果 OpenClaw 仍不完整，Termux 安装程序会输出 `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).` 和 `Run the installer again.` 并停止。Claw 应用的设置脚本（`post-setup.sh`）会检测到未完成的先前安装（`[WARN] OpenClaw <version> is incomplete (an earlier install was cut off): installing it again`），即使版本相同也会重新安装 OpenClaw；不会触及你的数据。如果之后 OpenClaw 仍不完整，设置会以如下错误停止：`OpenClaw <version> is still incomplete (files are missing or it does not start). Restart the app to try again.`
+
 **[6.5] 环境变量 + CLI + 标记文件：**
 
 平台安装后，编排器会：
@@ -641,6 +643,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 - 安装 `binutils`（用于原生模块构建）
 - 再次检查 Node.js 锁定版本作为安全网（纵深防御——[3/5] 已经做过门控）
 - 将 `openclaw` 收敛到锁定版本——已安装版本更低时安装锁定版本。除非设置 `OA_ALLOW_OPENCLAW_DOWNGRADE=1`，否则不会把 OpenClaw 降到更低的版本
+- 如果 OpenClaw 不完整（先前的安装被中断，版本一致但缺少文件），即使版本已是锁定版本也会重新安装：`[WARN] openclaw <version> is incomplete (an earlier install was cut off): installing it again`。如果最后的数据检查报告 OpenClaw 自身的文件缺失（路径位于 OpenClaw 包内的 `Cannot find module` 或 `Cannot find package`），则重新安装一次：`[WARN] OpenClaw <version> is missing some of its own files (an earlier install was cut off): installing it again`。两种情况下都不会触及你的数据。如果本次运行安装之后 OpenClaw 仍不完整，更新会输出 `[FAIL] OpenClaw <version> was installed but is incomplete (files are missing or it does not start).` 并停止。
 - 重新应用平台特定补丁
 - 刷新 `openclaw update` 守卫（`openclaw-shim.sh`），保持 `openclaw update`/`--update` 持续被阻止（Node.js 包装器也会阻止 OpenClaw 自身的更新途径）
 - 更新/安装 `clawdhub`（技能管理器）

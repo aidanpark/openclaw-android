@@ -599,9 +599,12 @@ internal class SetupScreenBehaviorTest {
             |const esbuild = createRequire(import.meta.url)(esbuildMain)
             |const stub = n => path.join(work, n)
             |fs.writeFileSync(stub('fake-react-setup.mjs'), "export * from './fake-react.mjs'\nexport const Fragment = 'fragment'\n")
+            |// The page shown again (useVisibleAgain): the scenarios send it as emit('webview_shown')
+            |fs.writeFileSync(stub('stub-setup-visible-again.mjs'), "export function useVisibleAgain(fn) { globalThis.__fr.listeners['webview_shown'] = fn }\n")
             |const stubs = {
             |  'react': stub('fake-react-setup.mjs'),
             |  '../lib/useNativeEvent': stub('stub-native-event.mjs'),
+            |  '../lib/useVisibleAgain': stub('stub-setup-visible-again.mjs'),
             |  '../components/ConfirmCard': stub('stub-confirm-card.mjs'),
             |  '../i18n': stub('stub-i18n.mjs'),
             |  'real-i18n-en': path.join(wwwSrc, 'i18n/en.ts'),

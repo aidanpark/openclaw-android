@@ -335,6 +335,8 @@ fi
 OC_HEALTHY=true
 OC_HEALTH_RC=0
 if [ -f "${PLATFORM_DATA_DIR:-$HOME/.openclaw}/openclaw.json" ] && command -v openclaw &>/dev/null; then
+    # (a plain line, no [WARN]/[FAIL]/[N/5] form: the check is silent and takes long on a phone)
+    echo "Checking that OpenClaw can use your data... (this can take about a minute)"
     oc_health_check || OC_HEALTH_RC=$?
     # A data migration may be due after a new OpenClaw was installed in this run: that must not be skipped as
     # "busy" (the update would end with status 0 and an OpenClaw that cannot start). It stays a failure, as

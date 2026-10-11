@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, Fragment, type CSSProperties } from 'react'
 import { bridge } from '../lib/bridge'
 import { useNativeEvent } from '../lib/useNativeEvent'
+import { useVisibleAgain } from '../lib/useVisibleAgain'
 import { routeFor, type SetupStatus, type BootstrapState } from '../lib/setupRoute'
 import {
   SETUP_KIND,
@@ -276,20 +277,27 @@ export function Setup({ onComplete }: Props) {
     setPhase('resume')
   }, [])
 
-  // The page is shown again after the terminal (MainActivity.showWebView): the script may have been
-  // refreshed meanwhile, so what the resume screen offers is read again. An install the terminal
-  // finished meanwhile (the marker is there) leaves the resume screen the way the terminal flow
-  // always left the setup page: to the dashboard (the script ran the onboarding itself). A failure
-  // screen whose install was finished meanwhile leaves the same way (and so no longer offers
-  // 「Reinstall the base system」).
+  // Drawn again when the page is shown again: renderReinstall reads the marker at each render
+  const [, setShownCount] = useState(0)
+
+  // The page is shown again (useVisibleAgain: back from the terminal, back to the app after HOME,
+  // the notification shade or a system screen): the script may have been refreshed meanwhile, so
+  // what the resume screen offers is read again. An install the terminal finished meanwhile (the
+  // marker is there) leaves the resume screen the way the terminal flow always left the setup page:
+  // to the dashboard (the script ran the onboarding itself). A failure screen whose install was
+  // finished meanwhile leaves the same way (and so no longer offers 「Reinstall the base system」).
+  // Only these two screens wait for something done elsewhere: the wizard, the preparing screen and
+  // the install screens are left alone.
   const onWebViewShown = useCallback(() => {
+    const shown = phaseRef.current
+    if (shown !== 'resume' && shown !== 'run-failed') return
     setSetupResult(readSetupResult())
     setLastRun(readLastSetupRun())
-    const shown = phaseRef.current
-    if ((shown === 'resume' || shown === 'run-failed') && setupMarkerPresent()) leaveFinishedElsewhere()
+    setShownCount(n => n + 1)
+    if (setupMarkerPresent()) leaveFinishedElsewhere()
   }, [leaveFinishedElsewhere])
 
-  useNativeEvent('webview_shown', onWebViewShown)
+  useVisibleAgain(onWebViewShown)
 
   const showRunEnd = useCallback((d: SetupRunEvent) => {
     // No bash, or the refreshed script cannot run as a managed run: the terminal installs it, as before

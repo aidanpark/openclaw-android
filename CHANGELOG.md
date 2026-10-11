@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [App v0.4.6] - 2026-10-11
+
+### Fixed
+
+- When an install was finished in the terminal while the continue or failure screen was open, going back to the app with the Home button, from the notification shade, from the recent apps screen or after unlocking the phone left that screen in place; it showed the dashboard only after going back from the app's terminal. The screen now checks again whenever you go back to the app and opens the dashboard.
+
+## [Script v1.2.4] - 2026-10-11
+
+### Changed
+
+- `oa --update` no longer rewrites more than a hundred OpenClaw files on every run to patch `/tmp` paths: only files that still contain an unpatched `/tmp` path are changed, so an update that does not reinstall OpenClaw skips most of this step (on a test phone, about 24 seconds before and about 4 seconds now). The patched files are the same as before.
+- `oa --update` now says `Checking that OpenClaw can use your data... (this can take about a minute)` before its data check, which is silent and can take a minute on a phone.
+
 ## [App v0.4.5] - 2026-10-07
 
 ### Added
@@ -30,6 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - An OpenClaw install that was cut off (for example, when the Claw app was closed or Android stopped it while npm was unpacking OpenClaw) was treated as installed, because only the version number was checked. Running the setup again or `oa --update` skipped OpenClaw, and the setup could finish as complete although OpenClaw did not start ("package lifecycle is incomplete") or some of its files were missing. The setup and `oa --update` now mark an OpenClaw install as in progress until it has been checked, and install OpenClaw again when an earlier install did not finish; your data is not touched. `oa --update` also installs OpenClaw again once when its data check reports that OpenClaw's own files are missing (an install cut off before this version). If OpenClaw is still incomplete after that, the setup and `oa --update` stop with an error instead of reporting success. The Termux installer stops with an error when the new install is incomplete.
+
 ## [App v0.4.4] - 2026-10-07
 
 ### Added

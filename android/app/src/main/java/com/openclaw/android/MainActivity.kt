@@ -298,6 +298,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // --- Back to the app (HOME and return, the notification shade, a system screen) ---
+
+    /**
+     * The window was left since the page was last told it is shown: the Activity paused (HOME, the
+     * recents screen, a system screen opened from the app) or the window lost the focus without a
+     * pause (the notification shade pulled down, a system dialog). The WebView is never paused here
+     * (no WebView.onPause), so the page cannot count on visibilitychange or focus for this.
+     */
+    private var leftWindow = false
+
+    override fun onPause() {
+        super.onPause()
+        leftWindow = true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        onBackToWindow()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) onBackToWindow() else leftWindow = true
+    }
+
+    /**
+     * One `webview_shown` per return: HOME → back brings onResume and then the focus, the shade only
+     * the focus; whichever comes first sends it and clears [leftWindow]. Not on the first start (the
+     * page reads its state when it mounts), and not while the terminal is in front (leaving the
+     * terminal sends it, [showWebView]).
+     */
+    private fun onBackToWindow() {
+        if (!leftWindow) return
+        leftWindow = false
+        if (binding.webView.visibility == View.VISIBLE) eventBridge.emit("webview_shown", emptyMap<String, Any>())
+    }
+
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
         if (binding.terminalContainer.visibility == View.VISIBLE) {

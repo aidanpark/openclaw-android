@@ -71,6 +71,22 @@ internal class VisibleAgainHookTest {
     }
 
     @Test
+    fun `native webview_shown calls even while the document says hidden, focus and visibilitychange do not`() {
+        assertEquals(0, num("hiddenSources", "focusHidden"), "focus while hidden called")
+        assertEquals(
+            1,
+            num("hiddenSources", "nativeHidden"),
+            "native webview_shown was gated by the document's visibility",
+        )
+        assertEquals(
+            1,
+            num("hiddenSources", "coalescedAfterNative"),
+            "the DOM events right after native were a second return",
+        )
+        assertEquals(2, num("hiddenSources", "later"))
+    }
+
+    @Test
     fun `the newest callback is the one called`() {
         assertEquals(listOf("second"), list("latest", "called"))
     }
@@ -210,6 +226,27 @@ internal class VisibleAgainHookTest {
             |    d.visibilityState = 'visible'
             |    d.fire('visibilitychange')
             |    return { whileHidden, afterVisible: n }
+            |  },
+            |  hiddenSources() {
+            |    // focus while hidden is skipped like visibilitychange; native webview_shown is not asked
+            |    // about the document (it may not have caught up when native sends it)
+            |    const { d, w } = dom()
+            |    let n = 0
+            |    mount(() => { n++ })
+            |    d.visibilityState = 'hidden'
+            |    w.fire('focus')
+            |    const focusHidden = n
+            |    now += 1000
+            |    w.fire('native:webview_shown')
+            |    const nativeHidden = n
+            |    // within 300 ms of that call: a DOM event made visible is the same return
+            |    now += 100
+            |    d.visibilityState = 'visible'
+            |    d.fire('visibilitychange'); w.fire('focus')
+            |    const coalescedAfterNative = n
+            |    now += 300
+            |    w.fire('focus')
+            |    return { focusHidden, nativeHidden, coalescedAfterNative, later: n }
             |  },
             |  latest() {
             |    const { w } = dom()

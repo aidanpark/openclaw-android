@@ -28,7 +28,8 @@ PATCHED=0
 
 # Patch /tmp references to $PREFIX/tmp
 echo "Patching /tmp references..."
-TMP_FILES=$(grep -rl '/tmp' "$OPENCLAW_DIR" --include='*.js' --include='*.mjs' --include='*.cjs' 2>/dev/null || true)
+# Only the files that still have one of the five forms replaced below (same as platforms/openclaw/patches/openclaw-patch-paths.sh)
+TMP_FILES=$(grep -rlF -e '"/tmp/' -e "'/tmp/" -e '`/tmp/' -e '"/tmp"' -e "'/tmp'" "$OPENCLAW_DIR" --include='*.js' --include='*.mjs' --include='*.cjs' 2>/dev/null || true)
 
 for f in $TMP_FILES; do
     if [ -f "$f" ]; then

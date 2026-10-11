@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.2.6] - 2026-10-11
+
+### Fixed
+
+- `oa --update` could appear to hang for a long time (in one test, about 15 minutes) on the step that makes OpenClaw's chat-history migration work on Android: a Node.js process that had done its work did not exit. That step now stops waiting after 2 minutes (set `OA_HARDLINK_NODE_TIMEOUT` to a number of seconds to change it), uses the result the process had already reported, or runs once more, and says so. If it stalls twice, the update reports the patch as incomplete and asks you to run `oa --update` again.
+
 ## [Script v1.2.5] - 2026-10-11
 
 ### Changed

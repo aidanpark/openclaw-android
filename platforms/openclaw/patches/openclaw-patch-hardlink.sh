@@ -52,6 +52,19 @@
 # --only-b3: look at the session-archive patch (class "archive") only, in dist/ (for a package taken from the
 #            npm tarball before it is installed; fs-safe is not part of the tarball)
 # --check: change nothing, report what is still to do (exit 3 when something is, or does not fit)
+#
+# TIME LIMIT: the node process that does the work runs under
+# `timeout --foreground -k 5 ${OA_HARDLINK_NODE_TIMEOUT:-120}` (--foreground and -k only where this timeout knows
+# them: without -k a node that ignores TERM is not stopped; no timeout command at all: no limit). A value that is
+# not a whole number of 2 to 999999 seconds (leading zeros are ignored, at most 6 digits) is replaced by 120.
+# --foreground keeps Ctrl-C working but does not stop children of node (it has none).
+# A node started through the glibc loader was seen to stay alive and idle for 15 minutes after its patches had
+# been written (QA, Script v1.2.5). When it is stopped by the limit, its SUMMARY line is used if it had printed
+# one, otherwise it runs once more; stopped twice, the result is "incomplete" (state file "error exit=<code>":
+# 124 with GNU timeout, 137 when it had to be killed, 143 with a BusyBox timeout; --check exits non-zero like any
+# other failure). A stop that comes sooner than the limit (the system killed the process) is an ordinary
+# failure, as before. The notes about a stop that was made up for carry no [WARN]: a caller that looks for WARN
+# (post-setup.sh) then reports only what is left incomplete.
 set -euo pipefail
 
 GREEN='\033[0;32m'
@@ -361,9 +374,60 @@ rc=0
 JS_FLAGS=""
 [ "$CHECK" = 1 ] && JS_FLAGS="--check"
 [ "$ONLY_B3" = 1 ] && JS_FLAGS="$JS_FLAGS --only-b3"
-# shellcheck disable=SC2086
-out=$(node "$HARDLINK_TMP" "$OPENCLAW_DIR" --list "$HARDLINK_LIST" $JS_FLAGS) || rc=$?
-
+# A node started through the glibc loader was seen to stay alive and idle after it had done its work (QA, Script
+# v1.2.5, the first run of an update on a device): never wait for it without a limit. Every file is written by a
+# rename and a second run finds the patches of the first, so a run that is stopped here can simply be done again.
+HARDLINK_NODE_LIMIT="${OA_HARDLINK_NODE_TIMEOUT:-120}"
+case "$HARDLINK_NODE_LIMIT" in ''|*[!0-9]*) HARDLINK_NODE_LIMIT=120 ;; esac
+# no leading zeros ("00300" is 300); empty (only zeros), more than 6 digits or less than 2: 120
+HARDLINK_NODE_LIMIT=${HARDLINK_NODE_LIMIT#"${HARDLINK_NODE_LIMIT%%[!0]*}"}
+if [ -z "$HARDLINK_NODE_LIMIT" ] || [ "${#HARDLINK_NODE_LIMIT}" -gt 6 ] || [ "$HARDLINK_NODE_LIMIT" -lt 2 ]; then
+    HARDLINK_NODE_LIMIT=120
+fi
+HARDLINK_TIMEOUT=()
+if command -v timeout >/dev/null 2>&1; then
+    # --foreground keeps Ctrl-C working (plain timeout moves the command to its own process group); -k is not
+    # known to every timeout (older BusyBox): use what this one accepts
+    if timeout --foreground -k 1 10 true >/dev/null 2>&1; then
+        HARDLINK_TIMEOUT=(timeout --foreground -k 5 "$HARDLINK_NODE_LIMIT")
+    elif timeout -k 1 10 true >/dev/null 2>&1; then
+        HARDLINK_TIMEOUT=(timeout -k 5 "$HARDLINK_NODE_LIMIT")
+    else
+        HARDLINK_TIMEOUT=(timeout "$HARDLINK_NODE_LIMIT")
+    fi
+fi
+HARDLINK_TIMED_OUT=0
+HARDLINK_TRY=1
+while :; do
+    rc=0
+    hl_t0=$SECONDS
+    # shellcheck disable=SC2086
+    out=$(${HARDLINK_TIMEOUT[@]+"${HARDLINK_TIMEOUT[@]}"} node "$HARDLINK_TMP" "$OPENCLAW_DIR" --list "$HARDLINK_LIST" $JS_FLAGS) || rc=$?
+    # stopped by the limit: rc 124 (stopped), 137 (had to be killed) or 143 (a BusyBox timeout hands the TERM to
+    # the command itself) after the whole time; the same codes after a shorter time came from somewhere else
+    # (the system killed it) and are an ordinary failure
+    if [ "${#HARDLINK_TIMEOUT[@]}" -gt 0 ] && { [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ] || [ "$rc" -eq 143 ]; } \
+        && [ $((SECONDS - hl_t0 + 1)) -ge "$HARDLINK_NODE_LIMIT" ]; then
+        :
+    else
+        break
+    fi
+    if printf '%s\n' "$out" | grep -q '^SUMMARY '; then
+        # it reported its result and then did not exit: the result is taken from its output
+        echo "  Note: the Node.js process of the hard-link patch had reported its result but did not exit within ${HARDLINK_NODE_LIMIT}s; the result is used."
+        s=$(printf '%s\n' "$out" | grep '^SUMMARY ' | tail -1)
+        rc=0
+        case "$s" in *problems=0*) ;; *) rc=3 ;; esac
+        [ "$CHECK" != 1 ] || case "$s" in *todo=0\ *) ;; *) rc=3 ;; esac
+        break
+    fi
+    if [ "$HARDLINK_TRY" -ge 2 ]; then
+        HARDLINK_TIMED_OUT=1
+        break
+    fi
+    echo "  Note: the Node.js process of the hard-link patch did not finish within ${HARDLINK_NODE_LIMIT}s and was stopped; trying once more."
+    HARDLINK_TRY=2
+done
 summary=$(printf '%s\n' "$out" | { grep '^SUMMARY ' || true; } | tail -1 | sed 's/^SUMMARY //')
 # (|| true: with nothing to report grep finds no line, and that must not end the script)
 { printf '%s\n' "$out" | grep -v '^SUMMARY ' || true; } | while IFS= read -r line; do
@@ -384,7 +448,11 @@ if [ "$rc" -eq 0 ]; then
 elif [ "$CHECK" = 1 ] && printf '%s' "$summary" | grep -q 'problems=0'; then
     echo "Hard-link fallback not applied yet: ${summary}"
 else
-    echo -e "${YELLOW}[WARN]${NC} Hard-link fallback incomplete (${summary:-node failed}): this OpenClaw version does not match the patch, or a file could not be written."
+    if [ "$HARDLINK_TIMED_OUT" = 1 ]; then
+        echo -e "${YELLOW}[WARN]${NC} Hard-link fallback incomplete: the Node.js process did not finish within ${HARDLINK_NODE_LIMIT}s, twice. Running 'oa --update' again usually fixes it."
+    else
+        echo -e "${YELLOW}[WARN]${NC} Hard-link fallback incomplete (${summary:-node failed}): this OpenClaw version does not match the patch, or a file could not be written."
+    fi
     echo "       Hard links are denied on Android, so the data migration of 'openclaw doctor --fix' can fail with EACCES."
 fi
 # (a normal run never fails the caller; --check reports through its exit code)

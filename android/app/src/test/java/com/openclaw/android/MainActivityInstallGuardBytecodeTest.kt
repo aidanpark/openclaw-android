@@ -1,9 +1,7 @@
 package com.openclaw.android
 
-import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import java.io.DataInputStream
 
 /**
  * Checks the compiled MainActivity, not the source text: onCreate must ask SetupGuard.isRunning so
@@ -29,105 +27,34 @@ class MainActivityInstallGuardBytecodeTest {
         )
     }
 
-    private data class MethodRef(
-        val owner: String,
-        val name: String,
-    )
+    @Test
+    fun `MainActivity onDestroy stops the events, takes the WebView out, removes the bridge, then destroys`() {
+        val calls = invokedMethods("MainActivity.class", "onDestroy")
+        val steps =
+            listOf(
+                "detach" to calls.indexOfFirst { it.owner.contains("EventBridge") && it.name == "detach" },
+                "removeView" to calls.indexOfFirst { it.owner == "android/view/ViewGroup" && it.name == "removeView" },
+                "removeJavascriptInterface" to indexOf(calls, "removeJavascriptInterface"),
+                "destroy" to indexOf(calls, "destroy"),
+            )
+        steps.forEach { (name, at) -> assertTrue(at >= 0, "onDestroy does not call $name: $calls") }
+        // A WebView destroyed while still attached logs an error, and the page must not be able to call
+        // the bridge between the steps
+        steps.zipWithNext().forEach { (before, after) ->
+            assertTrue(before.second < after.second, "${before.first} must come before ${after.first}: $calls")
+        }
+    }
 
-    /**
-     * Minimal class-file reader: resolves every invoke* instruction in [method]'s bytecode to
-     * owner.name. Operands are scanned byte-wise, so a stray operand byte could in theory alias an
-     * invoke opcode; the asserted references are specific enough that this does not matter.
-     */
-    @Suppress("CyclomaticComplexMethod", "LongMethod", "MagicNumber")
+    private fun indexOf(
+        calls: List<ClassFileCalls.Ref>,
+        name: String,
+    ) = calls.indexOfFirst { it.owner == "android/webkit/WebView" && it.name == name }
+
     private fun invokedMethods(
         classFile: String,
         method: String,
-    ): List<MethodRef> {
-        val stream = MainActivity::class.java.getResourceAsStream(classFile)
-        assertTrue(stream != null, "$classFile not on the test classpath")
-        DataInputStream(stream!!.buffered()).use { input ->
-            assertEquals(0xCAFEBABE.toInt(), input.readInt())
-            input.readUnsignedShort()
-            input.readUnsignedShort()
-            val count = input.readUnsignedShort()
-            val utf8 = arrayOfNulls<String>(count)
-            val classIdx = IntArray(count)
-            val refClass = IntArray(count)
-            val refNat = IntArray(count)
-            val natName = IntArray(count)
-            var i = 1
-            while (i < count) {
-                when (input.readUnsignedByte()) {
-                    1 -> utf8[i] = input.readUTF()
-                    7 -> classIdx[i] = input.readUnsignedShort()
-                    8, 16, 19, 20 -> input.readUnsignedShort()
-                    9, 10, 11 -> {
-                        refClass[i] = input.readUnsignedShort()
-                        refNat[i] = input.readUnsignedShort()
-                    }
-                    12 -> {
-                        natName[i] = input.readUnsignedShort()
-                        input.readUnsignedShort()
-                    }
-                    3, 4, 17, 18 -> input.readInt()
-                    5, 6 -> {
-                        input.readLong()
-                        i++
-                    }
-                    15 -> {
-                        input.readUnsignedByte()
-                        input.readUnsignedShort()
-                    }
-                    else -> error("unknown constant pool tag at $i")
-                }
-                i++
-            }
-            input.readUnsignedShort()
-            input.readUnsignedShort()
-            input.readUnsignedShort()
-            repeat(input.readUnsignedShort()) { input.readUnsignedShort() }
-
-            fun skipAttributes() =
-                repeat(input.readUnsignedShort()) {
-                    input.readUnsignedShort()
-                    input.skipNBytes(input.readInt().toLong())
-                }
-            repeat(input.readUnsignedShort()) {
-                input.skipNBytes(6)
-                skipAttributes()
-            }
-            val result = mutableListOf<MethodRef>()
-            var found = false
-            repeat(input.readUnsignedShort()) {
-                input.readUnsignedShort()
-                val name = utf8[input.readUnsignedShort()]
-                input.readUnsignedShort()
-                repeat(input.readUnsignedShort()) {
-                    val attrName = utf8[input.readUnsignedShort()]
-                    val len = input.readInt()
-                    val bytes = ByteArray(len).also { input.readFully(it) }
-                    if (name == method && attrName == "Code") {
-                        found = true
-                        val codeLen =
-                            ((bytes[4].toInt() and 0xFF) shl 24) or ((bytes[5].toInt() and 0xFF) shl 16) or
-                                ((bytes[6].toInt() and 0xFF) shl 8) or (bytes[7].toInt() and 0xFF)
-                        val code = bytes.copyOfRange(8, 8 + codeLen)
-                        for (p in 0 until code.size - 2) {
-                            val op = code[p].toInt() and 0xFF
-                            if (op in 0xB6..0xB9) {
-                                val idx = ((code[p + 1].toInt() and 0xFF) shl 8) or (code[p + 2].toInt() and 0xFF)
-                                val isRef = idx in 1 until count && refClass[idx] != 0
-                                val owner = if (isRef) utf8[classIdx[refClass[idx]]] else null
-                                val ref = if (owner != null) utf8[natName[refNat[idx]]] else null
-                                if (owner != null && ref != null) result.add(MethodRef(owner, ref))
-                            }
-                        }
-                    }
-                }
-            }
-            assertTrue(found, "$method not found in $classFile")
-            return result
-        }
+    ): List<ClassFileCalls.Ref> {
+        assertTrue(classFile == "MainActivity.class", "unexpected class $classFile")
+        return ClassFileCalls.invoked(MainActivity::class.java, method)
     }
 }

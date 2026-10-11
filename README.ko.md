@@ -66,6 +66,7 @@
 - 도구 설치: 설정 → 추가 도구(Settings → Additional Tools) 화면에서 tmux, ttyd, dufs, Android Tools, Playwright, Claude Code, Gemini CLI, Codex CLI를 설치 스크립트(`post-setup.sh --tools-only`)로 설치합니다. tmux, ttyd, dufs, Android Tools는 서명된 Termux 패키지 목록으로 검증합니다. 설치에 실패했거나 `--version` 확인이 실패한 도구는 「동작하지 않음」과 다시 설치 버튼으로 표시합니다. code-server, OpenCode, SSH 서버, Chromium은 아직 앱에서 설치할 수 없으며, code-server는 앱 터미널에서 `oa --install` 로 설치할 수 있습니다
 - 설치·갱신: 설정 → 설치·갱신(Settings → Install & Update) 화면에서 앱이 `oa --update` 를 실행하고 진행 상황과 결과를 표시합니다. 취소는 초기 단계(3단계, 핵심 파일 교체 이전)에서만 가능합니다. 이 화면에는 OpenClaw 와 Node.js 버전, 앱에서 마지막으로 실행한 업데이트의 결과, 게이트웨이 상태와 「게이트웨이 중지」 버튼도 표시됩니다(앱 터미널에서 시작한 게이트웨이만 해당)
 - Termux와 독립 실행 — 앱 설치가 기존 Termux + `oa` 환경에 영향을 주지 않음
+- 앱과 기존 Termux 설치는 서로 독립이지만, 두 쪽 모두 OpenClaw 게이트웨이를 같은 기본 포트(18789)로 시작합니다. 한 번에 한 쪽에서만 게이트웨이를 실행하세요
 
 [Releases](https://github.com/AidanPark/openclaw-android/releases) 페이지에서 APK를 다운로드하세요.
 
@@ -660,3 +661,5 @@ GitHub에서 전체 저장소 tarball을 다운로드하고 임시 디렉토리�
 ## 라이선스
 
 MIT
+
+Claw 앱의 터미널 라이브러리(`android/terminal-emulator`, `android/terminal-view`)는 [Termux](https://github.com/termux/termux-app) 에서 가져온 것이며 Apache License 2.0 을 따릅니다.

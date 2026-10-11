@@ -61,7 +61,7 @@ internal abstract class JsBridgeToolInstallFixture {
         releaseFile = File(home, "release")
         mockkObject(EnvironmentBuilder)
         every { EnvironmentBuilder.build(any<Context>()) } returns
-            mapOf("PATH" to "/bin:/usr/bin", "HOME" to home.absolutePath, "PREFIX" to prefix.absolutePath)
+            mapOf("PATH" to HostCommands.path, "HOME" to home.absolutePath, "PREFIX" to prefix.absolutePath)
     }
 
     @AfterEach

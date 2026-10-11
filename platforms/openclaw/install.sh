@@ -67,10 +67,9 @@ fi
 
 # npm exited 0, yet the package could be incomplete (a cut-off install): say so instead of finishing. Looked at
 # before the patches are applied: with files missing the patch step would only report that "this OpenClaw
-# version does not match the patch", which is not the cause. The patch script of this folder is asked
-# directly (a copy under ~/.openclaw-android may be missing or an older one).
-OC_HL_CHECK=$(timeout 120 bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check 2>&1 || true)
-if printf '%s' "$OC_HL_CHECK" | grep -q 'MISSING' || oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
+# version does not match the patch", which is not the cause. (The files are judged against OpenClaw's own list
+# of its package, see oa_openclaw_incomplete; the patch script no longer says anything about completeness.)
+if oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
     echo -e "${RED}[FAIL]${NC} OpenClaw $PLATFORM_NPM_PACKAGE_VERSION was installed but is incomplete (files are missing or it does not start)."
     echo "       Run the installer again."
     exit 1

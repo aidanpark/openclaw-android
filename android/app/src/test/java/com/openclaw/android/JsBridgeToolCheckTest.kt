@@ -17,7 +17,8 @@ import java.io.File
  * style check ([BridgeGuard.toolVerifyCommands]) and send one `tools_check` event per tool with
  * `ok | failed | unknown`, then one `done` event. Runs the REAL CommandRunner against fake tool
  * executables (small /bin/sh scripts) in a temp prefix and home; the PATH is the app's order
- * (node bin, ~/.local/bin, prefix bin) followed by /bin:/usr/bin for the fakes' own commands.
+ * (node bin, ~/.local/bin, prefix bin) followed by the host's own commands for the fakes — without
+ * a real tmux or the like, which would answer for a tool the test means to be missing (HostCommands).
  */
 internal class JsBridgeToolCheckTest : JsBridgeToolInstallFixture() {
     private val nodeBin get() = File(home, ".openclaw-android/node/bin")
@@ -29,7 +30,7 @@ internal class JsBridgeToolCheckTest : JsBridgeToolInstallFixture() {
     fun appPath() {
         every { EnvironmentBuilder.build(any<Context>()) } returns
             mapOf(
-                "PATH" to "${nodeBin.path}:${localBin.path}:${prefixBin.path}:/bin:/usr/bin",
+                "PATH" to "${nodeBin.path}:${localBin.path}:${prefixBin.path}:${HostCommands.path}",
                 "HOME" to home.absolutePath,
                 "PREFIX" to prefix.absolutePath,
             )

@@ -16,14 +16,20 @@ internal object BridgeGuard {
 
     const val DEFAULT_PLATFORM = "openclaw"
 
-    /** Read-only version probes behind `runCommand` / `runCommandAsync`. */
-    val versionCommands: Map<String, Executable> =
+    /** The probes every build has. */
+    internal val fixedVersionCommands: Map<String, Executable> =
         mapOf(
             "nodeVersion" to Executable("node", listOf("-v")),
             "gitVersion" to Executable("git", listOf("--version")),
             "openclawVersion" to Executable("openclaw", listOf("--version")),
             "oaVersion" to Executable("oa", listOf("--version"), firstLineOnly = true),
         )
+
+    /**
+     * Read-only version probes behind `runProbeAsync`: the fixed ones, plus [DebugProbes] — empty in a
+     * release build, which does not even contain them (source set `src/debug` only).
+     */
+    val versionCommands: Map<String, Executable> = fixedVersionCommands + DebugProbes.versionCommands
 
     /**
      * Read-only "does it run" check per installed tool (`--version` style). The file being on disk

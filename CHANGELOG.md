@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.2.5] - 2026-10-11
+
+### Changed
+
+- The patch that lets OpenClaw move your chat history on Android now finds the files it works on by what they contain, not by their names. OpenClaw renames its bundled files between releases; a release that renamed them could leave the patch out, so a later update that changes the OpenClaw version is no longer at risk of skipping it silently.
+- A cut-off OpenClaw install is now recognised from OpenClaw's own list of the files of its package (and from the files of its file-publishing library), instead of from what the chat-history patch reports. An installation that is missing a file is reinstalled, as before.
+- When `oa --update` is about to change the OpenClaw version, its check that your chat history can be moved reads the file list of the new package, so a new OpenClaw version that moves its files no longer turns that check off without a message. If the downloaded package cannot be listed or unpacked (damaged, or the disk is full), the update now stops with a message and leaves OpenClaw as it is, instead of printing a warning and continuing.
+- The same patch now also covers the places where OpenClaw copies a file with the system's native copy and Android answers "permission denied" (two files of OpenClaw itself and two of its file-publishing library; before, only the "not supported" answer was handled). OpenClaw 2026.9.8 behaves as before; a newer OpenClaw release needs it for `openclaw doctor --fix`.
+
+## [App v0.5.0] - 2026-10-11
+
+### Fixed
+
+- Opening or closing several terminal tabs in quick succession could stop the app and the gateway with it (a list of sessions was changed while it was being read). Terminal sessions are now created on the app's UI thread and the list is safe to read while it changes.
+- A command the app runs and stops after its time limit left the programs it had started running in the background; they are now stopped with it.
+- Entering and leaving split-screen mode no longer recreates the app's screen and terminal, and a screen that was closed now releases its web view.
+- The Settings screen that keeps the app alive in the background showed a status that was up to three seconds old when you came back to it; it now refreshes on return.
+- Going back to the app ran the status checks of the Dashboard, About and Status screens more than once; one return now runs one set of checks.
+- The result line of a tool install (`TOOL_RESULT ... ok`) is no longer shown in the install card.
+
+### Changed
+
+- Commands the app runs for itself now carry `OPENCLAW_NO_AUTO_UPDATE=1`, as the terminal already does.
+
 ## [App v0.4.6] - 2026-10-11
 
 ### Fixed

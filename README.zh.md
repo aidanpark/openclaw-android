@@ -66,6 +66,7 @@ Android 也配拥有一个 Shell。
 - 工具安装：在应用的“设置 → 附加工具”（Settings → Additional Tools）页面，通过安装脚本（`post-setup.sh --tools-only`）安装 tmux、ttyd、dufs、Android Tools、Playwright、Claude Code、Gemini CLI 和 Codex CLI；其中 tmux、ttyd、dufs 和 Android Tools 会对照已签名的 Termux 软件包列表进行验证。安装失败或 `--version` 检查失败的工具会显示为“无法运行”，并提供重新安装按钮。code-server、OpenCode、SSH 服务器和 Chromium 暂时无法在应用中安装；code-server 可在应用的终端中使用 `oa --install` 安装
 - 安装与更新：在“设置 → 安装与更新”（Settings → Install & Update）页面，应用会运行 `oa --update` 并显示进度和结果。只有在早期步骤（第 3 步替换核心文件之前）才能取消。该页面还会显示 OpenClaw 和 Node.js 的版本、上次在应用中更新的结果，以及网关状态和“停止网关”按钮（仅限在应用终端中启动的网关）
 - 独立于 Termux 运行 — 安装此应用不会影响已有的 Termux + `oa` 环境
+- 应用与已有的 Termux 环境相互独立，但两者都会在同一个默认端口（18789）上启动 OpenClaw 网关。请一次只在其中一个环境中运行网关
 
 前往 [Releases](https://github.com/AidanPark/openclaw-android/releases) 页面下载 APK。
 
@@ -667,3 +668,5 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 ## 许可证
 
 MIT
+
+Claw 应用的终端库（`android/terminal-emulator`、`android/terminal-view`）来自 [Termux](https://github.com/termux/termux-app)，采用 Apache License 2.0。

@@ -66,6 +66,7 @@ A standalone Android app is also available. It bundles a terminal emulator and a
 - Tool installation: Settings → Additional Tools installs tmux, ttyd, dufs, Android Tools, Playwright, Claude Code, Gemini CLI, and Codex CLI through the setup script (`post-setup.sh --tools-only`); tmux, ttyd, dufs, and Android Tools are checked against the signed Termux package list. A tool whose install failed or whose `--version` check fails is shown as not working, with a Reinstall button. code-server, OpenCode, the SSH server, and Chromium cannot be installed from the app yet; code-server can be installed in the app's terminal with `oa --install`
 - Install & Update: Settings → Install & Update runs `oa --update` from the app and shows its progress and result. It can be cancelled only in the early steps (before step 3, replacing the core files). The screen also shows the OpenClaw and Node.js versions, the result of the last update run from the app, and the gateway status with a Stop gateway button (only for a gateway started in the app's terminal)
 - Works independently of Termux — installing the app does not affect an existing Termux + `oa` setup
+- The app and an existing Termux setup are independent installs, but both start the OpenClaw gateway on the same default port (18789). Run the gateway in only one of them at a time
 
 Download the APK from the [Releases](https://github.com/AidanPark/openclaw-android/releases) page.
 
@@ -660,3 +661,5 @@ Updates tools that are already installed:
 ## License
 
 MIT
+
+The Claw app's terminal libraries (`android/terminal-emulator`, `android/terminal-view`) come from [Termux](https://github.com/termux/termux-app) and are under the Apache License 2.0.

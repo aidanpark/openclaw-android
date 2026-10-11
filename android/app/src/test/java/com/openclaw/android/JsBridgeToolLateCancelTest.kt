@@ -32,7 +32,7 @@ internal class JsBridgeToolLateCancelTest : JsBridgeToolInstallFixture() {
 
     private fun env() =
         mapOf(
-            "PATH" to "${prefix.absolutePath}/bin:/bin:/usr/bin",
+            "PATH" to "${prefix.absolutePath}/bin:${HostCommands.path}",
             "HOME" to home.absolutePath,
             "PREFIX" to prefix.absolutePath,
         )

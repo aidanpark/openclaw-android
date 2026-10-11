@@ -218,10 +218,8 @@ oc_reinstall() {
         oc_install_failed
     fi
     bash "$SCRIPT_DIR/patches/openclaw-apply-patches.sh"
-    # (the output goes into a variable first: --check ends with status 3 on a MISSING, which would make the
-    # pipe false under pipefail)
-    OC_HL_CHECK=$(timeout 120 bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check 2>&1 || true)
-    if printf '%s' "$OC_HL_CHECK" | grep -q 'MISSING' || oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
+    # (completeness is judged against OpenClaw's own list of its package, not by the patch script)
+    if oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
         oc_install_failed
     fi
     bash "$SCRIPT_DIR/openclaw-shim.sh"
@@ -231,8 +229,7 @@ oc_reinstall() {
 bash "$SCRIPT_DIR/patches/openclaw-apply-patches.sh"
 
 if [ "$OPENCLAW_UPDATED" = true ]; then
-    OC_HL_CHECK=$(timeout 120 bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check 2>&1 || true)
-    if printf '%s' "$OC_HL_CHECK" | grep -q 'MISSING' || oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
+    if oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
         oc_install_failed
     fi
 fi
@@ -380,7 +377,7 @@ elif [ "$OC_HEALTH_RC" -ne 0 ]; then
     if [ "$OC_SESSION_PATCH_OK" = false ]; then
         echo -e "${RED}[FAIL]${NC} OpenClaw ${PIN_VER} is installed, but the patch that moves your chat history is not in place:"
         # (|| true: the check exits non-zero by design, and a pipeline failure must not end this script)
-        { bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check 2>&1 || true; } | sed 's/\x1b\[[0-9;]*m//g' | { grep -E 'TODO|MISSING|NOMATCH|WARN' || true; } | head -4 | sed 's/^/         /'
+        { bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check 2>&1 || true; } | sed 's/\x1b\[[0-9;]*m//g' | { grep -E 'TODO|NOMATCH|NOTARGET|WARN' || true; } | head -4 | sed 's/^/         /'
         echo "       Nothing was migrated and your data is untouched. Run 'oa --update' again; if it keeps failing, report it."
         oa_note reason=patch_missing changed=true healthy=false
         if [ -n "${OA_PRE_UPDATE_BACKUP:-}" ]; then

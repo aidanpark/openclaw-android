@@ -9,7 +9,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.2.4"
+OA_VERSION="1.2.5"
 # Marks this updater as the current protocol for the scripts it runs from the downloaded copy
 # (install-nodejs.sh and platforms/*/update.sh refuse a version change without it: a cached older
 # update-core.sh must not combine with a newer download).
@@ -452,21 +452,57 @@ if [ "$OA_PIN_CHANGES" = true ] && [ "$PLATFORM" = "openclaw" ] && [ "${OA_SKIP_
     else
         # Take the package that would be installed from npm (the install later reuses the download)
         # and try the patch on it. Offline or no npm: nothing can be said, the update goes on.
+        # Once the package is in hand the check is not skipped: a package that cannot be read or does not
+        # have the layout the patch knows stops the update like a patch that does not fit. (The bundles the
+        # patch looks at move between OpenClaw releases; a file list that names them made `tar` fail with
+        # "Not found in archive" on a package without them, and that failure was reported as "could not
+        # fetch", so the guard went off.)
         _oa_pf=$(mktemp -d "$PREFIX/tmp/oa-preflight.XXXXXX" 2>/dev/null) || _oa_pf=""
         _oa_npm_cli="$PROJECT_DIR/node/lib/node_modules/npm/bin/npm-cli.js"
         if [ -n "$_oa_pf" ] && [ -f "$_oa_npm_cli" ] && [ -x "$PROJECT_DIR/bin/node" ]; then
             echo "Checking that your chat history can be moved to OpenClaw ${PLATFORM_NPM_PACKAGE_VERSION}..."
-            if ( cd "$_oa_pf" && timeout 900 "$PROJECT_DIR/bin/node" "$_oa_npm_cli" pack "openclaw@${PLATFORM_NPM_PACKAGE_VERSION}" --silent --ignore-scripts >/dev/null 2>&1 ) \
-                && _oa_tgz=$(ls "$_oa_pf"/*.tgz 2>/dev/null | head -1) && [ -n "$_oa_tgz" ] \
-                && tar -xzf "$_oa_tgz" -C "$_oa_pf" --wildcards 'package/package.json' 'package/dist/session-sqlite-migration-manifest-*.mjs' \
-                    'package/dist/package-update-activation-recovery.mjs' 'package/dist/worker/worker.mjs' 'package/dist/worker/sqlite-store.worker.mjs' 2>/dev/null; then
-                _oa_pf_out=$(bash "$_oa_hl_script" --only-b3 "$_oa_pf/package" 2>&1 || true)
-                if ! printf '%s' "$_oa_pf_out" | grep -q 'problems=0'; then
-                    _oa_sg_why="the patch for moving chat history does not fit OpenClaw ${PLATFORM_NPM_PACKAGE_VERSION}"
-                fi
-            else
-                echo -e "${YELLOW}[WARN]${NC} Could not fetch OpenClaw ${PLATFORM_NPM_PACKAGE_VERSION} to check the chat-history patch — continuing."
+            _oa_tgz=""
+            _oa_packed=false
+            # (--pack-destination: a user's .npmrc must not send the file somewhere else)
+            if ( cd "$_oa_pf" && timeout 900 "$PROJECT_DIR/bin/node" "$_oa_npm_cli" pack "openclaw@${PLATFORM_NPM_PACKAGE_VERSION}" --pack-destination "$_oa_pf" --silent --ignore-scripts >/dev/null 2>&1 ); then
+                _oa_packed=true
+                _oa_tgz=$(ls "$_oa_pf"/*.tgz 2>/dev/null | head -1) || _oa_tgz=""
             fi
+            if [ "$_oa_packed" != true ]; then
+                echo -e "${YELLOW}[WARN]${NC} Could not fetch OpenClaw ${PLATFORM_NPM_PACKAGE_VERSION} to check the chat-history patch — continuing."
+            else
+                # Unpack the script files of dist/ (the patch script finds its targets in them by content: the bundles
+                # move between OpenClaw releases, so no list of names is kept here), then let the patch script judge
+                # them; each way of not being able to do that has its own reason.
+                _oa_unread=""
+                _oa_grc=0
+                if [ -z "$_oa_tgz" ]; then
+                    _oa_unread="npm did not leave the package file where it was asked to"
+                elif ! _oa_list=$(tar -tzf "$_oa_tgz" 2>/dev/null); then
+                    _oa_unread="the downloaded package is damaged or incomplete"
+                else
+                    printf '%s\n' "$_oa_list" | grep -E '^package/(package\.json|dist/.*\.(mjs|js|cjs))$' > "$_oa_pf/members.txt" 2>/dev/null || _oa_grc=$?
+                    if [ "$_oa_grc" -gt 1 ]; then
+                        _oa_unread="its file list could not be written - is the disk full?"
+                    elif ! grep -qx 'package/package.json' "$_oa_pf/members.txt" 2>/dev/null; then
+                        _oa_unread="the downloaded package does not look like OpenClaw"
+                    elif ! tar -xzf "$_oa_tgz" -C "$_oa_pf" -T "$_oa_pf/members.txt" 2>/dev/null; then
+                        _oa_unread="its files could not be unpacked - is the disk full?"
+                    fi
+                fi
+                if [ -n "$_oa_unread" ]; then
+                    _oa_sg_why="OpenClaw ${PLATFORM_NPM_PACKAGE_VERSION} could not be checked for the patch that moves chat history (${_oa_unread})"
+                else
+                    # (--check: judge only; the patch must not rewrite the unpacked bundles here, a full disk would
+                    # then look like a patch that does not fit)
+                    _oa_pf_out=$(bash "$_oa_hl_script" --only-b3 --check "$_oa_pf/package" 2>&1 || true)
+                    if ! printf '%s' "$_oa_pf_out" | grep -q 'problems=0'; then
+                        _oa_sg_why="the patch for moving chat history does not fit OpenClaw ${PLATFORM_NPM_PACKAGE_VERSION}"
+                    fi
+                fi
+            fi
+        else
+            echo -e "${YELLOW}[WARN]${NC} Could not prepare the check of the chat-history patch (this installation has no glibc Node.js yet, or there is no temporary folder) — continuing."
         fi
         [ -z "$_oa_pf" ] || rm -rf "$_oa_pf"
     fi

@@ -136,7 +136,11 @@ class MainActivity : AppCompatActivity() {
                         .onFailure { AppLogger.w(TAG, "post-setup refresh failed", it) }
                 }
                 val capable = bootstrapManager.setupScriptCapable()
-                runOnUiThread { if (!isFinishing) continueUnfinishedSetup(session, capable, terminalFirst) }
+                // A destroyed Activity (recreated for a change configChanges does not cover) has no page
+                // and no terminal view any more: its setup is carried on by the new one
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) continueUnfinishedSetup(session, capable, terminalFirst)
+                }
             }.start()
             return
         }
@@ -192,6 +196,11 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         // Events must stop going to this page — unless a newer Activity already took over
         EventBridge.detach(binding.webView)
+        // The page's hold on the bridge (and through it on this Activity) ends with the Activity:
+        // the interface is removed first, then the WebView is destroyed
+        (binding.webView.parent as? android.view.ViewGroup)?.removeView(binding.webView)
+        binding.webView.removeJavascriptInterface("OpenClaw")
+        binding.webView.destroy()
         super.onDestroy()
     }
 

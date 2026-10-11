@@ -33,7 +33,12 @@ object CommandRunner {
         timeoutMs: Long = 5_000,
     ): CommandResult =
         try {
-            runProcess(executableBuilder(executable, args, env, workDir, mergeErrors = false), timeoutMs)
+            val limit = TimeoutWrap.forRun(env, timeoutMs)
+            runProcess(
+                executableBuilder(executableCommand(executable, args, env, limit), env, workDir, mergeErrors = false),
+                timeoutMs,
+                limit,
+            )
         } catch (e: Exception) {
             CommandResult(-1, "", e.message ?: "Unknown error")
         }
@@ -83,10 +88,11 @@ object CommandRunner {
         onOutput: (String) -> Unit,
     ) = withContext(Dispatchers.IO) {
         try {
+            val limit = TimeoutWrap.forRun(env, STREAM_EXECUTABLE_TIMEOUT_MS)
             stream(
-                executableBuilder(executable, args, env, workDir, mergeErrors = true),
+                executableBuilder(executableCommand(executable, args, env, limit), env, workDir, mergeErrors = true),
                 onOutput,
-                STREAM_EXECUTABLE_TIMEOUT_MS,
+                limit?.safetyNetMs ?: STREAM_EXECUTABLE_TIMEOUT_MS,
             )
         } catch (e: Exception) {
             onOutput("Error: ${e.message}")
@@ -106,7 +112,13 @@ object CommandRunner {
         onOutput: (String) -> Unit,
     ): Int =
         withContext(Dispatchers.IO) {
-            val process = executableBuilder(command.first(), command.drop(1), env, workDir, mergeErrors = true).start()
+            val process =
+                executableBuilder(
+                    executableCommand(command.first(), command.drop(1), env),
+                    env,
+                    workDir,
+                    mergeErrors = true,
+                ).start()
             closeStdin(process)
             holder.set(process)
             try {
@@ -135,20 +147,29 @@ object CommandRunner {
      * process cannot execve those directly.
      */
     private fun executableBuilder(
-        executable: String,
-        args: List<String>,
+        command: List<String>,
         env: Map<String, String>,
         workDir: File,
         mergeErrors: Boolean,
     ): ProcessBuilder =
         configure(
-            ProcessBuilder(
-                listOf(shellPath(env), "-c", "exec \"\$0\" \"\$@\"", resolveExecutable(executable, env)) + args,
-            ),
+            ProcessBuilder(listOf(shellPath(env), "-c", "exec \"\$0\" \"\$@\"") + command),
             env,
             workDir,
             mergeErrors,
         )
+
+    /**
+     * What [executableBuilder] runs: [executable] resolved on the PATH of [env] and [args]. With a
+     * [limit] the program runs under `timeout -k` — its own process group, ended as a whole when the
+     * time passes (see [TimeoutWrap]).
+     */
+    private fun executableCommand(
+        executable: String,
+        args: List<String>,
+        env: Map<String, String>,
+        limit: TimeoutWrap.Limit? = null,
+    ): List<String> = (limit?.prefix ?: emptyList()) + resolveExecutable(executable, env) + args
 
     private fun configure(
         pb: ProcessBuilder,
@@ -172,7 +193,9 @@ object CommandRunner {
     private fun runProcess(
         pb: ProcessBuilder,
         timeoutMs: Long,
+        limit: TimeoutWrap.Limit? = null,
     ): CommandResult {
+        val startedNs = System.nanoTime()
         val process = pb.start()
         closeStdin(process)
         val stdout = StringBuffer()
@@ -181,7 +204,16 @@ object CommandRunner {
         val errReader = Thread { drainQuietly(process.errorStream, stderr) }
         outReader.start()
         errReader.start()
-        val exited = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        // Under `timeout` the limit is its own; this wait is only the net under it
+        val exited = process.waitFor(limit?.safetyNetMs ?: timeoutMs, TimeUnit.MILLISECONDS)
+        if (exited && limit != null) {
+            val elapsedMs = (System.nanoTime() - startedNs) / NANOS_PER_MS
+            if (limit.isTimeout(process.exitValue(), elapsedMs)) {
+                outReader.join(READER_JOIN_MS)
+                errReader.join(READER_JOIN_MS)
+                return CommandResult(-1, stdout.toString(), "$TIMEOUT_PREFIX${timeoutMs}ms")
+            }
+        }
         if (!exited) {
             process.destroyForcibly()
             outReader.join(READER_JOIN_MS)
@@ -271,6 +303,7 @@ object CommandRunner {
         }
 
     private const val READER_JOIN_MS = 2_000L
+    private const val NANOS_PER_MS = 1_000_000L
     private const val DRAIN_BUFFER_CHARS = 4096
     private const val STREAM_EXECUTABLE_TIMEOUT_MS = 30_000L
 }

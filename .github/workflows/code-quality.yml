@@ -183,5 +183,15 @@ jobs:
           key: gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle/libs.versions.toml') }}
           restore-keys: gradle-
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: android/www/package-lock.json
+
+      - name: Install www dependencies (the Gradle build runs npm run build)
+        run: npm ci
+        working-directory: android/www
+
       - name: Run unit tests
         run: ./gradlew test

@@ -20,7 +20,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="portrait"
-            android:configChanges="keyboard|keyboardHidden|navigation|uiMode"
+            android:configChanges="keyboard|keyboardHidden|navigation|uiMode|screenSize|smallestScreenSize|screenLayout|orientation"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

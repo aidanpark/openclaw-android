@@ -1,7 +1,9 @@
 package com.openclaw.android
 
+import android.os.Looper
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Multi-terminal session management (§2.6, Phase 1 checklist).
@@ -11,15 +13,39 @@ class TerminalSessionManager(
     private val activity: MainActivity,
     private val sessionClient: TerminalSessionClient,
     private val eventBridge: EventBridge,
+    private val isUiThread: () -> Boolean = { Looper.myLooper() == Looper.getMainLooper() },
+    private val sessionFactory: SessionFactory = REAL_SESSIONS,
 ) {
+    /** Builds the [TerminalSession]; replaced in tests (the real one binds a Looper and a pty). */
+    fun interface SessionFactory {
+        fun create(
+            shell: String,
+            cwd: String,
+            env: Array<String>,
+            transcriptRows: Int,
+            client: TerminalSessionClient,
+        ): TerminalSession
+    }
+
     companion object {
         private const val TAG = "SessionManager"
         private const val TRANSCRIPT_ROWS = 2000
+
+        private val REAL_SESSIONS =
+            SessionFactory { shell, cwd, env, rows, client ->
+                TerminalSession(shell, cwd, arrayOf<String>(), env, rows, client)
+            }
     }
 
-    private val sessions = mutableListOf<TerminalSession>()
+    // The UI thread and the bridge's thread both read and change these: a copy-on-write list is never
+    // seen half changed (no ConcurrentModificationException while a worker reads it)
+    private val sessions = CopyOnWriteArrayList<TerminalSession>()
+
+    @Volatile
     private var activeSessionIndex = -1
-    private val finishedSessionIds = mutableSetOf<String>()
+    private val finishedSessionIds: MutableSet<String> =
+        java.util.concurrent.ConcurrentHashMap
+            .newKeySet()
 
     /** What the app typed into a session before its shell started (see [writeWhenReady]). */
     private val pendingInput = TerminalInputQueue()
@@ -29,9 +55,23 @@ class TerminalSessionManager(
         get() = sessions.getOrNull(activeSessionIndex)
 
     /**
-     * Create a new terminal session. Returns the session handle.
+     * Create a new terminal session. Returns the session handle. Any thread: the session is always
+     * created on the UI thread (see [UiThreadCall]), the caller waits for it.
      */
-    fun createSession(): TerminalSession {
+    fun createSession(): TerminalSession =
+        try {
+            UiThreadCall.run(
+                onUiThread = isUiThread(),
+                post = { activity.runOnUiThread(it) },
+                block = ::createSessionOnUiThread,
+            )
+        } catch (e: Exception) {
+            // The page only gets a generic bridge error: the cause stays in the log
+            AppLogger.e(TAG, "Creating a terminal session failed", e)
+            throw e
+        }
+
+    private fun createSessionOnUiThread(): TerminalSession {
         val env = EnvironmentBuilder.build(activity)
         val prefix = env["PREFIX"] ?: ""
         val homeDir = env["HOME"] ?: activity.filesDir.absolutePath
@@ -52,10 +92,9 @@ class TerminalSessionManager(
             }
 
         val session =
-            TerminalSession(
+            sessionFactory.create(
                 shell,
                 homeDir,
-                arrayOf<String>(),
                 env.entries.map { "${it.key}=${it.value}" }.toTypedArray(),
                 TRANSCRIPT_ROWS,
                 sessionClient,
@@ -110,11 +149,12 @@ class TerminalSessionManager(
      * Close a session by handle ID.
      */
     fun closeSession(handleId: String) {
-        val index = sessions.indexOfFirst { it.mHandle == handleId }
-        if (index < 0) return
-
+        // The session is removed by identity: an index taken first could point at another session by
+        // the time it is used (a close from the page and one from a tab at the same moment)
+        val session = sessions.firstOrNull { it.mHandle == handleId } ?: return
+        val index = sessions.indexOf(session)
+        if (!sessions.remove(session)) return
         finishedSessionIds.remove(handleId)
-        val session = sessions.removeAt(index)
         // Only a shell that started (reported by setTerminalShellPid) is signalled: for one that never
         // started the pid is 0, and signalling it would SIGKILL pid 0 — the app's own process group.
         // One that started and already exited is not running, so the call below does nothing for it.

@@ -66,6 +66,7 @@ AndroidでOpenClawを実行する一般的な方法では、proot-distroでLinux
 - ツールのインストール: 設定 → 追加ツール（Settings → Additional Tools）画面から、インストールスクリプト（`post-setup.sh --tools-only`）でtmux、ttyd、dufs、Android Tools、Playwright、Claude Code、Gemini CLI、Codex CLIをインストールできます。tmux、ttyd、dufs、Android Toolsは署名済みのTermuxパッケージリストで検証します。インストールに失敗したツールや `--version` の確認に失敗したツールは「動作していません」と再インストールボタンで表示します。code-server、OpenCode、SSHサーバー、Chromiumはまだアプリからインストールできません。code-serverはアプリのターミナルで `oa --install` を使ってインストールできます
 - インストールと更新: 設定 → インストールと更新（Settings → Install & Update）画面から、アプリが `oa --update` を実行し、進捗と結果を表示します。キャンセルできるのは初期のステップ（ステップ3、コアファイルの置き換えより前）だけです。この画面には、OpenClawとNode.jsのバージョン、アプリから最後に実行した更新の結果、ゲートウェイの状態と「ゲートウェイを停止」（Stop gateway）ボタンも表示されます（アプリのターミナルで起動したゲートウェイのみ対象）
 - Termuxとは独立して動作 — アプリをインストールしても既存のTermux + `oa` 環境には影響しません
+- アプリと既存のTermux環境は互いに独立していますが、どちらも同じ既定ポート（18789）でOpenClawゲートウェイを起動します。一度にどちらか一方でのみゲートウェイを実行してください
 
 APKは[Releases](https://github.com/AidanPark/openclaw-android/releases)ページからダウンロードできます。
 
@@ -663,3 +664,5 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 ## ライセンス
 
 MIT
+
+Claw アプリのターミナルライブラリ（`android/terminal-emulator`、`android/terminal-view`）は [Termux](https://github.com/termux/termux-app) 由来で、Apache License 2.0 に従います。

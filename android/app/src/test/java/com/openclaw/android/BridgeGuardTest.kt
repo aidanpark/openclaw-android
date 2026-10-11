@@ -222,7 +222,7 @@ class BridgeGuardTest {
 
         @Test
         fun `version commands are bare executables with no shell metacharacters`() {
-            BridgeGuard.versionCommands.values.forEach { cmd ->
+            BridgeGuard.fixedVersionCommands.values.forEach { cmd ->
                 assertTrue(safeToken.matches(cmd.executable), cmd.executable)
                 cmd.args.forEach { assertFalse(Regex("[;&|`$<>\\s]").containsMatchIn(it), it) }
             }
@@ -230,8 +230,8 @@ class BridgeGuardTest {
 
         @Test
         fun `oaVersion keeps only the first line and other probes do not`() {
-            assertTrue(BridgeGuard.versionCommands.getValue("oaVersion").firstLineOnly)
-            BridgeGuard.versionCommands
+            assertTrue(BridgeGuard.fixedVersionCommands.getValue("oaVersion").firstLineOnly)
+            BridgeGuard.fixedVersionCommands
                 .filterKeys { it != "oaVersion" }
                 .values
                 .forEach { assertFalse(it.firstLineOnly, it.executable) }
@@ -241,7 +241,7 @@ class BridgeGuardTest {
         fun `version probes cover the expected ids`() {
             assertEquals(
                 setOf("nodeVersion", "gitVersion", "openclawVersion", "oaVersion"),
-                BridgeGuard.versionCommands.keys,
+                BridgeGuard.fixedVersionCommands.keys,
             )
         }
 

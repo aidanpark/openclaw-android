@@ -83,7 +83,7 @@ REPO_BASE="$REPO_BASE_ORIGIN"
 
 BASHRC_MARKER_START="# >>> OpenClaw on Android >>>"
 BASHRC_MARKER_END="# <<< OpenClaw on Android <<<"
-OA_VERSION="1.2.4"
+OA_VERSION="1.2.5"
 
 # ── Platform detection ──
 # 1. Explicit marker file (new install and after first update)
@@ -149,6 +149,7 @@ ask_yn() {
 # Free space in MB on the filesystem that holds $1 (default $PREFIX); empty if unknown.
 # The df of the Termux packages does not start in the app terminal ("bad interpreter": its
 # shebang names Termux's own path), so the system's df is tried next.
+# shellcheck disable=SC2120  # platforms/openclaw/status.sh and scripts/check-env.sh pass a directory; no caller in this file does
 oa_free_mb() {
     local dir="${1:-${PREFIX:-/}}" df_cmd mb=""
     for df_cmd in df /system/bin/df; do
@@ -425,14 +426,18 @@ oa_repair_config_paths() {
 #  2. the lifecycle-pending mark OpenClaw's package carries until its first start (".openclaw-lifecycle-pending",
 #     older: "dist/openclaw-install-guard") is still there. Looked at BEFORE openclaw runs, which erases it.
 #     For installs made before sign 1 existed.
-#  3. the hard-link patch (when its script is there) reports a MISSING file
+#  3. a file that OpenClaw's own list of its package (dist/postinstall-content-inventory.json: path, sha256, mode and
+#     size of every file in dist/, present since 2026.9) names is not there; or, outside dist/, the package.json of
+#     @openclaw/fs-safe (a dependency the hard-link patch works on), a file its "exports" name, or the .js of a
+#     dist/**/*.d.ts it ships (the tar order puts the .d.ts first). Only the existence is looked at: our patches change the content of some of the files. (This sign used to be a MISSING
+#     reported by the hard-link patch; that script now finds its targets by content and no longer judges
+#     completeness.)
 #  4. `openclaw.mjs --version` fails and says so ("lifecycle is incomplete", a module that cannot be found);
 #     tried twice. Any other failure (Node does not start, a hiccup) is no sign of it: the health check reports that.
 # "fresh" (the caller has just installed, its own marks are still there by design): signs 1 and 2 are not looked at.
 # (scripts/lib.sh and post-setup.sh carry the same function between these marks: a pre-commit check keeps them identical.)
 oa_openclaw_incomplete() {
     local dir="${1:-$(npm root -g)/openclaw}" fresh="${2:-}" out rc try
-    local hl="$HOME/.openclaw-android/platforms/openclaw/patches/openclaw-patch-hardlink.sh"
     [ -f "$dir/openclaw.mjs" ] || return 0
     if [ "$fresh" != fresh ]; then
         [ ! -e "$HOME/.openclaw-android/.openclaw-install-pending" ] || return 0
@@ -440,11 +445,10 @@ oa_openclaw_incomplete() {
             return 0
         fi
     fi
-    if [ -f "$hl" ]; then
-        # (a node started through the glibc loader can hang when it ends: never wait for it without a limit)
-        out=$(timeout 120 bash "$hl" --check "$dir" 2>&1 || true)
-        case "$out" in *MISSING*) return 0 ;; esac
-    fi
+    # (a JSON of about 2 MB; a node that fails here says nothing about the package: only a named file counts. Not
+    # there, or in a form that is not a list, sign 3 is silent - sign 4 is the one left.)
+    out=$(timeout 60 node -e 'const fs=require("fs"),p=require("path"),d=process.argv[1];const has=f=>fs.existsSync(p.join(d,f));const no=f=>{console.log("MISSING "+f);process.exit(0)};let l=[];try{l=JSON.parse(fs.readFileSync(p.join(d,"dist/postinstall-content-inventory.json"),"utf8"))}catch(e){}if(Array.isArray(l))for(const e of l){const f=typeof e==="string"?e:e&&e.path;if(f&&!has(f))no(f)}let dep=false;try{dep=!!JSON.parse(fs.readFileSync(p.join(d,"package.json"),"utf8")).dependencies["@openclaw/fs-safe"]}catch(e){}if(dep){const b="node_modules/@openclaw/fs-safe/";let x;try{x=JSON.parse(fs.readFileSync(p.join(d,b+"package.json"),"utf8")).exports}catch(e){no(b+"package.json")}const w=(v,k)=>{if(typeof v==="string"){if(k!=="types"&&!v.includes("*")&&!has(b+v))no(b+v)}else if(v&&typeof v==="object")for(const k2 of Object.keys(v))w(v[k2],k2)};w(x,"");const r=q=>{for(const n of fs.readdirSync(p.join(d,q),{withFileTypes:true})){const f=q+"/"+n.name;if(n.isDirectory())r(f);else if(n.name.endsWith(".d.ts")&&!has(f.slice(0,-5)+".js"))no(f.slice(0,-5)+".js")}};try{r(b+"dist")}catch(e){}}' "$dir" 2>/dev/null || true)
+    case "$out" in MISSING*) return 0 ;; esac
     for try in 1 2; do
         rc=0
         out=$(timeout 90 node "$dir/openclaw.mjs" --version 2>&1) || rc=$?

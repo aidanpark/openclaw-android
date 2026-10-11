@@ -23,7 +23,7 @@ internal class CodeServerTerminalCheckTest : JsBridgeToolInstallFixture() {
     fun appPath() {
         every { EnvironmentBuilder.build(any<Context>()) } returns
             mapOf(
-                "PATH" to "${prefixBin.path}:/bin:/usr/bin",
+                "PATH" to "${prefixBin.path}:${HostCommands.path}",
                 "HOME" to home.absolutePath,
                 "PREFIX" to prefix.absolutePath,
             )

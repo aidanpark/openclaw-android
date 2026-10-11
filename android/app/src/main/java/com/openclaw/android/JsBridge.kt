@@ -48,6 +48,14 @@ class JsBridge(
         /** Tool installs have their own event, so the OpenClaw platform/update screens never see them. */
         private const val TOOL_EVENT = "tool_progress"
         private val ansiPattern = Regex("\u001B\\[[0-9;?]*[A-Za-z]")
+
+        /**
+         * The line post-setup.sh prints for a tool that installed: the script's own marker, not
+         * progress text. Only this one is hidden; a `TOOL_RESULT <id> fail <reason>` line is passed on
+         * as before (the script prints `Done: N ok, M failed` after it, which is what a failed run
+         * shows as its last output).
+         */
+        private val toolOkLine = Regex("^TOOL_RESULT \\S+ ok\\s*$")
         private const val LIST_TIMEOUT_MS = 15_000L
         private const val PROGRESS_PREPARE = 0.05f
         private const val PROGRESS_START = 0f
@@ -466,12 +474,16 @@ class JsBridge(
                 val full = ansiPattern.replace(raw, "")
                 val line = full.takeLast(MAX_LINE_CHARS)
                 hint = ToolInstallVerdict.hintFromOutput(full) ?: hint
-                ToolInstallGuard.progress(PROGRESS_HALF, line)
-                // npm prints thousands of lines: the page gets at most a few updates per second
-                val nowMs = System.currentTimeMillis()
-                if (nowMs - lastEmitMs >= EMIT_INTERVAL_MS) {
-                    lastEmitMs = nowMs
-                    emitToolState()
+                // The verdict is read from the result file (readToolResult), not from this line; the
+                // card keeps the last progress text instead of showing the script's own marker
+                if (!toolOkLine.matches(full.trim())) {
+                    ToolInstallGuard.progress(PROGRESS_HALF, line)
+                    // npm prints thousands of lines: the page gets at most a few updates per second
+                    val nowMs = System.currentTimeMillis()
+                    if (nowMs - lastEmitMs >= EMIT_INTERVAL_MS) {
+                        lastEmitMs = nowMs
+                        emitToolState()
+                    }
                 }
                 ToolInstallGuard.retryCancel(::sendCancelSignal)
             }

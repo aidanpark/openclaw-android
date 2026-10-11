@@ -20,8 +20,8 @@ android {
         minSdk = 24
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 15
-        versionName = "0.4.6"
+        versionCode = 16
+        versionName = "0.5.0"
 
         ndk { abiFilters += listOf("arm64-v8a") }
 
@@ -87,7 +87,16 @@ android {
 
     @Suppress("UnstableApiUsage")
     testOptions {
-        unitTests.all { it.useJUnitPlatform() }
+        unitTests.all {
+            it.useJUnitPlatform()
+            // A failed test prints its message and stack in the log (CI keeps no test report file):
+            // "AssertionFailedError at File.kt:239" alone cannot be told apart from an environment problem
+            it.testLogging {
+                events("failed")
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                showStackTraces = true
+            }
+        }
         unitTests.isReturnDefaultValues = true
     }
 

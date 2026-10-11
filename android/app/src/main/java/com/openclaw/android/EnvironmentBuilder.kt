@@ -76,6 +76,10 @@ object EnvironmentBuilder {
             // OpenClaw platform
             put("OA_GLIBC", "1")
             put("CONTAINER", "1")
+            // The app starts OpenClaw itself (terminal sessions, managed runs, probes): no self-update
+            // from any of them. The shells post-setup.sh writes (.bashrc) and the node wrapper set the
+            // same value; this one covers the processes that never read those.
+            put("OPENCLAW_NO_AUTO_UPDATE", "1")
             put("CLAWDHUB_WORKDIR", "${home.absolutePath}/.openclaw/workspace")
             put("CPATH", "${prefix.absolutePath}/include/glib-2.0:${prefix.absolutePath}/lib/glib-2.0/include")
         }

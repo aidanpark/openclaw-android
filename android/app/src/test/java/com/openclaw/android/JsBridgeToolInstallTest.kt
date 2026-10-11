@@ -63,7 +63,11 @@ internal class JsBridgeToolInstallTest : JsBridgeToolInstallFixture() {
         assertEquals(listOf("--tools-only --list", "--tools-only tmux"), calls())
         verify(exactly = 1) { bootstraps.single().refreshPostSetupScript() }
         val messages = web.events("tool_progress").map { it.data["message"] }
-        assertTrue("TOOL_RESULT tmux ok" in messages, "streamed lines did not reach the page: $messages")
+        assertTrue("Installing tmux" in messages, "streamed lines did not reach the page: $messages")
+        assertTrue(
+            messages.none { (it as? String)?.startsWith("TOOL_RESULT") == true },
+            "the script's TOOL_RESULT marker was shown as progress text: $messages",
+        )
         assertTrue(web.events("tool_progress").first().data["phase"] == "running")
         assertTrue(bridge.isToolInstalled("tmux").contains("true"))
     }
@@ -158,6 +162,9 @@ internal class JsBridgeToolInstallTest : JsBridgeToolInstallFixture() {
         val (bridge, web) = page()
         bridge.installTool("tmux")
         assertFailed(finalEvent(web), ToolFailure.INSTALL_FAILED)
+        // Only the `ok` marker is hidden from the card: a fail line is still passed on as progress
+        val messages = web.events("tool_progress").map { it.data["message"] }
+        assertTrue("TOOL_RESULT tmux fail install" in messages, "the fail line did not reach the page: $messages")
     }
 
     @Test

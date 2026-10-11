@@ -92,4 +92,6 @@ android/
 
 ## License
 
-GPL v3
+MIT — see [`LICENSE`](../LICENSE) at the repository root.
+
+The `terminal-emulator` and `terminal-view` libraries come from [Termux](https://github.com/termux/termux-app) and are under the Apache License 2.0 — see `LICENSE` and `NOTICE` in each library folder.

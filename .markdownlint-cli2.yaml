@@ -15,3 +15,6 @@ ignores:
   - "build/**"
   - "android/www/dist/**"
   - "android/www/node_modules/**"
+  - ".agent/**"
+  - ".claude/**"
+  - "CLAUDE.md"

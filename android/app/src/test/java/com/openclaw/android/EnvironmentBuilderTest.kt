@@ -68,4 +68,9 @@ class EnvironmentBuilderTest {
     fun `OA_GLIBC is set`() {
         assertEquals("1", env["OA_GLIBC"])
     }
+
+    @Test
+    fun `OpenClaw does not update itself from a process the app starts`() {
+        assertEquals("1", env["OPENCLAW_NO_AUTO_UPDATE"])
+    }
 }

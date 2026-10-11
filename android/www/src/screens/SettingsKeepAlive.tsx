@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useRoute } from '../lib/router'
 import { bridge } from '../lib/bridge'
 import { t } from '../i18n'
+import { useVisibleAgain } from '../lib/useVisibleAgain'
 
 export function SettingsKeepAlive() {
   const { navigate } = useRoute()
@@ -15,6 +16,13 @@ export function SettingsKeepAlive() {
     if (status) setBatteryExcluded(status.isIgnoring)
   }, [])
 
+  // The page is shown again: back from the system's battery screen (any time later), HOME, the
+  // notification shade. The status is read again then, not after a fixed delay.
+  useVisibleAgain(() => {
+    const status = bridge.callJson<{ isIgnoring: boolean }>('getBatteryOptimizationStatus')
+    if (status) setBatteryExcluded(status.isIgnoring)
+  })
+
   const ppkCommand = 'adb shell device_config set_sync_disabled_for_tests activity_manager/max_phantom_processes 2147483647'
 
   function handleCopyCommand() {
@@ -24,12 +32,8 @@ export function SettingsKeepAlive() {
   }
 
   function handleRequestExclusion() {
+    // The status is read again when the user comes back (useVisibleAgain above)
     bridge.call('requestBatteryOptimizationExclusion')
-    // Re-check after user returns
-    setTimeout(() => {
-      const status = bridge.callJson<{ isIgnoring: boolean }>('getBatteryOptimizationStatus')
-      if (status) setBatteryExcluded(status.isIgnoring)
-    }, 3000)
   }
 
   return (

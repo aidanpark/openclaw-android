@@ -1,35 +1,57 @@
 #!/usr/bin/env bash
 # openclaw-patch-hardlink.sh - make OpenClaw copy a file when a hard link is denied.
 #
-# Android (app and Termux alike) denies hard links (ln, fs.link, linkat) with EACCES. OpenClaw's
-# fs-safe publishes files with strategy "link-or-copy": it tries a hard link first and copies only
-# when the error code is in HARDLINK_FALLBACK_CODES (EPERM, EXDEV, ENOTSUP, EOPNOTSUPP, ENOSYS).
-# EACCES is not in that list, so every such publication fails - among them the SQLite snapshot of
-# `openclaw doctor --fix`, which migrates the data when OpenClaw is updated (the gateway then does
-# not start). Two changes:
-#   F1  add EACCES to HARDLINK_FALLBACK_CODES and to NATIVE_COPY_FALLBACK_CODES (the clone/reflink step
-#       of the copy is refused with EACCES too); both are inlined in 3 bundles and in
-#       node_modules/@openclaw/fs-safe
-#   F1b dist/backup-create-*.mjs: strategy "link-required" -> "link-or-copy"
+# Android (app and Termux alike) denies hard links (ln, fs.link, linkat) and reflink clones (ioctl FICLONE) with
+# EACCES. OpenClaw's fs-safe publishes files with strategy "link-or-copy": it tries a hard link first and copies
+# only when the error code is in a list of "not supported" codes (EPERM, EXDEV, ENOTSUP, EOPNOTSUPP, ENOSYS).
+# EACCES is not in those lists, so every such publication fails - among them the SQLite snapshot of
+# `openclaw doctor --fix`, which migrates the data when OpenClaw is updated (the gateway then does not start).
+# Four changes (the names are ours: a "class" below is what has to be found at least once per package):
+#   F1  (class "classifier")  add EACCES to HARDLINK_FALLBACK_CODES and NATIVE_COPY_FALLBACK_CODES (fs-safe's
+#       publish-file.js and the bundles that inline it; the sets exist in fs-safe 0.21 and 0.24)
+#   F1c (class "classifier")  the native copy (createNativeCopyFile, assertNativeCopyCompleted) falls back to a
+#       plain copy only on ENOTSUP, and the "not supported" list of the completion check has no EACCES: both get
+#       it (fs-safe's copy-file-input.js and the bundles that inline it). Found in fs-safe 0.21.1 (OpenClaw
+#       2026.9.x: copy-file-input.js and package-update-activation-recovery.mjs) and in 0.24.2 (2026.10.x); it
+#       is needed in 2026.10 (without it `doctor --fix` fails: the copy of the SQLite snapshot gets EACCES from
+#       the reflink step). Not edited: the minified bundles dist/worker/*.mjs of 2026.9.x inline the same
+#       fallback in a form (`Zt===\`ENOTSUP\`&&Kt.clone!==\`always\``) this pattern does not match, and no
+#       NOMATCH is raised there; 2026.10 has no worker bundles, and the 2026.9.x migration was run through
+#       under the trap without it.
+#   F1b (class "backup")      dist/backup-create-*.mjs: strategy "link-required" -> "link-or-copy"
 #       (so `openclaw backup create` works)
+#   F3  (class "archive")     B3_SESSION_ARCHIVE_PATCH: the session migration of 9.x (`doctor --fix`, "Legacy
+#       session store requires migration") archives each old transcript with moveMigrationArtifact: a hard link
+#       (strategy "link-required") and an `nlink == 2` check, then it removes the source. Hard links are refused
+#       here (EACCES) and a copy would fail the check, so the move is done with rename(2) instead (same file
+#       system: atomic, inode/mtime kept, so the later identity checks still hold; "undo" renames back). Applied
+#       by wrapping the function in each bundle that defines it. The wrapper only takes over when the link is
+#       refused with EACCES (or when an interrupted rename is resumed); every other case runs OpenClaw's own
+#       code unchanged.
 #
-#   F3  B3_SESSION_ARCHIVE_PATCH: the session migration of 9.x (`doctor --fix`, "Legacy session store
-#       requires migration") archives each old transcript with moveMigrationArtifact: a hard link
-#       (strategy "link-required") and an `nlink == 2` check, then it removes the source. Hard links are
-#       refused here (EACCES) and a copy would fail the check, so the move is done with rename(2)
-#       instead (same file system: atomic, inode/mtime kept, so the later identity checks still hold;
-#       "undo" renames back). Applied by wrapping the function in each bundle that defines it. The
-#       wrapper only takes over when the link is refused with EACCES (or when an interrupted rename
-#       is resumed); every other case runs OpenClaw's own code unchanged.
+# THE TARGETS ARE FOUND BY CONTENT, NOT BY FILE NAME. OpenClaw moves code between bundles from release to release
+# (2026.10 removed dist/worker/ altogether), so a list of names goes stale. The script looks for the marker
+# strings above in dist/ (and in node_modules/@openclaw/fs-safe/dist/ when it is there) and patches every file
+# that has one. A class that finds no target at all is reported as NOTARGET and counts as a problem: the patch
+# does not fit that package and a person has to look (this is what the bump procedure's step 1 catches). So is
+# fs-safe: when the package depends on @openclaw/fs-safe, at least one file of it has to be found (a package whose
+# node_modules was cut off must not pass because dist/ alone had targets).
+# A marker that is present in a form the patch does not know is NOMATCH (also a problem); for F3 the marker is a
+# string of the function body ("Cannot discard a recovery publication ..."), so a bundle whose definition
+# changed shape is caught even when another bundle was patched. Nothing is hidden: the data migration then fails
+# again with the original EACCES message.
 #
-# THIS PATCH IS TIED TO THE PINNED OPENCLAW VERSION. At every pin bump re-run it on the new
-# package and make sure nothing is reported as MISSING/NOMATCH (and test under
-# .agent/tools/android-trap/trap_android.py). Files are read and written as bytes (latin1): the
-# worker bundles are not clean UTF-8. Idempotent. A file that does not match is reported, never
-# hidden: the data migration then fails again with the original EACCES message.
+# THIS PATCH IS TIED TO THE PINNED OPENCLAW VERSION. At every pin bump re-run it on the new package (see
+# .agent/skills/ bump procedure) and test under .agent/tools/android-trap/trap_android.py. Files are read and
+# written as bytes (latin1): the worker bundles are not clean UTF-8. Idempotent.
+#
+# "Complete or cut off" is NOT judged here (this script never says MISSING): oa_openclaw_incomplete in
+# scripts/lib.sh compares the package with OpenClaw's own dist/postinstall-content-inventory.json.
+#
 # Usage: openclaw-patch-hardlink.sh [--check] [--only-b3] [<openclaw package dir>]   (default: npm root -g)
-# --only-b3: look at the session-archive patch only (for a package taken from the npm tarball, before it is installed)
-# --check: change nothing, report what is still to do (exit 3 when something is, or does not match)
+# --only-b3: look at the session-archive patch (class "archive") only, in dist/ (for a package taken from the
+#            npm tarball before it is installed; fs-safe is not part of the tarball)
+# --check: change nothing, report what is still to do (exit 3 when something is, or does not fit)
 set -euo pipefail
 
 GREEN='\033[0;32m'
@@ -59,27 +81,45 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 HARDLINK_TMP=$(mktemp "${TMPDIR:-/tmp}/oa-hardlink-patch.XXXXXX") || HARDLINK_TMP="/tmp/oa-hardlink-patch.$$"
-trap 'rm -f "$HARDLINK_TMP"' EXIT
+HARDLINK_LIST=$(mktemp "${TMPDIR:-/tmp}/oa-hardlink-list.XXXXXX") || HARDLINK_LIST="/tmp/oa-hardlink-list.$$"
+trap 'rm -f "$HARDLINK_TMP" "$HARDLINK_LIST"' EXIT
+
+# Find the files by content (grep is fast on the few hundred MB of dist/; node then reads only these).
+B3_BODY_MARK='Cannot discard a recovery publication created by an earlier run'
+SCAN_ROOTS=()
+[ -d "$OPENCLAW_DIR/dist" ] && SCAN_ROOTS+=("$OPENCLAW_DIR/dist")
+if [ "$ONLY_B3" != 1 ] && [ -d "$OPENCLAW_DIR/node_modules/@openclaw/fs-safe/dist" ]; then
+    SCAN_ROOTS+=("$OPENCLAW_DIR/node_modules/@openclaw/fs-safe/dist")
+fi
+: > "$HARDLINK_LIST"
+if [ "${#SCAN_ROOTS[@]}" -gt 0 ]; then
+    grep -rlF --include='*.js' --include='*.mjs' --include='*.cjs' \
+        -e 'HARDLINK_FALLBACK_CODES' -e 'NATIVE_COPY_FALLBACK_CODES' \
+        -e 'function moveMigrationArtifact(' -e '__oaMoveMigrationArtifactOrig' \
+        -e 'function createNativeCopyFile' -e 'function assertNativeCopyCompleted' \
+        -e "$B3_BODY_MARK" \
+        "${SCAN_ROOTS[@]}" > "$HARDLINK_LIST" 2>/dev/null || true
+fi
 cat > "$HARDLINK_TMP" << 'HARDLINK_JS'
 const fs = require('fs');
 const path = require('path');
-const root = process.argv[2];
-const FILES = [
-  'node_modules/@openclaw/fs-safe/dist/publish-file.js',
-  'dist/package-update-activation-recovery.mjs',
-  'dist/worker/worker.mjs',
-  'dist/worker/sqlite-store.worker.mjs',
-];
-// Two classifier sets, each `NAME = [/* @__PURE__ */] new Set([ <quote>CODE<quote>, ... ])` (quotes may be
-// ", ' or `, on one line or several; the minified bundles use back quotes on one line):
-//   HARDLINK_FALLBACK_CODES    - the hard link is refused  -> copy
-//   NATIVE_COPY_FALLBACK_CODES - the clone/reflink step of that copy is refused (ioctl FICLONE: EACCES on
-//                                Android, found on the device after the first fix) -> plain copy
-const SETS = ['HARDLINK_FALLBACK_CODES', 'NATIVE_COPY_FALLBACK_CODES'];
-let patched = 0, already = 0, problems = 0;
+const root = path.resolve(process.argv[2]);
 const CHECK = process.argv.includes('--check');
 const ONLY_B3 = process.argv.includes('--only-b3');
+const listAt = process.argv.indexOf('--list');
+const LIST_FILE = listAt > 0 ? process.argv[listAt + 1] : '';
+let patched = 0, already = 0, problems = 0;
+// how many files each class located (patched or already patched): a class with none is NOTARGET
+const found = { classifier: 0, backup: 0, archive: 0, fssafe: 0 };
 const read = (f) => fs.readFileSync(f, 'latin1');
+const rel = (f) => path.relative(root, f);
+const FSSAFE_DIST = path.join(root, 'node_modules', '@openclaw', 'fs-safe', 'dist') + path.sep;
+// the package declares fs-safe: then a file of it has to be found (not required for --only-b3: not unpacked yet)
+let needFsSafe = false;
+try {
+  const pj = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  needFsSafe = !!(pj.dependencies && pj.dependencies['@openclaw/fs-safe']);
+} catch (e) { /* an unreadable package.json: not required */ }
 // Atomic: a full disk must not leave a cut-off bundle (a broken OpenClaw); write a temp file next to it, then
 // rename it over the original. A failed write is a problem (counted, reported), the original stays as it was.
 const write = (f, s) => {
@@ -92,11 +132,19 @@ const write = (f, s) => {
     return true;
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch (e2) { /* nothing to clean */ }
-    console.log('WRITEFAIL ' + path.relative(root, f) + ' (' + (e && e.code ? e.code : String(e)) + ')');
+    console.log('WRITEFAIL ' + rel(f) + ' (' + (e && e.code ? e.code : String(e)) + ')');
     problems++;
     return false;
   }
 };
+
+// ---- F1: two classifier sets, each `NAME = [/* @__PURE__ */] new Set([ <quote>CODE<quote>, ... ])` (quotes may
+// be ", ' or `, on one line or several; minified bundles use back quotes on one line):
+//   HARDLINK_FALLBACK_CODES    - the hard link is refused  -> copy
+//   NATIVE_COPY_FALLBACK_CODES - the clone/reflink step of that copy is refused (ioctl FICLONE: EACCES on
+//                                Android, found on the device after the first fix) -> plain copy
+const SETS = ['HARDLINK_FALLBACK_CODES', 'NATIVE_COPY_FALLBACK_CODES'];
+const B3_BODY_MARK = 'Cannot discard a recovery publication created by an earlier run';
 // Add EACCES to one set; returns 'patched' | 'already' | 'nomatch'
 function addEacces(text, name) {
   const re = new RegExp('(' + name + '\\s*=\\s*(?:\\/\\*[^*]*\\*\\/\\s*)?new Set\\(\\[\\s*)((["\'`])[^\\]]*)\\]\\)');
@@ -107,30 +155,19 @@ function addEacces(text, name) {
   const out = text.slice(0, m.index) + m[1] + q + 'EACCES' + q + ',' + m[2] + '])' + text.slice(m.index + m[0].length);
   return { status: 'patched', text: out };
 }
-for (const rel of ONLY_B3 ? [] : FILES) {
-  const file = path.join(root, rel);
-  if (!fs.existsSync(file)) { console.log('MISSING ' + rel); problems++; continue; }
-  let s = read(file);
-  let changed = false;
-  for (const name of SETS) {
-    const r = addEacces(s, name);
-    if (r.status === 'nomatch') { console.log('NOMATCH ' + rel + ' (' + name + ')'); problems++; continue; }
-    if (r.status === 'already') { already++; continue; }
-    s = r.text; changed = true; patched++; console.log((CHECK ? 'TODO ' : 'PATCHED ') + rel + ' (' + name + ')');
-  }
-  if (changed) write(file, s);
-}
-const dist = path.join(root, 'dist');
-const backups = fs.existsSync(dist) && !ONLY_B3 ? fs.readdirSync(dist).filter((n) => /^backup-create-.*\.mjs$/.test(n)) : [];
-if (backups.length === 0 && !ONLY_B3) { console.log('MISSING dist/backup-create-*.mjs'); problems++; }
-for (const name of backups) {
-  const file = path.join(dist, name);
-  const s = read(file);
-  const n = s.split('strategy: "link-required"').length - 1;
-  if (n === 0) { already++; continue; }
-  if (!write(file, s.split('strategy: "link-required"').join('strategy: "link-or-copy"'))) continue;
-  patched++; console.log((CHECK ? 'TODO ' : 'PATCHED ') + 'dist/' + name + ' (' + n + ' link-required -> link-or-copy)');
-}
+
+// ---- F1c: fs-safe 0.24 (OpenClaw 2026.10). Its native copy has no code set: createNativeCopyFile falls back to a
+// plain copy only on ENOTSUP, and assertNativeCopyCompleted lists the "not supported" codes in a literal. EACCES is
+// added to both (the same code in fs-safe's copy-file-input.js and in the bundles that inline it; the bundlers
+// format the list differently, so whitespace is not part of the pattern). The list is edited only in a file that
+// has the ENOTSUP-only fallback (fs-safe 0.21 and 0.24 alike; the code sets of F1 are a separate thing: they
+// decide the hard link and the clone step, this decides what the plain-copy fallback itself accepts).
+const NF_OLD = /code === "ENOTSUP"( && input\.clone !== "always")/;
+const NF_DONE = /code === "ENOTSUP" \|\| code === "EACCES"\) && input\.clone !== "always"/;
+const NL_OLD = /(\[\s*"ENOTSUP",\s*"EOPNOTSUPP",\s*"ENOSYS",\s*"EXDEV",\s*"EINVAL")(\s*\]\.includes\(copied\.errorCode\))/;
+const NL_DONE = /"EINVAL",\s*"EACCES"\s*\]\.includes\(copied\.errorCode\)/;
+const NATIVE_COPY_DEF = /function createNativeCopyFile\w*\(/;
+const NATIVE_LIST_DEF = /function assertNativeCopyCompleted\w*\(/;
 
 // ---- F3: moveMigrationArtifact by rename when the hard link is refused (see the header)
 const B3_MARK = '__oaMoveMigrationArtifactOrig';
@@ -226,20 +263,97 @@ function patchB3(text) {
   const rest = text.slice(idx).replace(B3_DEF, 'async function ' + B3_MARK + '(');
   return { status: 'patched', text: text.slice(0, idx) + b3Helper(m[1], m[2]) + rest };
 }
-const b3Files = [];
-if (fs.existsSync(path.join(root, 'dist'))) {
-  for (const n of fs.readdirSync(path.join(root, 'dist'))) if (/^session-sqlite-migration-manifest-.*\.mjs$/.test(n)) b3Files.push('dist/' + n);
+
+// ---- the files to look at: the ones the caller's grep found a marker in (dist/ and fs-safe), plus the backup bundle
+const candidates = new Set();
+if (LIST_FILE) {
+  for (const line of fs.readFileSync(LIST_FILE, 'utf8').split('\n')) if (line) candidates.add(path.resolve(line));
 }
-b3Files.push('dist/package-update-activation-recovery.mjs', 'dist/worker/worker.mjs', 'dist/worker/sqlite-store.worker.mjs');
-let b3Seen = 0;
-for (const rel of b3Files) {
-  const file = path.join(root, rel);
-  if (!fs.existsSync(file)) { console.log('MISSING ' + rel + ' (B3)'); problems++; continue; }
-  const r = patchB3(read(file));
-  if (r.status === 'already') { already++; b3Seen++; continue; }
-  if (r.status === 'nomatch') { console.log('NOMATCH ' + rel + ' (B3 moveMigrationArtifact)'); problems++; continue; }
-  if (!write(file, r.text)) continue; patched++; b3Seen++; console.log((CHECK ? 'TODO ' : 'PATCHED ') + rel + ' (B3 moveMigrationArtifact)');
+const backupFiles = new Set();
+const distDir = path.join(root, 'dist');
+if (!ONLY_B3 && fs.existsSync(distDir)) {
+  for (const n of fs.readdirSync(distDir)) if (/^backup-create-.*\.mjs$/.test(n)) backupFiles.add(path.join(distDir, n));
 }
+for (const f of backupFiles) candidates.add(f);
+
+for (const file of [...candidates].sort()) {
+  let s;
+  try { s = read(file); } catch (e) { continue; }
+  const original = s;
+  const r = rel(file);
+  const patchedBefore = patched, alreadyBefore = already;
+  const inFsSafe = file.startsWith(FSSAFE_DIST);
+  const classifierBefore = found.classifier;
+  if (!ONLY_B3) {
+    // F1
+    for (const name of SETS) {
+      if (!new RegExp('\\b' + name + '\\s*=').test(s)) continue;   // a mention without the definition is no target
+      const res = addEacces(s, name);
+      if (res.status === 'nomatch') { console.log('NOMATCH ' + r + ' (' + name + ')'); problems++; continue; }
+      found.classifier++;
+      if (res.status === 'already') { already++; continue; }
+      s = res.text; patched++; console.log((CHECK ? 'TODO ' : 'PATCHED ') + r + ' (' + name + ')');
+    }
+    // F1c
+    const nfOld = NF_OLD.test(s), nfDone = NF_DONE.test(s);
+    if (nfOld) {
+      s = s.replace(new RegExp(NF_OLD.source, 'g'), '(code === "ENOTSUP" || code === "EACCES")$1');
+      found.classifier++; patched++;
+      console.log((CHECK ? 'TODO ' : 'PATCHED ') + r + ' (native copy: EACCES falls back to a plain copy)');
+    } else if (nfDone) {
+      found.classifier++; already++;
+    }
+    if (nfOld || nfDone) {
+      if (NL_OLD.test(s)) {
+        s = s.replace(new RegExp(NL_OLD.source, 'g'), '$1, "EACCES"$2');
+        patched++; console.log((CHECK ? 'TODO ' : 'PATCHED ') + r + ' (native copy: EACCES is a "not supported" code)');
+      } else if (NL_DONE.test(s)) {
+        already++;
+      } else if (NATIVE_LIST_DEF.test(s)) {
+        console.log('NOMATCH ' + r + ' (native copy: list of "not supported" codes)'); problems++;
+      }
+    } else if (NATIVE_COPY_DEF.test(s) && !/\bNATIVE_COPY_FALLBACK_CODES\s*=/.test(s)) {
+      // defines the native copy, but neither in the 0.21 shape (a code set, handled by F1) nor in the 0.24 shape
+      console.log('NOMATCH ' + r + ' (native copy fallback in a form the patch does not know)'); problems++;
+    }
+    if (inFsSafe && found.classifier > classifierBefore) found.fssafe++;
+    // F1b
+    if (backupFiles.has(file)) {
+      const n = s.split('strategy: "link-required"').length - 1;
+      found.backup++;
+      if (n === 0) { already++; }
+      else {
+        s = s.split('strategy: "link-required"').join('strategy: "link-or-copy"');
+        patched++; console.log((CHECK ? 'TODO ' : 'PATCHED ') + r + ' (' + n + ' link-required -> link-or-copy)');
+      }
+    }
+  }
+  // F3
+  if (s.includes('function moveMigrationArtifact(') || s.includes(B3_MARK)) {
+    const res = patchB3(s);
+    if (res.status === 'nomatch') { console.log('NOMATCH ' + r + ' (B3 moveMigrationArtifact)'); problems++; }
+    else {
+      found.archive++;
+      if (res.status === 'already') already++;
+      else { s = res.text; patched++; console.log((CHECK ? 'TODO ' : 'PATCHED ') + r + ' (B3 moveMigrationArtifact)'); }
+    }
+  } else if (s.includes(B3_BODY_MARK)) {
+    // the body of the function is here, its definition is not in the known form: this bundle is not patched
+    console.log('NOMATCH ' + r + ' (B3 moveMigrationArtifact: definition in a form the patch does not know)'); problems++;
+  }
+  if (s !== original && !write(file, s)) {
+    // not written (already counted as a problem): nothing of this file was patched
+    patched = patchedBefore; already = alreadyBefore;
+  }
+}
+
+// ---- a class that located nothing: this package does not fit the patch (loud, never silent)
+if (!ONLY_B3) {
+  if (!found.classifier) { console.log('NOTARGET classifier (HARDLINK_FALLBACK_CODES / native copy fallback)'); problems++; }
+  if (!found.backup) { console.log('NOTARGET backup (dist/backup-create-*.mjs)'); problems++; }
+  if (needFsSafe && !found.fssafe) { console.log('NOTARGET fs-safe (node_modules/@openclaw/fs-safe/dist: the package depends on it)'); problems++; }
+}
+if (!found.archive) { console.log('NOTARGET archive (moveMigrationArtifact)'); problems++; }
 console.log('SUMMARY ' + (CHECK ? 'todo=' : 'patched=') + patched + ' already=' + already + ' problems=' + problems);
 process.exit(problems || (CHECK && patched) ? 3 : 0);
 HARDLINK_JS
@@ -248,7 +362,7 @@ JS_FLAGS=""
 [ "$CHECK" = 1 ] && JS_FLAGS="--check"
 [ "$ONLY_B3" = 1 ] && JS_FLAGS="$JS_FLAGS --only-b3"
 # shellcheck disable=SC2086
-out=$(node "$HARDLINK_TMP" "$OPENCLAW_DIR" $JS_FLAGS) || rc=$?
+out=$(node "$HARDLINK_TMP" "$OPENCLAW_DIR" --list "$HARDLINK_LIST" $JS_FLAGS) || rc=$?
 
 summary=$(printf '%s\n' "$out" | { grep '^SUMMARY ' || true; } | tail -1 | sed 's/^SUMMARY //')
 # (|| true: with nothing to report grep finds no line, and that must not end the script)
@@ -256,7 +370,7 @@ summary=$(printf '%s\n' "$out" | { grep '^SUMMARY ' || true; } | tail -1 | sed '
     case "$line" in
         PATCHED*) echo -e "  ${GREEN}[PATCHED]${NC} ${line#PATCHED }" ;;
         TODO*) echo -e "  ${YELLOW}[TODO]${NC} ${line#TODO }" ;;
-        MISSING*|NOMATCH*|WRITEFAIL*) echo -e "  ${YELLOW}[WARN]${NC} ${line%% *}: ${line#* } - hard-link fallback NOT applied here" ;;
+        NOMATCH*|NOTARGET*|WRITEFAIL*) echo -e "  ${YELLOW}[WARN]${NC} ${line%% *}: ${line#* } - hard-link fallback NOT applied here" ;;
         *) [ -z "$line" ] || echo "  $line" ;;
     esac
 done

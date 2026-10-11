@@ -161,6 +161,48 @@ if printf '%s\n' "$STAGED_ALL" | grep -qxF -e "$PIN_SSOT" -e "$PIN_COPY"; then
     done
 fi
 
+# --- Pin strings in the documents: README (4 languages) + docs/troubleshooting* == the config.env pin ---
+# The pin is written out in prose (about 40 places). Nothing else keeps those sentences current, so a pin
+# bump that forgets one ships a document that names a version the installer does not install.
+# Every 2026.M.P token must be the OpenClaw pin and every "Node.js X.Y.Z" must be the Node.js pin.
+# A version named on purpose (the 7.x users' version) is listed in DOC_PIN_ALLOW.
+DOC_PIN_FILES="README.md README.ko.md README.zh.md README.ja.md docs/troubleshooting.md docs/troubleshooting.ko.md"
+DOC_PIN_ALLOW="2026.7.35"
+_doc_pin_touched=false
+for _f in "$PIN_SSOT" $DOC_PIN_FILES; do
+    if printf '%s\n' "$STAGED_ALL" | grep -qxF "$_f"; then _doc_pin_touched=true; fi
+done
+if [ "$_doc_pin_touched" = true ]; then
+    _pin_oc=$(git show ":$PIN_SSOT" 2>/dev/null | grep -m1 '^PLATFORM_NPM_PACKAGE_VERSION=' | cut -d'"' -f2)
+    _pin_node=$(git show ":$PIN_SSOT" 2>/dev/null | grep -m1 '^PLATFORM_NODE_VERSION=' | cut -d'"' -f2)
+    if [ -n "$_pin_oc" ] && [ -n "$_pin_node" ]; then
+        _doc_pin_bad=""
+        for _f in $DOC_PIN_FILES; do
+            git cat-file -e ":$_f" 2>/dev/null || continue
+            _bad=$(git show ":$_f" | grep -noE '2026\.[0-9]+\.[0-9]+' \
+                | awk -F: -v pin="$_pin_oc" -v allow="$DOC_PIN_ALLOW" \
+                    'BEGIN { n = split(allow, a, " "); for (i = 1; i <= n; i++) ok[a[i]] = 1 } $2 != pin && !($2 in ok) { print "  line " $1 ": OpenClaw " $2 " (pin: " pin ")" }')
+            _bad_node=$(git show ":$_f" | grep -noE 'Node(\.js)? v?[0-9]{2}\.[0-9]+\.[0-9]+' \
+                | awk -F: -v pin="$_pin_node" '{ v = $2; sub(/^[^0-9]*/, "", v); if (v != pin) print "  line " $1 ": Node.js " v " (pin: " pin ")" }')
+            if [ -n "$_bad$_bad_node" ]; then
+                _doc_pin_bad="$_doc_pin_bad
+$_f:"
+                [ -z "$_bad" ] || _doc_pin_bad="$_doc_pin_bad
+$_bad"
+                [ -z "$_bad_node" ] || _doc_pin_bad="$_doc_pin_bad
+$_bad_node"
+            fi
+        done
+        if [ -n "$_doc_pin_bad" ]; then
+            echo ""
+            echo "ERROR: a document names a version that is not the pin in $PIN_SSOT"
+            printf '%s\n' "$_doc_pin_bad"
+            echo "  Update the sentence, or add a version that is named on purpose to DOC_PIN_ALLOW in this hook."
+            exit 1
+        fi
+    fi
+fi
+
 # --- openclaw update guard: shim generator == copy embedded in post-setup.sh ---
 
 SHIM_SRC="platforms/openclaw/openclaw-shim.sh"

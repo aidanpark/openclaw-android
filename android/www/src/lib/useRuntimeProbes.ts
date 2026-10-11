@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { bridge } from './bridge'
+import { useVisibleAgain } from './useVisibleAgain'
 
 export interface ProbeSpec {
   label: string
@@ -15,13 +16,17 @@ const MAX_RETRIES = 12
 /**
  * Runtime version lines, read without blocking the page. A value that is still missing is
  * retried every 10s for 2 minutes (post-setup may still be installing in the terminal) and the
- * whole set is re-read when the page becomes visible or native says the WebView was shown again.
+ * whole set is re-read when the page is shown again (useVisibleAgain: one return is one re-read,
+ * however many of visibilitychange, focus and webview_shown it brings).
  * `specs` must be a module-level constant (it is an effect dependency).
  */
 export function useRuntimeProbes(specs: ProbeSpec[], retry = true): Record<string, string> {
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(specs.map(s => [s.label, PENDING])),
   )
+
+  // The running effect's restart; a no-op while no effect is running
+  const restartRef = useRef<() => void>(() => {})
 
   useEffect(() => {
     let cancelled = false
@@ -49,8 +54,7 @@ export function useRuntimeProbes(specs: ProbeSpec[], retry = true): Record<strin
       }
     }
 
-    const restart = () => {
-      if (document.visibilityState === 'hidden') return
+    restartRef.current = () => {
       tries = 0
       generation++
       clearTimeout(timer)
@@ -58,15 +62,14 @@ export function useRuntimeProbes(specs: ProbeSpec[], retry = true): Record<strin
     }
 
     void run(generation)
-    document.addEventListener('visibilitychange', restart)
-    window.addEventListener('native:webview_shown', restart)
     return () => {
       cancelled = true
       clearTimeout(timer)
-      document.removeEventListener('visibilitychange', restart)
-      window.removeEventListener('native:webview_shown', restart)
+      restartRef.current = () => {}
     }
   }, [specs, retry])
+
+  useVisibleAgain(() => restartRef.current())
 
   return values
 }

@@ -616,41 +616,20 @@ exit ${d}_rc
     private fun prefs() = context.getSharedPreferences(PREFS_NAME, 0)
 
     /**
-     * Copy bundled assets/www into wwwDir, overwriting any existing files.
-     * Called on first install and on APK version upgrade to ensure the UI is always current.
+     * Copy bundled assets/www into wwwDir, overwriting any existing files. Each file is replaced by
+     * a rename, so a WebView loading the page at the same time never reads a half-written file.
+     * Called on every launch of an installed app and at the end of an install.
      */
     fun syncWwwFromAssets() {
+        val started = System.currentTimeMillis()
         try {
-            wwwDir.mkdirs()
-            copyAssetDir("www", wwwDir)
-            AppLogger.i(TAG, "www synced from assets to ${wwwDir.absolutePath}")
+            WwwSync.copyTree("www", wwwDir, context.assets::list, context.assets::open)
+            AppLogger.i(
+                TAG,
+                "www synced from assets to ${wwwDir.absolutePath} in ${System.currentTimeMillis() - started} ms",
+            )
         } catch (e: Exception) {
             AppLogger.w(TAG, "Failed to sync www from assets", e)
-        }
-    }
-
-    private fun copyAssetDir(
-        assetPath: String,
-        targetDir: File,
-    ) {
-        val entries = context.assets.list(assetPath) ?: return
-        targetDir.mkdirs()
-        for (entry in entries) {
-            copyAssetEntry("$assetPath/$entry", File(targetDir, entry))
-        }
-    }
-
-    private fun copyAssetEntry(
-        assetPath: String,
-        targetFile: File,
-    ) {
-        val children = context.assets.list(assetPath)
-        if (!children.isNullOrEmpty()) {
-            copyAssetDir(assetPath, targetFile)
-        } else {
-            context.assets.open(assetPath).use { input ->
-                targetFile.outputStream().use { output -> input.copyTo(output) }
-            }
         }
     }
 

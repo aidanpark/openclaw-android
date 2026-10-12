@@ -68,17 +68,21 @@ class MainActivity : AppCompatActivity() {
         sessionManager = TerminalSessionManager(this, terminalSessionClient, eventBridge)
         jsBridge = JsBridge(this, sessionManager, bootstrapManager, eventBridge)
 
+        // The bundled UI is copied in before the WebView is asked to load it from there: loading
+        // while the copy overwrites the same files can hand the page a half-written script.
+        // The prefix already exists near the end of an install (and all through a reinstall), but
+        // the install coroutine is still working in it: this Activity was recreated mid-install.
+        // Treat it as "not ready" — no terminal, no script update, no www sync — and let the setup
+        // page pick the running install up (getSetupState).
+        val isInstalled = bootstrapManager.isInstalled() && !SetupGuard.isRunning()
+        if (isInstalled) bootstrapManager.syncWwwFromAssets()
+
         setupTerminalView()
         setupWebView()
         setupExtraKeys()
         sessionManager.onSessionsChanged = { updateSessionTabs() }
         startService(Intent(this, OpenClawService::class.java))
 
-        // The prefix already exists near the end of an install (and all through a reinstall), but
-        // the install coroutine is still working in it: this Activity was recreated mid-install.
-        // Treat it as "not ready" — no terminal, no script update, no www sync — and let the setup
-        // page pick the running install up (getSetupState).
-        val isInstalled = bootstrapManager.isInstalled() && !SetupGuard.isRunning()
         AppLogger.i(TAG, "Bootstrap installed: $isInstalled, needsPostSetup: ${bootstrapManager.needsPostSetup()}")
 
         // A bootstrap killed mid-extraction leaves usr-staging behind, and nothing else removes it
@@ -86,11 +90,9 @@ class MainActivity : AppCompatActivity() {
         // while an install runs in this process (an Activity recreated mid-install).
         Thread { bootstrapManager.cleanStaleStaging(SetupGuard::isRunning) }.start()
 
-        // Sync www assets and check for APK version upgrade
+        // Check for APK version upgrade (www was synced above, before the WebView loaded it)
         var scriptUpdate = false
         if (isInstalled) {
-            // Always sync www from assets to pick up UI updates
-            bootstrapManager.syncWwwFromAssets()
             // Ensure oa CLI is installed (network, run in background)
             Thread { bootstrapManager.installOaCli() }.start()
             val savedVersionCode = bootstrapManager.savedVersionCode()
@@ -265,14 +267,10 @@ class MainActivity : AppCompatActivity() {
                 }
         }
 
-        val wwwDir = bootstrapManager.wwwDir
-        val url =
-            if (wwwDir.resolve("index.html").exists()) {
-                "file://${wwwDir.absolutePath}/index.html"
-            } else {
-                // Load bundled fallback setup page from assets
-                "file:///android_asset/www/index.html"
-            }
+        // Always the copy inside the APK. The synced copy under the prefix is the same files, but an
+        // older WebView (91 on API 29/30) refuses ES module scripts from a file:// path outside the
+        // APK ("MIME type of \"\""), which left the page blank on every launch after the install.
+        val url = "file:///android_asset/www/index.html"
         AppLogger.i(TAG, "Loading WebView URL: $url")
         binding.webView.loadUrl(url)
     }

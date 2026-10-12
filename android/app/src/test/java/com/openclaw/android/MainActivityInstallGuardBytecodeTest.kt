@@ -28,6 +28,33 @@ class MainActivityInstallGuardBytecodeTest {
     }
 
     @Test
+    fun `MainActivity onCreate syncs the bundled UI before the WebView is set up to load it`() {
+        val calls = invokedMethods("MainActivity.class", "onCreate")
+        val sync =
+            calls.indexOfFirst {
+                it.owner == "com/openclaw/android/BootstrapManager" &&
+                    it.name == "syncWwwFromAssets"
+            }
+        val setup =
+            calls.indexOfFirst {
+                it.owner == "com/openclaw/android/MainActivity" &&
+                    it.name.startsWith("setupWebView")
+            }
+        assertTrue(sync >= 0, "onCreate does not sync www: $calls")
+        assertTrue(setup >= 0, "onCreate does not set up the WebView: $calls")
+        // A page loaded from the www copy while the copy rewrites those files could read a half-written script
+        assertTrue(sync < setup, "www sync must come before setupWebView: $calls")
+    }
+
+    @Test
+    fun `MainActivity setupWebView loads the page from the APK assets, not the synced copy`() {
+        val calls = invokedMethods("MainActivity.class", "setupWebView")
+        assertTrue(calls.any { it.name == "loadUrl" }, "setupWebView does not load a URL: $calls")
+        // WebView 91 rejects the ES module scripts of a file:// page outside the APK as MIME type ""
+        assertTrue(calls.none { it.name == "getWwwDir" }, "setupWebView must not choose the www copy: $calls")
+    }
+
+    @Test
     fun `MainActivity onDestroy stops the events, takes the WebView out, removes the bridge, then destroys`() {
         val calls = invokedMethods("MainActivity.class", "onDestroy")
         val steps =

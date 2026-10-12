@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [App v0.5.1] - 2026-10-12
+
+### Fixed
+
+- On phones whose Android System WebView is old (version 91 and earlier, for example an Android 10 or 11 phone that does not update it), the app showed a blank screen every time it was opened after the installation had finished. The page is now always loaded from inside the app package, as it already was during the installation, so it works with these WebView versions. The app's language setting is kept.
+
 ## [Script v1.3.0] - 2026-10-12
 
 ### Changed

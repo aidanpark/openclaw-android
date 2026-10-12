@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.3.0] - 2026-10-12
+
+### Changed
+
+- OpenClaw on Android now installs **OpenClaw 2026.10.1** (previously 2026.9.8) with Node.js 24.21.0. New installs get the new version; run `oa --update` to move an existing installation. The update makes a backup first, then moves your OpenClaw data to the new version once; chat history and settings are kept (the original session files are archived beside the new database). Stop the gateway before updating (in the Claw app: Settings → Install & Update → Stop gateway).
+- OpenClaw 2026.10.1 uses about 100 MB more memory than 2026.9.8 while running (about 0.8 GB for the gateway). On a phone with 2 GB of RAM or less, an agent turn can be stopped by Android for lack of memory, as with 2026.9.8.
+
+### Fixed
+
+- OpenClaw 2026.10 could not start its gateway, and its automatic data migration stopped, on Android systems that do not offer the process namespace file `/proc/self/ns/pid` to apps (the kernel does not support it, or SELinux refuses the read). The patch step now also makes OpenClaw treat that file as unavailable instead of failing, so the gateway starts and the update finishes in one run. Systems that offer the file behave as before.
+
+### Known limitations
+
+- In the Claw app, OpenClaw's `openclaw backup git` and `openclaw backup sqlite` are refused by OpenClaw's own safety check, because the app's data folder can be replaced by other users of the system (the folder above it belongs to Android). This was checked in the app only. `openclaw backup create` and `openclaw backup verify` work.
+
 ## [Script v1.2.6] - 2026-10-11
 
 ### Fixed

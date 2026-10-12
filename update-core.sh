@@ -9,11 +9,13 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.2.6"
+OA_VERSION="1.3.0"
 # Marks this updater as the current protocol for the scripts it runs from the downloaded copy
 # (install-nodejs.sh and platforms/*/update.sh refuse a version change without it: a cached older
 # update-core.sh must not combine with a newer download).
-export OA_UPDATE_CORE_PROTOCOL=2
+# Protocol 3: the session guard no longer goes off when the OpenClaw package cannot be read (an updater of
+# protocol 2 may still have that hole), and it finds the bundles by content.
+export OA_UPDATE_CORE_PROTOCOL=3
 
 echo ""
 echo -e "${BOLD}========================================${NC}"

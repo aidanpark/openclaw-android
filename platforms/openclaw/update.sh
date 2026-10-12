@@ -75,14 +75,14 @@ if [ -n "$CURRENT_VER" ] && [ "$CURRENT_VER" != "$PIN_VER" ] \
     exit 1
 fi
 
-# Changing the installed OpenClaw needs the current updater (it exports OA_UPDATE_CORE_PROTOCOL=2 and has made
+# Changing the installed OpenClaw needs the current updater (it exports OA_UPDATE_CORE_PROTOCOL=3 and has made
 # the free-space, gateway and session checks and the data backup before this runs). Right after a release the
 # raw update-core.sh is cached for a few minutes while the tarball is already new: an older update-core
 # would install the new OpenClaw without those. Stop before anything is changed. (install-nodejs.sh does the
 # same for a Node.js change; OA_ALLOW_UNMARKED_OPENCLAW_CHANGE=1 skips this check.)
 if [ -n "$CURRENT_VER" ] && [ "$CURRENT_VER" != "$PIN_VER" ] && [ "${OA_ALLOW_UNMARKED_OPENCLAW_CHANGE:-}" != "1" ]; then
     case "${OA_UPDATE_CORE_PROTOCOL:-}" in ''|*[!0-9]*) OC_PROTO=0 ;; *) OC_PROTO="$OA_UPDATE_CORE_PROTOCOL" ;; esac
-    if [ "$OC_PROTO" -lt 2 ]; then
+    if [ "$OC_PROTO" -lt 3 ]; then
         echo -e "${RED}[FAIL]${NC} The updater downloaded an older copy of itself (cache). Nothing was changed."
         echo "       Run 'oa --update' again in a few minutes."
         oa_note reason=cache_old_updater changed=false

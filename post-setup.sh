@@ -27,7 +27,7 @@ BIN_DIR="$OCA_DIR/bin"
 # Same keys and values as platforms/openclaw/config.env (the SSOT). This script
 # runs as a single file and does not read config.env; .githooks/pre-commit
 # checks that these lines match it. Bump both files together.
-PLATFORM_NPM_PACKAGE_VERSION="2026.9.8"
+PLATFORM_NPM_PACKAGE_VERSION="2026.10.1"
 PLATFORM_NODE_VERSION="24.21.0"
 NODE_VERSION="$PLATFORM_NODE_VERSION"
 
@@ -2265,7 +2265,7 @@ cat > "$OC_HL_GEN" << 'OPENCLAW_HARDLINK_SH'
 # only when the error code is in a list of "not supported" codes (EPERM, EXDEV, ENOTSUP, EOPNOTSUPP, ENOSYS).
 # EACCES is not in those lists, so every such publication fails - among them the SQLite snapshot of
 # `openclaw doctor --fix`, which migrates the data when OpenClaw is updated (the gateway then does not start).
-# Four changes (the names are ours: a "class" below is what has to be found at least once per package):
+# Five changes (the names are ours: a "class" below is what has to be found at least once per package):
 #   F1  (class "classifier")  add EACCES to HARDLINK_FALLBACK_CODES and NATIVE_COPY_FALLBACK_CODES (fs-safe's
 #       publish-file.js and the bundles that inline it; the sets exist in fs-safe 0.21 and 0.24)
 #   F1c (class "classifier")  the native copy (createNativeCopyFile, assertNativeCopyCompleted) falls back to a
@@ -2287,6 +2287,16 @@ cat > "$OC_HL_GEN" << 'OPENCLAW_HARDLINK_SH'
 #       by wrapping the function in each bundle that defines it. The wrapper only takes over when the link is
 #       refused with EACCES (or when an interrupted rename is resumed); every other case runs OpenClaw's own
 #       code unchanged.
+#
+#   F4  (OpenClaw 2026.10, not a hard-link matter - it is here because it is the same kind of Android difference
+#       and the same way of finding the files): the gateway lock tells "my own process" from "a process in another
+#       PID namespace" by stat("/proc/self/ns/pid"). Android's app sandbox answers ENOENT, the namespace of the
+#       process is then "null", and a heartbeat that is less than 90 s old is judged "unknown": the gateway refuses
+#       to start (`failed to acquire gateway state ownership ... different PID namespace`), even against its own
+#       lease. The inode is replaced by the constant "unavailable" when the stat fails, in every bundle and
+#       worker that reads it (all of them must agree); a readable namespace is used as before.
+#       F4 is an OPTIONAL class: OpenClaw 2026.9.x has no such code, so finding no target is not a NOTARGET;
+#       a bundle that has the gateway lock function in a form the patch does not know is a NOMATCH.
 #
 # THE TARGETS ARE FOUND BY CONTENT, NOT BY FILE NAME. OpenClaw moves code between bundles from release to release
 # (2026.10 removed dist/worker/ altogether), so a list of names goes stale. The script looks for the marker
@@ -2369,7 +2379,7 @@ if [ "${#SCAN_ROOTS[@]}" -gt 0 ]; then
         -e 'HARDLINK_FALLBACK_CODES' -e 'NATIVE_COPY_FALLBACK_CODES' \
         -e 'function moveMigrationArtifact(' -e '__oaMoveMigrationArtifactOrig' \
         -e 'function createNativeCopyFile' -e 'function assertNativeCopyCompleted' \
-        -e "$B3_BODY_MARK" \
+        -e "$B3_BODY_MARK" -e '/proc/self/ns/pid' \
         "${SCAN_ROOTS[@]}" > "$HARDLINK_LIST" 2>/dev/null || true
 fi
 cat > "$HARDLINK_TMP" << 'HARDLINK_JS'
@@ -2439,6 +2449,11 @@ const NF_DONE = /code === "ENOTSUP" \|\| code === "EACCES"\) && input\.clone !==
 const NL_OLD = /(\[\s*"ENOTSUP",\s*"EOPNOTSUPP",\s*"ENOSYS",\s*"EXDEV",\s*"EINVAL")(\s*\]\.includes\(copied\.errorCode\))/;
 const NL_DONE = /"EINVAL",\s*"EACCES"\s*\]\.includes\(copied\.errorCode\)/;
 const NATIVE_COPY_DEF = /function createNativeCopyFile\w*\(/;
+
+// ---- F4: the pid namespace inode of the gateway lock (OpenClaw 2026.10; see the header)
+const NS_OLD = /(?<!return )\b([\w$]+)\.statSync\((["'`])\/proc\/self\/ns\/pid\2, \{ bigint: (?:true|!0) \}\)\.ino\.toString\(\)/;
+const NS_DONE = /\/proc\/self\/ns\/pid[^;]{0,60}\.ino\.toString\(\); \} catch \{ return "unavailable"; \}/;
+const NS_DEF = /function readGatewayLockProcessNamespace\(/;
 const NATIVE_LIST_DEF = /function assertNativeCopyCompleted\w*\(/;
 
 // ---- F3: moveMigrationArtifact by rename when the hard link is refused (see the header)
@@ -2589,6 +2604,17 @@ for (const file of [...candidates].sort()) {
       console.log('NOMATCH ' + r + ' (native copy fallback in a form the patch does not know)'); problems++;
     }
     if (inFsSafe && found.classifier > classifierBefore) found.fssafe++;
+    // F4
+    if (s.includes('/proc/self/ns/pid')) {
+      if (NS_DONE.test(s) && !NS_OLD.test(s)) {
+        already++;
+      } else if (NS_OLD.test(s)) {
+        s = s.replace(new RegExp(NS_OLD.source, 'g'), (m, o, q) => '(() => { try { return ' + o + '.statSync(' + q + '/proc/self/ns/pid' + q + ', { bigint: true }).ino.toString(); } catch { return "unavailable"; } })()');
+        patched++; console.log((CHECK ? 'TODO ' : 'PATCHED ') + r + ' (gateway lock: pid namespace unavailable on Android)');
+      } else if (NS_DEF.test(s)) {
+        console.log('NOMATCH ' + r + ' (gateway lock pid namespace in a form the patch does not know)'); problems++;
+      }
+    }
     // F1b
     if (backupFiles.has(file)) {
       const n = s.split('strategy: "link-required"').length - 1;

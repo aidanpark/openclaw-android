@@ -181,7 +181,7 @@ WRAPPER
 # every APK upgrade, so the node wrapper reads lib/ first and only falls back
 # to patches/ when lib/ has no copy. Safe to call repeatedly.
 # A Node.js version change has to come from a current updater or installer (they export
-# OA_UPDATE_CORE_PROTOCOL=2). Right after a release the raw update-core.sh is cached for a few
+# OA_UPDATE_CORE_PROTOCOL=3). Right after a release the raw update-core.sh is cached for a few
 # minutes while the tarball is already new: that older update-core would swap Node.js without
 # the checks, the data backup and the migration of the new one. Stop before anything is changed,
 # so the working Node.js stays (the old updater then stops at its own Node.js gate).
@@ -190,7 +190,7 @@ refuse_unmarked_node_change() {
     [ -n "$installed" ] && [ "$installed" != "$NODE_VERSION" ] || return 0
     [ "${OA_ALLOW_UNMARKED_NODE_CHANGE:-}" != "1" ] || return 0
     case "${OA_UPDATE_CORE_PROTOCOL:-}" in ''|*[!0-9]*) proto=0 ;; *) proto="$OA_UPDATE_CORE_PROTOCOL" ;; esac
-    if [ "$proto" -lt 2 ]; then
+    if [ "$proto" -lt 3 ]; then
         echo -e "${RED}[FAIL]${NC} The updater downloaded an older copy of itself (cache). Nothing was changed."
         echo "       Run 'oa --update' again in a few minutes."
         oa_note "reason=cache_old_updater"; oa_note "changed=false"

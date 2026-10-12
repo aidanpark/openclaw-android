@@ -177,11 +177,11 @@ From Script v1.2.3 on, `oa --update` detects an incomplete OpenClaw and installs
 ## `[FAIL] OpenClaw … was installed but is incomplete …`
 
 ```
-[FAIL] OpenClaw 2026.9.8 was installed but is incomplete (files are missing or it does not start).
+[FAIL] OpenClaw 2026.10.1 was installed but is incomplete (files are missing or it does not start).
        Your data is untouched. Run: oa --update
 ```
 
-The Termux installer prints the same `[FAIL]` line followed by `Run the installer again.` In the Claw app, the setup stops with `OpenClaw 2026.9.8 is still incomplete (files are missing or it does not start). Restart the app to try again.` The Claw app (v0.4.5 or later) shows this failure on its setup screen with a button to try again.
+The Termux installer prints the same `[FAIL]` line followed by `Run the installer again.` In the Claw app, the setup stops with `OpenClaw 2026.10.1 is still incomplete (files are missing or it does not start). Restart the app to try again.` The Claw app (v0.4.5 or later) shows this failure on its setup screen with a button to try again.
 
 ### Cause
 
@@ -273,7 +273,7 @@ oa --update && source ~/.bashrc
 
 ### Cause
 
-OpenClaw 2026.9.8 can start its own update from the dashboard's Update button, from the agent's gateway tool, and from `openclaw gateway call update.run`. These paths do not go through the `openclaw` command guard, so the Node.js wrapper blocks OpenClaw's own update as well. Some OpenClaw messages also suggest `openclaw update --yes` or `openclaw update repair`; these commands are blocked too. This is intended: the pinned Node.js and OpenClaw versions are verified as a pair.
+OpenClaw 2026.10.1 can start its own update from the dashboard's Update button, from the agent's gateway tool, and from `openclaw gateway call update.run`. These paths do not go through the `openclaw` command guard, so the Node.js wrapper blocks OpenClaw's own update as well. Some OpenClaw messages also suggest `openclaw update --yes` or `openclaw update repair`; these commands are blocked too. This is intended: the pinned Node.js and OpenClaw versions are verified as a pair.
 
 ### Solution
 
@@ -370,7 +370,7 @@ state database schema migration required
 
 ### Cause
 
-OpenClaw 2026.9.8 may need to migrate the data of an older OpenClaw version. When `oa --update` finds that a migration is needed, it runs `openclaw doctor --fix` once automatically, but only if that run created a backup in `~/.openclaw-android/backup/pre-update/`. If the migration fails, is skipped (`OA_SKIP_AUTO_DOCTOR=1`), or the backup was skipped, the data stays as it was and the gateway may refuse to start.
+OpenClaw 2026.10.1 may need to migrate the data of an older OpenClaw version. When `oa --update` finds that a migration is needed, it runs `openclaw doctor --fix` once automatically, but only if that run created a backup in `~/.openclaw-android/backup/pre-update/`. If the migration fails, is skipped (`OA_SKIP_AUTO_DOCTOR=1`), or the backup was skipped, the data stays as it was and the gateway may refuse to start.
 
 ### Solution
 
@@ -391,6 +391,26 @@ If `oa --update` finishes with the following line, the data check was skipped, n
 [WARN] The gateway is using the OpenClaw state, so the data check was skipped. Stop the gateway, then run: openclaw doctor
 ```
 
+## The gateway does not start: "cannot verify Gateway ownership … (different PID namespace)"
+
+### Symptom
+
+```
+Gateway failed to start: failed to acquire gateway state ownership | cannot verify Gateway ownership from this process (different PID namespace)
+```
+
+With OpenClaw 2026.10 the data migration of `oa --update` (`openclaw doctor --fix`) can also stop with `GatewayLockNamespaceError`.
+
+### Cause
+
+OpenClaw 2026.10 checks the process namespace file `/proc/self/ns/pid` for its gateway lock. Many Android kernels do not provide that file to apps (no PID namespace support), and on some systems SELinux refuses the read, so the check fails even for the gateway's own lock.
+
+### Solution
+
+Run `oa --update` (Script v1.3.0 or later). The hard-link patch step also patches OpenClaw so that the lookup returns a fixed value when it fails, and `oa --status` counts it under `Hard-link patch`. If a failed start has just written the lock, wait 90 seconds before starting the gateway again.
+
+---
+
 ## `Hard-link patch: not complete`, `linkat … Permission denied`, or `FICLONE: Permission denied`
 
 ```
@@ -399,7 +419,7 @@ Hard-link patch: not complete (…)
 
 ### Cause
 
-Android blocks hardlinks and reflink (`FICLONE`) copies in the app data area, in the app and in Termux alike; they fail with `EACCES`. OpenClaw 2026.9.8 tries a hardlink first and falls back to copying only on a "not supported" error, which `EACCES` is not, and it moves the original chat history to its archive folder with a hardlink only. OpenClaw on Android therefore patches OpenClaw (`platforms/openclaw/patches/openclaw-patch-hardlink.sh`) every time it installs or updates it. `oa --status` shows `Hard-link patch: applied (…)` when the patch is in place and `not complete (…)` when it is not, for example after OpenClaw was reinstalled without the patch.
+Android blocks hardlinks and reflink (`FICLONE`) copies in the app data area, in the app and in Termux alike; they fail with `EACCES`. OpenClaw 2026.10.1 tries a hardlink first and falls back to copying only on a "not supported" error, which `EACCES` is not, and it moves the original chat history to its archive folder with a hardlink only. OpenClaw on Android therefore patches OpenClaw (`platforms/openclaw/patches/openclaw-patch-hardlink.sh`) every time it installs or updates it. `oa --status` shows `Hard-link patch: applied (…)` when the patch is in place and `not complete (…)` when it is not, for example after OpenClaw was reinstalled without the patch.
 
 ### Solution
 
@@ -408,7 +428,7 @@ Run the update again, or reinstall the pinned OpenClaw version, which applies th
 ```bash
 oa --update && source ~/.bashrc
 # or
-npm install -g openclaw@2026.9.8
+npm install -g openclaw@2026.10.1
 ```
 
 Then check `oa --status`. If the line still says `not complete`, or an automatic data migration failed, read `~/.openclaw-android/doctor-fix.log` (the full output of `openclaw doctor --fix`) and report it together with the output of `oa --status`.
@@ -416,7 +436,7 @@ Then check `oa --status`. If the line still says `not complete`, or an automatic
 ## `oa --update` stops with "Your OpenClaw has saved chat history, and the patch … does not fit"
 
 ```
-[FAIL] Your OpenClaw has saved chat history, and the patch for moving chat history does not fit OpenClaw 2026.9.8.
+[FAIL] Your OpenClaw has saved chat history, and the patch for moving chat history does not fit OpenClaw 2026.10.1.
 ```
 
 ### Cause

@@ -214,7 +214,7 @@ oa --update && source ~/.bashrc
 
 이 명령어 하나로 설치된 모든 컴포넌트를 한번에 업데이트합니다:
 
-- **OpenClaw** — 고정(pinned)된 검증 버전으로 유지되는 코어 패키지 (현재 2026.9.8 — 항상 최신 릴리스는 아님)
+- **OpenClaw** — 고정(pinned)된 검증 버전으로 유지되는 코어 패키지 (현재 2026.10.1 — 항상 최신 릴리스는 아님)
 - **code-server** — 브라우저 IDE
 - **OpenCode** — AI 코딩 어시스턴트
 - **AI CLI 도구** — Claude Code, Gemini CLI, Codex CLI (Termux)
@@ -226,7 +226,7 @@ oa --update && source ~/.bashrc
 
 한 번에 하나의 설치·업데이트·도구 설치만 실행합니다(새 설치, `oa --update`, Claw 앱의 도구 설치는 잠금 하나를 공유합니다). 다른 실행이 진행 중이면 `oa --update` 는 `[FAIL] Another update, setup or tools run is in progress. Try again when it has finished.` 를 출력하고 설치 상태를 바꾸지 않은 채 종료 코드 2 로 끝납니다([문제 해결](docs/troubleshooting.ko.md) 참고).
 
-**고정 버전이 바뀌는 업데이트**(예: Script v1.2.0 에서 Node.js 24.21.0 과 OpenClaw 2026.9.8 로 바뀌는 경우)에서 `oa --update` 는 다음 안전장치를 추가로 적용합니다:
+**고정 버전이 바뀌는 업데이트**(예: Script v1.2.0 에서 Node.js 24.21.0 과 OpenClaw 2026.9 로 바뀌는 경우)에서 `oa --update` 는 다음 안전장치를 추가로 적용합니다:
 
 - 여유 공간 2000MB 가 필요합니다. 부족하면 아무것도 바꾸기 전에 멈추고 필요한 양과 남은 양을 알려 줍니다.
 - OpenClaw 게이트웨이가 실행 중이면 아무것도 바꾸지 않고 멈춥니다. 게이트웨이를 멈추고(Ctrl+C) `oa --update` 를 다시 실행하세요. Claw 앱에서는 설정 → 설치·갱신 → 「게이트웨이 중지」로 앱 터미널에서 시작한 게이트웨이를 멈출 수 있으며, 앱의 「업데이트」 버튼도 그런 게이트웨이를 먼저 멈춘 뒤 진행합니다. 앱이 업데이트를 위해 게이트웨이를 멈췄다면 업데이트가 끝난 뒤 대시보드에서 다시 시작하세요.
@@ -237,7 +237,7 @@ oa --update && source ~/.bashrc
 
 `oa --update` 는 Node.js 나 OpenClaw 를 더 낮은 버전으로 내리지 않습니다(예: 배포 직후 옛 파일이 내려온 경우). 의도적으로 내리려면 `OA_ALLOW_OPENCLAW_DOWNGRADE=1` 과 `OA_ALLOW_NODE_DOWNGRADE=1` 을 둘 다 설정해야 합니다. `oa --restore` 는 데이터만 되돌리고 프로그램은 되돌리지 않습니다.
 
-**참고**: `openclaw update`(및 `openclaw --update`)는 의도적으로 차단되어 있습니다 — 이 프로젝트가 검증한 버전에 OpenClaw을 고정하는 가드가 설치되어 있기 때문입니다. 게이트웨이의 "update available" 알림은 꺼져 있습니다(`update.checkOnStart=false`). 직접 다시 켠 경우 `update available … Run: openclaw update` 같은 메시지가 출력될 수 있지만 해당 명령어는 차단되므로 대신 `oa --update`를 사용하세요. `openclaw update status`(읽기 전용)는 계속 동작합니다. OpenClaw 2026.9.8 은 대시보드의 Update 버튼, 에이전트의 gateway 도구, `openclaw gateway call update.run` 으로 자체 업데이트를 시작할 수 있습니다. 이 경로는 `openclaw` 명령 가드를 거치지 않으므로 Node.js 래퍼가 OpenClaw 의 자체 업데이트도 차단합니다(`[BLOCKED]`). OpenClaw 의 메시지가 `openclaw update --yes` 나 `openclaw update repair` 를 권하는 경우가 있으나 이 명령도 차단되어 있으므로 `oa --update` 를 사용하세요.
+**참고**: `openclaw update`(및 `openclaw --update`)는 의도적으로 차단되어 있습니다 — 이 프로젝트가 검증한 버전에 OpenClaw을 고정하는 가드가 설치되어 있기 때문입니다. 게이트웨이의 "update available" 알림은 꺼져 있습니다(`update.checkOnStart=false`). 직접 다시 켠 경우 `update available … Run: openclaw update` 같은 메시지가 출력될 수 있지만 해당 명령어는 차단되므로 대신 `oa --update`를 사용하세요. `openclaw update status`(읽기 전용)는 계속 동작합니다. OpenClaw 2026.10.1 은 대시보드의 Update 버튼, 에이전트의 gateway 도구, `openclaw gateway call update.run` 으로 자체 업데이트를 시작할 수 있습니다. 이 경로는 `openclaw` 명령 가드를 거치지 않으므로 Node.js 래퍼가 OpenClaw 의 자체 업데이트도 차단합니다(`[BLOCKED]`). OpenClaw 의 메시지가 `openclaw update --yes` 나 `openclaw update repair` 를 권하는 경우가 있으나 이 명령도 차단되어 있으므로 `oa --update` 를 사용하세요.
 
 > `oa` 명령어가 없는 경우 (이전 설치 사용자), curl로 실행:
 > ```bash
@@ -280,7 +280,7 @@ oa --restore
 
 ## 로컬 LLM 실행
 
-OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통해 로컬 LLM 추론을 지원합니다. 프리빌트 네이티브 바이너리(`@node-llama-cpp/linux-arm64`)가 설치에 포함되어 있으며, glibc 환경에서 정상적으로 로딩됩니다 — **폰에서 로컬 LLM 구동이 기술적으로 가능합니다**.
+OpenClaw 의 로컬 LLM 지원은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp) 를 사용했습니다. 고정된 OpenClaw 버전은 더 이상 node-llama-cpp 를 의존성으로 두지 않으며(문서는 관리형 llama-server 를 설명합니다), 이 버전으로 폰에서 로컬 추론을 시험하지 않았습니다 — 아래 내용은 검증된 구성이 아니라 일반적인 제약입니다.
 
 다만 현실적인 제약이 있습니다:
 
@@ -293,7 +293,7 @@ OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통
 
 실험 목적이라면 TinyLlama 1.1B (Q4, ~670MB) 같은 소형 모델은 폰에서 실행할 수 있습니다. 실제 사용에는 클라우드 LLM 제공자를 권장합니다.
 
-> **왜 `--ignore-scripts`인가?** 설치 스크립트는 `npm install -g openclaw@2026.9.8 --ignore-scripts`(고정된 버전)를 사용합니다. node-llama-cpp의 postinstall 스크립트가 cmake로 llama.cpp 소스를 빌드하려고 시도하는데, 폰에서 30분 이상 소요되며 툴체인 호환성 문제로 실패합니다. 프리빌트 바이너리는 이 빌드 과정 없이 작동하므로, postinstall을 안전하게 건너뜁니다.
+> **왜 `--ignore-scripts`인가?** 설치 스크립트는 `npm install -g openclaw@2026.10.1 --ignore-scripts`(고정된 버전)를 사용합니다. 네이티브 의존성의 install 스크립트(node-gyp 빌드, 프리빌트 바이너리 내려받기)는 Termux 에서 대부분 실패하고, 한 건만 실패해도 설치 전체가 멈추기 때문입니다. OpenClaw 의 핵심 부분은 이 스크립트 없이 작동하므로 스크립트를 건너뛰고, 필요한 것만 명시적으로 복구합니다.
 
 <details>
 <summary>개발자용 기술 문서</summary>
@@ -327,7 +327,7 @@ OpenClaw은 [node-llama-cpp](https://github.com/withcatai/node-llama-cpp)를 통
 
 | 컴포넌트 | 역할 | 설치 방식 |
 |----------|------|-----------|
-| [OpenClaw](https://github.com/openclaw/openclaw) | AI 에이전트 플랫폼 (핵심), 검증된 버전으로 고정 (2026.9.8) | `npm install -g` |
+| [OpenClaw](https://github.com/openclaw/openclaw) | AI 에이전트 플랫폼 (핵심), 검증된 버전으로 고정 (2026.10.1) | `npm install -g` |
 | [clawdhub](https://github.com/AidanPark/clawdhub) | OpenClaw 스킬 매니저 | `npm install -g` |
 | [PyYAML](https://pyyaml.org/) | `.skill` 패키징용 YAML 파서 | `pip install` |
 
@@ -508,7 +508,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 
 **Node.js 래퍼의 기본값:** OpenClaw 2026.9.x 는 Node.js 24.16 이상을 요구합니다. OpenClaw 의 파일 안전 모듈(`@openclaw/fs-safe`)은 네이티브 도우미에서 `openat2` 시스템 콜을 사용하는데, Android 의 앱 seccomp 정책이 이 호출을 SIGSYS(Bad system call)로 종료시킵니다. 그래서 래퍼는 기본으로 `FS_SAFE_TEST_NO_OPENAT2=1` 을 설정하여, 네이티브 도우미는 유지하되 `openat2` 를 사용하지 않게 합니다(값이 정확히 `1` 이어야 인식됩니다). `FS_SAFE_NATIVE_MODE=off` 를 설정하면 네이티브 도우미 자체를 끌 수 있으나, 그러면 OpenClaw 의 일부 데이터 이전이 거부될 수 있습니다. 래퍼는 `OPENCLAW_NO_AUTO_UPDATE=1` 도 기본으로 설정하고 OpenClaw 의 자체 업데이트를 차단합니다([업데이트](#업데이트) 참고).
 
-**하드링크 패치:** Android 는 앱 데이터 영역에서 하드링크와 reflink(`FICLONE`) 복사를 막습니다(앱과 Termux 모두, 오류 `EACCES`). OpenClaw 2026.9.8 은 하드링크를 먼저 시도하고 「지원 안 함」 오류일 때만 복사로 넘어가는데, `EACCES` 는 지원 안 함으로 보지 않습니다. 또 대화 기록을 이전한 뒤 원본을 보관 폴더로 옮길 때는 하드링크만 사용합니다. 그대로 두면 7.35 에서 올라온 사용자의 데이터 이전이 실패합니다. OpenClaw on Android 는 OpenClaw 를 설치하거나 업데이트할 때마다(앱 설치, Termux 설치, `oa --update`, 그리고 `npm install -g openclaw@<고정 버전>` 으로 다시 설치할 때) `platforms/openclaw/patches/openclaw-patch-hardlink.sh` 로 OpenClaw 의 해당 부분을 고칩니다. `EACCES` 를 복사로 넘어가는 경우에 포함하고, 보관 폴더로 옮길 때는 하드링크가 거부되면 같은 파일 시스템 안의 이름 바꾸기(rename)로 처리합니다. 이에 따라 `openclaw backup create` 도 하드링크 대신 복사를 사용할 수 있습니다. `oa --status` 에 `Hard-link patch: applied (…)` 또는 `not complete (…)` 줄이 표시됩니다. 대화 기록이 있는 7.35 사용자가 고정 버전이 바뀌는 업데이트를 하면, 설치할 OpenClaw 에 이 패치가 맞는지 먼저 확인하고 맞지 않으면 아무것도 바꾸지 않고 멈춥니다([문제 해결](docs/troubleshooting.ko.md) 참고).
+**하드링크 패치:** Android 는 앱 데이터 영역에서 하드링크와 reflink(`FICLONE`) 복사를 막습니다(앱과 Termux 모두, 오류 `EACCES`). OpenClaw 2026.10.1 은 하드링크를 먼저 시도하고 「지원 안 함」 오류일 때만 복사로 넘어가는데, `EACCES` 는 지원 안 함으로 보지 않습니다. 또 대화 기록을 이전한 뒤 원본을 보관 폴더로 옮길 때는 하드링크만 사용합니다. 그대로 두면 7.35 에서 올라온 사용자의 데이터 이전이 실패합니다. OpenClaw on Android 는 OpenClaw 를 설치하거나 업데이트할 때마다(앱 설치, Termux 설치, `oa --update`, 그리고 `npm install -g openclaw@<고정 버전>` 으로 다시 설치할 때) `platforms/openclaw/patches/openclaw-patch-hardlink.sh` 로 OpenClaw 의 해당 부분을 고칩니다. `EACCES` 를 복사로 넘어가는 경우에 포함하고, 보관 폴더로 옮길 때는 하드링크가 거부되면 같은 파일 시스템 안의 이름 바꾸기(rename)로 처리합니다. 이에 따라 `openclaw backup create` 도 하드링크 대신 복사를 사용할 수 있습니다. `oa --status` 에 `Hard-link patch: applied (…)` 또는 `not complete (…)` 줄이 표시됩니다. 대화 기록이 있는 7.35 사용자가 고정 버전이 바뀌는 업데이트를 하면, 설치할 OpenClaw 에 이 패치가 맞는지 먼저 확인하고 맞지 않으면 아무것도 바꾸지 않고 멈춥니다([문제 해결](docs/troubleshooting.ko.md) 참고). 또 OpenClaw 2026.10 은 게이트웨이 잠금을 위해 프로세스 네임스페이스 파일 `/proc/self/ns/pid` 를 읽는데, 많은 Android 커널이 앱에 이 파일을 제공하지 않습니다(조회가 `ENOENT` 또는 `EACCES` 로 실패). 같은 패치가 OpenClaw 가 이 파일을 「없음」으로 취급하게 하여 게이트웨이가 시작을 거부하지 않도록 합니다.
 
 **알려진 한계:** OpenClaw 의 데스크톱 자동화 도구(`@trycua/cua-driver`)는 Android 10 이하(API 29 이하)에서 필요한 시스템 콜 일부가 막혀 동작하지 않을 수 있습니다.
 
@@ -520,7 +520,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 2. pip으로 PyYAML 설치 (`.skill` 패키징용)
 3. `glibc-compat.js`를 `~/.openclaw-android/patches/`에 복사 (Node.js 래퍼는 Node.js 설치 때 함께 들어가는 `~/.openclaw-android/lib/` 사본을 읽습니다 — 앱이 덮어쓰지 않는 위치)
 4. `systemctl` 스텅을 `$PREFIX/bin/`에 설치
-5. `npm install -g openclaw@2026.9.8 --ignore-scripts` 실행 (`config.env`에 고정된 버전)
+5. `npm install -g openclaw@2026.10.1 --ignore-scripts` 실행 (`config.env`에 고정된 버전)
 6. `--ignore-scripts`로 건너뛴 OpenClaw 자체 postinstall 스크립트(`postinstall-bundled-plugins.mjs`) 실행
 7. `openclaw-apply-patches.sh`로 플랫폼별 패치 적용
 8. `openclaw update` 가드(`openclaw-shim.sh`) 설치 — 고정 버전이 유지되도록 함

@@ -58,7 +58,7 @@ bash "$SCRIPT_DIR/scripts/install-infra-deps.sh"
 bash "$SCRIPT_DIR/scripts/setup-paths.sh"
 
 # The installer is a current entry point: it may change the Node.js version (see install-nodejs.sh)
-export OA_UPDATE_CORE_PROTOCOL=2
+export OA_UPDATE_CORE_PROTOCOL=3
 
 step 5 "Platform Runtime Dependencies (L2)"
 if [ "${PLATFORM_NEEDS_GLIBC:-false}" = true ]; then bash "$SCRIPT_DIR/scripts/install-glibc.sh"; fi

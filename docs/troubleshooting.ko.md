@@ -177,11 +177,11 @@ Script v1.2.3 부터 `oa --update` 는 불완전한 OpenClaw 를 감지하여 �
 ## `[FAIL] OpenClaw … was installed but is incomplete …`
 
 ```
-[FAIL] OpenClaw 2026.10.1 was installed but is incomplete (files are missing or it does not start).
+[FAIL] OpenClaw 2026.10.2 was installed but is incomplete (files are missing or it does not start).
        Your data is untouched. Run: oa --update
 ```
 
-Termux 설치 프로그램은 같은 `[FAIL]` 줄 뒤에 `Run the installer again.` 를 표시합니다. Claw 앱에서는 설정이 `OpenClaw 2026.10.1 is still incomplete (files are missing or it does not start). Restart the app to try again.` 와 함께 중단됩니다. Claw 앱(v0.4.5 이상)은 이 실패를 설정 화면에 표시하며, 다시 시도하는 버튼을 제공합니다.
+Termux 설치 프로그램은 같은 `[FAIL]` 줄 뒤에 `Run the installer again.` 를 표시합니다. Claw 앱에서는 설정이 `OpenClaw 2026.10.2 is still incomplete (files are missing or it does not start). Restart the app to try again.` 와 함께 중단됩니다. Claw 앱(v0.4.5 이상)은 이 실패를 설정 화면에 표시하며, 다시 시도하는 버튼을 제공합니다.
 
 ### 원인
 
@@ -273,7 +273,7 @@ oa --update && source ~/.bashrc
 
 ### 원인
 
-OpenClaw 2026.10.1 은 대시보드의 Update 버튼, 에이전트의 gateway 도구, `openclaw gateway call update.run` 으로 자체 업데이트를 시작할 수 있습니다. 이 경로는 `openclaw` 명령 가드를 거치지 않으므로 Node.js 래퍼가 OpenClaw 의 자체 업데이트도 차단합니다. OpenClaw 의 일부 메시지는 `openclaw update --yes` 나 `openclaw update repair` 를 권하는데, 이 명령도 차단되어 있습니다. 고정된 Node.js 와 OpenClaw 버전은 한 쌍으로 검증된 조합이므로 의도된 동작입니다.
+OpenClaw 2026.10.2 은 대시보드의 Update 버튼, 에이전트의 gateway 도구, `openclaw gateway call update.run` 으로 자체 업데이트를 시작할 수 있습니다. 이 경로는 `openclaw` 명령 가드를 거치지 않으므로 Node.js 래퍼가 OpenClaw 의 자체 업데이트도 차단합니다. OpenClaw 의 일부 메시지는 `openclaw update --yes` 나 `openclaw update repair` 를 권하는데, 이 명령도 차단되어 있습니다. 고정된 Node.js 와 OpenClaw 버전은 한 쌍으로 검증된 조합이므로 의도된 동작입니다.
 
 ### 해결 방법
 
@@ -370,7 +370,7 @@ state database schema migration required
 
 ### 원인
 
-OpenClaw 2026.10.1 은 이전 OpenClaw 버전의 데이터를 이전해야 할 수 있습니다. `oa --update` 는 데이터 이전이 필요하다고 판단하면 `openclaw doctor --fix` 를 한 번 자동으로 실행하지만, 이번 실행에서 `~/.openclaw-android/backup/pre-update/` 에 백업을 만들었을 때만 실행합니다. 이전이 실패했거나, 자동 이전을 껐거나(`OA_SKIP_AUTO_DOCTOR=1`), 백업을 건너뛴 경우에는 데이터가 그대로 남아 게이트웨이가 시작을 거부할 수 있습니다.
+OpenClaw 2026.10.2 은 이전 OpenClaw 버전의 데이터를 이전해야 할 수 있습니다. `oa --update` 는 데이터 이전이 필요하다고 판단하면 `openclaw doctor --fix` 를 한 번 자동으로 실행하지만, 이번 실행에서 `~/.openclaw-android/backup/pre-update/` 에 백업을 만들었을 때만 실행합니다. 이전이 실패했거나, 자동 이전을 껐거나(`OA_SKIP_AUTO_DOCTOR=1`), 백업을 건너뛴 경우에는 데이터가 그대로 남아 게이트웨이가 시작을 거부할 수 있습니다.
 
 ### 해결 방법
 
@@ -419,7 +419,7 @@ Hard-link patch: not complete (…)
 
 ### 원인
 
-Android 는 앱 데이터 영역에서 하드링크와 reflink(`FICLONE`) 복사를 막습니다(앱과 Termux 모두). 이 호출은 `EACCES` 로 실패합니다. OpenClaw 2026.10.1 은 하드링크를 먼저 시도하고 「지원 안 함」 오류일 때만 복사로 넘어가는데, `EACCES` 는 지원 안 함으로 보지 않습니다. 또 대화 기록의 원본을 보관 폴더로 옮길 때는 하드링크만 사용합니다. 그래서 OpenClaw on Android 는 OpenClaw 를 설치하거나 업데이트할 때마다 OpenClaw 를 패치합니다(`platforms/openclaw/patches/openclaw-patch-hardlink.sh`). `oa --status` 는 패치가 적용되어 있으면 `Hard-link patch: applied (…)`, 그렇지 않으면 `not complete (…)` 를 표시합니다. 패치 없이 OpenClaw 를 다시 설치한 경우가 그 예입니다.
+Android 는 앱 데이터 영역에서 하드링크와 reflink(`FICLONE`) 복사를 막습니다(앱과 Termux 모두). 이 호출은 `EACCES` 로 실패합니다. OpenClaw 2026.10.2 은 하드링크를 먼저 시도하고 「지원 안 함」 오류일 때만 복사로 넘어가는데, `EACCES` 는 지원 안 함으로 보지 않습니다. 또 대화 기록의 원본을 보관 폴더로 옮길 때는 하드링크만 사용합니다. 그래서 OpenClaw on Android 는 OpenClaw 를 설치하거나 업데이트할 때마다 OpenClaw 를 패치합니다(`platforms/openclaw/patches/openclaw-patch-hardlink.sh`). `oa --status` 는 패치가 적용되어 있으면 `Hard-link patch: applied (…)`, 그렇지 않으면 `not complete (…)` 를 표시합니다. 패치 없이 OpenClaw 를 다시 설치한 경우가 그 예입니다.
 
 ### 해결 방법
 
@@ -428,7 +428,7 @@ Android 는 앱 데이터 영역에서 하드링크와 reflink(`FICLONE`) 복사
 ```bash
 oa --update && source ~/.bashrc
 # 또는
-npm install -g openclaw@2026.10.1
+npm install -g openclaw@2026.10.2
 ```
 
 그 뒤 `oa --status` 를 확인하세요. 줄이 계속 `not complete` 이거나 자동 데이터 이전이 실패했다면 `~/.openclaw-android/doctor-fix.log`(`openclaw doctor --fix` 의 전체 출력)를 읽고, `oa --status` 의 출력과 함께 보고하세요.
@@ -436,7 +436,7 @@ npm install -g openclaw@2026.10.1
 ## `oa --update` 가 "Your OpenClaw has saved chat history, and the patch … does not fit" 으로 멈춤
 
 ```
-[FAIL] Your OpenClaw has saved chat history, and the patch for moving chat history does not fit OpenClaw 2026.10.1.
+[FAIL] Your OpenClaw has saved chat history, and the patch for moving chat history does not fit OpenClaw 2026.10.2.
 ```
 
 ### 원인

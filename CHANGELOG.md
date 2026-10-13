@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.3.1] - 2026-10-13
+
+### Changed
+
+- OpenClaw on Android now installs **OpenClaw 2026.10.2** (previously 2026.10.1) with Node.js 24.21.0. The patches, the update guard and the data migration are unchanged. New installs get the new version; run `oa --update` to move an existing installation (stop the gateway first, as before).
+
 ## [App v0.5.1] - 2026-10-12
 
 ### Fixed

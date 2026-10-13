@@ -219,7 +219,7 @@ oa --update && source ~/.bashrc
 
 一条命令更新所有已安装组件：
 
-- **OpenClaw** — 保持在锁定（pinned）的已验证版本（当前为 2026.10.1 — 不一定是最新版本）
+- **OpenClaw** — 保持在锁定（pinned）的已验证版本（当前为 2026.10.2 — 不一定是最新版本）
 - **code-server** — 浏览器 IDE
 - **OpenCode** — AI 编程助手
 - **AI CLI 工具** — Claude Code、Gemini CLI、Codex CLI (Termux)
@@ -242,7 +242,7 @@ oa --update && source ~/.bashrc
 
 `oa --update` 不会把 Node.js 或 OpenClaw 降到更低的版本（例如发布后刚好拿到旧文件的情况）。若要有意降级，必须同时设置 `OA_ALLOW_OPENCLAW_DOWNGRADE=1` 和 `OA_ALLOW_NODE_DOWNGRADE=1`。`oa --restore` 只恢复数据，不会恢复程序。
 
-**注意**：`openclaw update`（以及 `openclaw --update`）被有意阻止——本项目安装了一个守卫，将 OpenClaw 锁定在已验证的版本上。网关的 "update available" 提示已为你关闭（`update.checkOnStart=false`）。如果你自行重新开启，它可能会打印类似 `update available … Run: openclaw update` 的提示，但该命令会被阻止，请改用 `oa --update`。只读的 `openclaw update status` 仍然可用。OpenClaw 2026.10.1 还可以通过仪表板的 Update 按钮、智能体的 gateway 工具以及 `openclaw gateway call update.run` 发起自身的更新；这些路径不经过 `openclaw` 命令守卫，因此 Node.js 包装器也会阻止 OpenClaw 自身的更新（`[BLOCKED]`）。OpenClaw 自己的提示有时会建议运行 `openclaw update --yes` 或 `openclaw update repair`，这些命令同样被阻止，请改用 `oa --update`。
+**注意**：`openclaw update`（以及 `openclaw --update`）被有意阻止——本项目安装了一个守卫，将 OpenClaw 锁定在已验证的版本上。网关的 "update available" 提示已为你关闭（`update.checkOnStart=false`）。如果你自行重新开启，它可能会打印类似 `update available … Run: openclaw update` 的提示，但该命令会被阻止，请改用 `oa --update`。只读的 `openclaw update status` 仍然可用。OpenClaw 2026.10.2 还可以通过仪表板的 Update 按钮、智能体的 gateway 工具以及 `openclaw gateway call update.run` 发起自身的更新；这些路径不经过 `openclaw` 命令守卫，因此 Node.js 包装器也会阻止 OpenClaw 自身的更新（`[BLOCKED]`）。OpenClaw 自己的提示有时会建议运行 `openclaw update --yes` 或 `openclaw update repair`，这些命令同样被阻止，请改用 `oa --update`。
 
 > 如果 `oa` 命令不可用（旧版安装），请使用 curl 运行：
 > ```bash
@@ -298,7 +298,7 @@ OpenClaw 的本地 LLM 支持曾使用 [node-llama-cpp](https://github.com/withc
 
 如需体验，可以在手机上运行 TinyLlama 1.1B（Q4，约 670MB）等小型模型。生产环境建议使用云端 LLM 服务。
 
-> **为什么使用 `--ignore-scripts`？** 安装程序使用 `npm install -g openclaw@2026.10.1 --ignore-scripts`（锁定的版本），因为原生依赖的安装脚本（node-gyp 构建、预构建二进制下载）在 Termux 中大多会失败，而且只要有一个失败就会使整个安装中止。OpenClaw 的核心部分无需这些脚本即可工作，因此跳过脚本，只显式恢复所需的部分。
+> **为什么使用 `--ignore-scripts`？** 安装程序使用 `npm install -g openclaw@2026.10.2 --ignore-scripts`（锁定的版本），因为原生依赖的安装脚本（node-gyp 构建、预构建二进制下载）在 Termux 中大多会失败，而且只要有一个失败就会使整个安装中止。OpenClaw 的核心部分无需这些脚本即可工作，因此跳过脚本，只显式恢复所需的部分。
 
 <details>
 <summary>面向开发者的技术文档</summary>
@@ -332,7 +332,7 @@ OpenClaw 的本地 LLM 支持曾使用 [node-llama-cpp](https://github.com/withc
 
 | 组件 | 作用 | 安装方式 |
 |-----------|------|----------------|
-| [OpenClaw](https://github.com/openclaw/openclaw) | AI Agent 平台（核心），锁定为已验证版本（2026.10.1） | `npm install -g` |
+| [OpenClaw](https://github.com/openclaw/openclaw) | AI Agent 平台（核心），锁定为已验证版本（2026.10.2） | `npm install -g` |
 | [clawdhub](https://github.com/AidanPark/clawdhub) | OpenClaw 的技能管理器 | `npm install -g` |
 | [PyYAML](https://pyyaml.org/) | `.skill` 打包的 YAML 解析器 | `pip install` |
 
@@ -513,7 +513,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 
 **Node.js 包装器的默认值：** OpenClaw 2026.9.x 需要 Node.js 24.16 或更高版本。OpenClaw 的文件安全模块（`@openclaw/fs-safe`）的原生辅助程序使用 `openat2` 系统调用，而 Android 的应用 seccomp 策略会以 SIGSYS（Bad system call）终止该调用所在的进程。因此包装器默认设置 `FS_SAFE_TEST_NO_OPENAT2=1`，保留原生辅助程序但不让它使用 `openat2`（取值必须恰好为 `1` 才会被识别）。设置 `FS_SAFE_NATIVE_MODE=off` 可以完全关闭原生辅助程序，但这样 OpenClaw 的部分数据迁移可能会被拒绝。包装器还默认设置 `OPENCLAW_NO_AUTO_UPDATE=1`，并阻止 OpenClaw 自身的更新（参见[更新](#更新)）。
 
-**硬链接补丁：** Android 会阻止应用数据目录中的硬链接和 reflink（`FICLONE`）复制（应用和 Termux 均如此，错误为 `EACCES`）。OpenClaw 2026.10.1 先尝试硬链接，仅在出现“不支持”错误时才改用复制，而 `EACCES` 不被视为“不支持”。此外，迁移对话记录后，把原文件移入归档文件夹时只使用硬链接。因此不加处理的话，从 7.35 升级上来的用户的数据迁移会失败。每次安装或更新 OpenClaw 时（应用安装、Termux 安装、`oa --update`，以及用 `npm install -g openclaw@<锁定版本>` 重新安装），OpenClaw on Android 都会通过 `platforms/openclaw/patches/openclaw-patch-hardlink.sh` 修补 OpenClaw 的这一部分：`EACCES` 也会转为复制；移入归档文件夹时，如果硬链接被拒绝，则改为在同一文件系统内重命名（rename）。这样 `openclaw backup create` 也可以用复制代替硬链接。`oa --status` 会显示 `Hard-link patch: applied (…)` 或 `not complete (…)` 一行。如果有对话记录的 7.35 用户执行会更改锁定版本的更新，更新会先检查该补丁是否适用于将要安装的 OpenClaw，不适用则不做任何更改直接停止（参见[故障排除](docs/troubleshooting.md)）。 此外，OpenClaw 2026.10 会为网关锁读取进程命名空间文件 `/proc/self/ns/pid`，而许多 Android 内核不向应用提供该文件（读取以 `ENOENT` 或 `EACCES` 失败）；同一补丁让 OpenClaw 将该文件视为不可用，而不是拒绝启动网关。
+**硬链接补丁：** Android 会阻止应用数据目录中的硬链接和 reflink（`FICLONE`）复制（应用和 Termux 均如此，错误为 `EACCES`）。OpenClaw 2026.10.2 先尝试硬链接，仅在出现“不支持”错误时才改用复制，而 `EACCES` 不被视为“不支持”。此外，迁移对话记录后，把原文件移入归档文件夹时只使用硬链接。因此不加处理的话，从 7.35 升级上来的用户的数据迁移会失败。每次安装或更新 OpenClaw 时（应用安装、Termux 安装、`oa --update`，以及用 `npm install -g openclaw@<锁定版本>` 重新安装），OpenClaw on Android 都会通过 `platforms/openclaw/patches/openclaw-patch-hardlink.sh` 修补 OpenClaw 的这一部分：`EACCES` 也会转为复制；移入归档文件夹时，如果硬链接被拒绝，则改为在同一文件系统内重命名（rename）。这样 `openclaw backup create` 也可以用复制代替硬链接。`oa --status` 会显示 `Hard-link patch: applied (…)` 或 `not complete (…)` 一行。如果有对话记录的 7.35 用户执行会更改锁定版本的更新，更新会先检查该补丁是否适用于将要安装的 OpenClaw，不适用则不做任何更改直接停止（参见[故障排除](docs/troubleshooting.md)）。 此外，OpenClaw 2026.10 会为网关锁读取进程命名空间文件 `/proc/self/ns/pid`，而许多 Android 内核不向应用提供该文件（读取以 `ENOENT` 或 `EACCES` 失败）；同一补丁让 OpenClaw 将该文件视为不可用，而不是拒绝启动网关。
 
 **已知限制：** OpenClaw 的桌面自动化工具（`@trycua/cua-driver`）在 Android 10 及以下（API 29 及以下）上，所需的部分系统调用被阻止，可能无法工作。
 
@@ -525,7 +525,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 2. 通过 pip 安装 PyYAML（`.skill` 打包所需）
 3. 将 `glibc-compat.js` 复制到 `~/.openclaw-android/patches/`（Node.js 包装脚本读取随 Node.js 一起安装在 `~/.openclaw-android/lib/` 的副本——应用不会覆盖该位置）
 4. 安装 `systemctl` 桩到 `$PREFIX/bin/`
-5. 运行 `npm install -g openclaw@2026.10.1 --ignore-scripts`（`config.env` 中锁定的版本）
+5. 运行 `npm install -g openclaw@2026.10.2 --ignore-scripts`（`config.env` 中锁定的版本）
 6. 运行 OpenClaw 自身的 postinstall 脚本（`postinstall-bundled-plugins.mjs`），该脚本被 `--ignore-scripts` 跳过
 7. 通过 `openclaw-apply-patches.sh` 应用平台特定补丁
 8. 安装 `openclaw update` 守卫（`openclaw-shim.sh`），使锁定版本得以保持

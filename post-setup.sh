@@ -27,7 +27,7 @@ BIN_DIR="$OCA_DIR/bin"
 # Same keys and values as platforms/openclaw/config.env (the SSOT). This script
 # runs as a single file and does not read config.env; .githooks/pre-commit
 # checks that these lines match it. Bump both files together.
-PLATFORM_NPM_PACKAGE_VERSION="2026.10.1"
+PLATFORM_NPM_PACKAGE_VERSION="2026.10.2"
 PLATFORM_NODE_VERSION="24.21.0"
 NODE_VERSION="$PLATFORM_NODE_VERSION"
 

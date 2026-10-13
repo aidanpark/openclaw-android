@@ -214,7 +214,7 @@ oa --update && source ~/.bashrc
 
 このコマンド1つで、インストール済みコンポーネントをすべて一括で更新します。
 
-- **OpenClaw** — コアパッケージ。検証済みの固定バージョンに保たれます（現在は2026.10.1 — 常に最新リリースとは限りません）
+- **OpenClaw** — コアパッケージ。検証済みの固定バージョンに保たれます（現在は2026.10.2 — 常に最新リリースとは限りません）
 - **code-server** — ブラウザIDE
 - **OpenCode** — AIコーディングアシスタント
 - **AI CLIツール** — Claude Code、Gemini CLI、Codex CLI（Termux）
@@ -237,7 +237,7 @@ oa --update && source ~/.bashrc
 
 `oa --update` は、Node.jsやOpenClawをより低いバージョンに下げることはありません（例: リリース直後に古いファイルが配信された場合）。意図的に下げるには、`OA_ALLOW_OPENCLAW_DOWNGRADE=1` と `OA_ALLOW_NODE_DOWNGRADE=1` を両方設定する必要があります。`oa --restore` はデータだけを戻し、プログラムは戻しません。
 
-**注意**: `openclaw update`（および `openclaw --update`）は意図的にブロックされています。ガードによってOpenClawは本プロジェクトが検証したバージョンに固定されます。ゲートウェイの "update available" 通知はオフになっています（`update.checkOnStart=false`）。自分で再びオンにした場合は `update available … Run: openclaw update` のようなメッセージが表示されることがありますが、そのコマンドはブロックされるため、代わりに `oa --update` を使ってください。`openclaw update status`（読み取り専用）は引き続き利用できます。OpenClaw 2026.10.1 は、ダッシュボードのUpdateボタン、エージェントのgatewayツール、`openclaw gateway call update.run` から独自のアップデートを開始できます。これらの経路は `openclaw` コマンドのガードを通らないため、Node.jsラッパーがOpenClaw自身のアップデートもブロックします（`[BLOCKED]`）。OpenClawのメッセージが `openclaw update --yes` や `openclaw update repair` を勧めることがありますが、これらのコマンドもブロックされているため、`oa --update` を使ってください。
+**注意**: `openclaw update`（および `openclaw --update`）は意図的にブロックされています。ガードによってOpenClawは本プロジェクトが検証したバージョンに固定されます。ゲートウェイの "update available" 通知はオフになっています（`update.checkOnStart=false`）。自分で再びオンにした場合は `update available … Run: openclaw update` のようなメッセージが表示されることがありますが、そのコマンドはブロックされるため、代わりに `oa --update` を使ってください。`openclaw update status`（読み取り専用）は引き続き利用できます。OpenClaw 2026.10.2 は、ダッシュボードのUpdateボタン、エージェントのgatewayツール、`openclaw gateway call update.run` から独自のアップデートを開始できます。これらの経路は `openclaw` コマンドのガードを通らないため、Node.jsラッパーがOpenClaw自身のアップデートもブロックします（`[BLOCKED]`）。OpenClawのメッセージが `openclaw update --yes` や `openclaw update repair` を勧めることがありますが、これらのコマンドもブロックされているため、`oa --update` を使ってください。
 
 > `oa`コマンドが利用できない場合（古いインストール環境）は、curl経由で実行してください。
 > ```bash
@@ -293,7 +293,7 @@ OpenClawのローカルLLM対応は [node-llama-cpp](https://github.com/withcata
 
 実験用途であればTinyLlama 1.1B（Q4、約670MB）のような小型モデルなら端末上で動作します。実用にはクラウドLLMプロバイダの利用を推奨します。
 
-> **なぜ `--ignore-scripts` ?** インストーラーは `npm install -g openclaw@2026.10.1 --ignore-scripts`（固定バージョン）を使います。ネイティブ依存関係のインストールスクリプト（node-gypビルド、ビルド済みバイナリのダウンロード）はTermuxでほとんど失敗し、1件でも失敗するとインストール全体が止まるためです。OpenClawの中核部分はこれらのスクリプトなしで動作するので、スクリプトはスキップし、必要なものだけを明示的に復元します。
+> **なぜ `--ignore-scripts` ?** インストーラーは `npm install -g openclaw@2026.10.2 --ignore-scripts`（固定バージョン）を使います。ネイティブ依存関係のインストールスクリプト（node-gypビルド、ビルド済みバイナリのダウンロード）はTermuxでほとんど失敗し、1件でも失敗するとインストール全体が止まるためです。OpenClawの中核部分はこれらのスクリプトなしで動作するので、スクリプトはスキップし、必要なものだけを明示的に復元します。
 
 <details>
 <summary>開発者向けの技術ドキュメント</summary>
@@ -327,7 +327,7 @@ OpenClawのローカルLLM対応は [node-llama-cpp](https://github.com/withcata
 
 | コンポーネント | 役割 | インストール方法 |
 |-----------|------|----------------|
-| [OpenClaw](https://github.com/openclaw/openclaw) | AIエージェントプラットフォーム（コア）。検証済みバージョン（2026.10.1）に固定 | `npm install -g` |
+| [OpenClaw](https://github.com/openclaw/openclaw) | AIエージェントプラットフォーム（コア）。検証済みバージョン（2026.10.2）に固定 | `npm install -g` |
 | [clawdhub](https://github.com/AidanPark/clawdhub) | OpenClaw向けスキルマネージャ | `npm install -g` |
 | [PyYAML](https://pyyaml.org/) | `.skill` パッケージング用YAMLパーサー | `pip install` |
 
@@ -508,7 +508,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 
 **Node.jsラッパーの既定値:** OpenClaw 2026.9.x はNode.js 24.16以上を必要とします。OpenClawのファイル安全モジュール（`@openclaw/fs-safe`）のネイティブヘルパーは `openat2` システムコールを使いますが、Androidのアプリ用seccompポリシーがこの呼び出しをSIGSYS（Bad system call）で終了させます。そのためラッパーは既定で `FS_SAFE_TEST_NO_OPENAT2=1` を設定し、ネイティブヘルパーは維持したまま `openat2` を使わせないようにします（値は正確に `1` である必要があります）。`FS_SAFE_NATIVE_MODE=off` を設定するとネイティブヘルパー自体をオフにできますが、その場合OpenClawの一部のデータ移行が拒否されることがあります。ラッパーは `OPENCLAW_NO_AUTO_UPDATE=1` も既定で設定し、OpenClaw自身のアップデートをブロックします（[アップデート](#アップデート)を参照）。
 
-**ハードリンクパッチ:** Androidは、アプリのデータ領域でハードリンクとreflink（`FICLONE`）によるコピーをブロックします（アプリとTermuxの両方で、エラーは `EACCES`）。OpenClaw 2026.10.1 はまずハードリンクを試し、「サポートされていない」エラーの場合にだけコピーへ切り替えますが、`EACCES` はサポート外とは見なされません。また会話履歴を移行したあと、元のファイルを保管フォルダへ移すときはハードリンクしか使いません。そのままでは、7.35 からアップグレードしたユーザーのデータ移行が失敗します。OpenClaw on AndroidはOpenClawをインストール・アップデートするたびに（アプリのインストール、Termuxのインストール、`oa --update`、そして `npm install -g openclaw@<固定バージョン>` による再インストール）、`platforms/openclaw/patches/openclaw-patch-hardlink.sh` でOpenClawのこの部分を修正します。`EACCES` をコピーへ切り替える対象に含め、保管フォルダへの移動はハードリンクが拒否された場合に同じファイルシステム内のrenameで行います。これにより `openclaw backup create` もハードリンクの代わりにコピーを使えます。`oa --status` には `Hard-link patch: applied (…)` または `not complete (…)` の行が表示されます。会話履歴のある 7.35 のユーザーが固定バージョンの変わるアップデートを行う場合、インストールされるOpenClawにこのパッチが合うかを先に確認し、合わなければ何も変更せずに停止します（[トラブルシューティング](docs/troubleshooting.md)（英語）を参照）。 また OpenClaw 2026.10 はゲートウェイのロックのためにプロセス名前空間ファイル `/proc/self/ns/pid` を読みますが、多くのAndroidカーネルはアプリにこのファイルを提供しません（参照は `ENOENT` または `EACCES` で失敗します）。同じパッチによって、OpenClawはこのファイルを利用不可として扱い、ゲートウェイの起動を拒否しなくなります。
+**ハードリンクパッチ:** Androidは、アプリのデータ領域でハードリンクとreflink（`FICLONE`）によるコピーをブロックします（アプリとTermuxの両方で、エラーは `EACCES`）。OpenClaw 2026.10.2 はまずハードリンクを試し、「サポートされていない」エラーの場合にだけコピーへ切り替えますが、`EACCES` はサポート外とは見なされません。また会話履歴を移行したあと、元のファイルを保管フォルダへ移すときはハードリンクしか使いません。そのままでは、7.35 からアップグレードしたユーザーのデータ移行が失敗します。OpenClaw on AndroidはOpenClawをインストール・アップデートするたびに（アプリのインストール、Termuxのインストール、`oa --update`、そして `npm install -g openclaw@<固定バージョン>` による再インストール）、`platforms/openclaw/patches/openclaw-patch-hardlink.sh` でOpenClawのこの部分を修正します。`EACCES` をコピーへ切り替える対象に含め、保管フォルダへの移動はハードリンクが拒否された場合に同じファイルシステム内のrenameで行います。これにより `openclaw backup create` もハードリンクの代わりにコピーを使えます。`oa --status` には `Hard-link patch: applied (…)` または `not complete (…)` の行が表示されます。会話履歴のある 7.35 のユーザーが固定バージョンの変わるアップデートを行う場合、インストールされるOpenClawにこのパッチが合うかを先に確認し、合わなければ何も変更せずに停止します（[トラブルシューティング](docs/troubleshooting.md)（英語）を参照）。 また OpenClaw 2026.10 はゲートウェイのロックのためにプロセス名前空間ファイル `/proc/self/ns/pid` を読みますが、多くのAndroidカーネルはアプリにこのファイルを提供しません（参照は `ENOENT` または `EACCES` で失敗します）。同じパッチによって、OpenClawはこのファイルを利用不可として扱い、ゲートウェイの起動を拒否しなくなります。
 
 **既知の制限:** OpenClawのデスクトップ自動化ツール（`@trycua/cua-driver`）は、Android 10以下（API 29以下）では必要なシステムコールの一部がブロックされており、動作しない場合があります。
 
@@ -520,7 +520,7 @@ PLATFORM_NEEDS_BUILD_TOOLS=true
 2. PyYAMLをpipでインストール（`.skill` パッケージング用）
 3. `glibc-compat.js` を `~/.openclaw-android/patches/` にコピー（Node.jsラッパーはNode.jsと一緒にインストールされた `~/.openclaw-android/lib/` 内の自前のコピーを読み込みます — アプリがそちらを上書きすることはありません）
 4. `systemctl` スタブを `$PREFIX/bin/` にインストール
-5. `npm install -g openclaw@2026.10.1 --ignore-scripts` を実行（`config.env` で固定されたバージョン）
+5. `npm install -g openclaw@2026.10.2 --ignore-scripts` を実行（`config.env` で固定されたバージョン）
 6. OpenClaw自身のpostinstallスクリプト（`postinstall-bundled-plugins.mjs`）を実行（`--ignore-scripts` ではスキップされるため）
 7. `openclaw-apply-patches.sh` でプラットフォーム固有のパッチを適用
 8. 固定バージョンが維持されるよう、`openclaw update` ガード（`openclaw-shim.sh`）をインストール

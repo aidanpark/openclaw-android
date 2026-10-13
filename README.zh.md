@@ -251,7 +251,7 @@ oa --update && source ~/.bashrc
 
 ## 备份与恢复
 
-OpenClaw 内置的备份命令（`openclaw backup create`）依赖硬链接，而 Android 的应用私有存储会阻止硬链接操作；OpenClaw on Android 应用的硬链接补丁让它可以改用复制（见下文的硬链接补丁段落）。`oa --backup` 命令用 `tar` 打包整个 OpenClaw 数据目录（`~/.openclaw`），并为 SQLite 数据库生成一致的快照。随后，如果 OpenClaw 接受该归档，则用 `openclaw backup verify` 校验，否则改用 `tar` 结构检查（OpenClaw 2026.9 会拒绝包含其绝对路径 `plugin-skills` 链接的归档，但恢复可以正常进行）。
+OpenClaw 内置的备份命令（`openclaw backup create`）依赖硬链接，而 Android 的应用私有存储会阻止硬链接操作；OpenClaw on Android 应用的硬链接补丁让它可以改用复制（见下文的硬链接补丁段落）。`oa --backup` 命令用 `tar` 打包整个 OpenClaw 数据目录（`~/.openclaw`），并为 SQLite 数据库生成一致的快照。随后，如果 OpenClaw 接受该归档，则用 `openclaw backup verify` 校验，否则改用 `gzip` 与 `tar` 检查（OpenClaw 2026.9 及之后的版本会拒绝包含其绝对路径 `plugin-skills` 链接的归档，但恢复可以正常进行）。如果 Node.js 在时限内没有响应（快速调用的 `OA_NODE_PROBE_TIMEOUT` 为 30 秒，每个数据库快照的 `OA_NODE_WORK_TIMEOUT` 为 300 秒），命令会以退出码 75 中止，并且不会生成可能不完整的归档。
 
 创建备份：
 ```bash

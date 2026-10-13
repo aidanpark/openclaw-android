@@ -61,19 +61,120 @@ _ask_yn_default_no() {
     [[ "${reply:-}" =~ ^[Yy]$ ]]
 }
 
+# ── node calls under a time limit ──
+# A Node.js process started through the glibc loader was seen to stay alive after it had done its work
+# (QA, Script v1.2.5), so nothing here waits for node without a limit. Two classes: a probe starts, answers and
+# ends (OA_NODE_PROBE_TIMEOUT, 30 s); work reads or writes data (OA_NODE_WORK_TIMEOUT, 300 s). A call that the
+# limit stopped returns 124 — which is also what a stop of "node reported its result, then did not exit" looks
+# like, so callers pass a marker that their node script prints last: with it the result is taken.
+# (Same shape as the hard-link patch: --foreground keeps Ctrl-C working, -k is used where timeout knows it.)
+_backup_limit_value() {
+    local v="$1" d="$2"
+    case "$v" in ''|*[!0-9]*) printf '%s' "$d"; return 0 ;; esac
+    v=${v#"${v%%[!0]*}"}
+    # (below 5 s a kill from outside near the limit could not be told from the limit: SECONDS counts whole seconds)
+    if [ -z "$v" ] || [ "${#v}" -gt 6 ] || [ "$v" -lt 5 ]; then
+        printf '%s' "$d"
+    else
+        printf '%s' "$v"
+    fi
+}
+BACKUP_NODE_PROBE_LIMIT="$(_backup_limit_value "${OA_NODE_PROBE_TIMEOUT:-}" 30)"
+BACKUP_NODE_WORK_LIMIT="$(_backup_limit_value "${OA_NODE_WORK_TIMEOUT:-}" 300)"
+_BACKUP_TIMEOUT=()
+if command -v timeout >/dev/null 2>&1; then
+    if timeout --foreground -k 1 10 true >/dev/null 2>&1; then
+        _BACKUP_TIMEOUT=(timeout --foreground -k 5)
+    elif timeout -k 1 10 true >/dev/null 2>&1; then
+        _BACKUP_TIMEOUT=(timeout -k 5)
+    elif timeout 10 true >/dev/null 2>&1; then
+        _BACKUP_TIMEOUT=(timeout)
+    fi
+fi
+
+# Run a command once under the limit of its class (probe|work). Returns its exit code, or 124 when the limit
+# stopped it (timeout's own 124; 137 or 143 only after the whole time — after less they came from somewhere else,
+# e.g. the system out of memory).
+# Usage: _backup_limited <probe|work> <command> [args…]
+_backup_limited() {
+    local class="$1" limit t0 rc=0
+    shift
+    if [ "$class" = work ]; then limit="$BACKUP_NODE_WORK_LIMIT"; else limit="$BACKUP_NODE_PROBE_LIMIT"; fi
+    if [ "${#_BACKUP_TIMEOUT[@]}" -eq 0 ]; then
+        "$@" || rc=$?
+        return "$rc"
+    fi
+    t0=$SECONDS
+    "${_BACKUP_TIMEOUT[@]}" "$limit" "$@" || rc=$?
+    if [ "$rc" -eq 124 ]; then
+        return 124
+    fi
+    if { [ "$rc" -eq 137 ] || [ "$rc" -eq 143 ]; } && [ $((SECONDS - t0 + 1)) -ge "$limit" ]; then
+        return 124
+    fi
+    return "$rc"
+}
+
+# A call whose output is the answer: runs up to <tries> times (a stop of the limit only; standard input is not
+# read again, so a call that reads it uses 1), prints the output of the last run and returns its exit code.
+# When the limit stopped a run that had already printed the marker (a line of the output matching the regex),
+# the run counts as done: a Note goes to standard error and 0 is returned. node's own standard error is dropped.
+# Usage: _backup_node_call <probe|work> <marker regex> <tries> <node> [args…]
+_backup_node_call() {
+    local class="$1" marker="$2" tries="$3" out rc n=0
+    shift 3
+    while :; do
+        n=$((n + 1))
+        rc=0
+        out=$(_backup_limited "$class" "$@" 2>/dev/null) || rc=$?
+        [ "$rc" -eq 124 ] || break
+        if printf '%s\n' "$out" | grep -Eq "$marker"; then
+            echo "Note: Node.js had reported its result but did not exit within the limit; the result is used." >&2
+            rc=0
+            break
+        fi
+        [ "$n" -lt "$tries" ] || break
+        echo "Note: Node.js did not finish within the limit; trying once more." >&2
+    done
+    printf '%s\n' "$out"
+    return "$rc"
+}
+
+# The `node` argument of oa_repair_state_paths / oa_repair_config_paths (lib.sh): they call "$node" with their
+# own arguments and read the last line of what it prints. A stop of the limit after that line is a finished run.
+_backup_node_repair() {
+    local out rc=0 last
+    out=$(_backup_limited work "$OA_NODE" "$@") || rc=$?
+    printf '%s\n' "$out"
+    if [ "$rc" -eq 124 ]; then
+        last=$(printf '%s\n' "$out" | tail -1)
+        case "$last" in
+            [0-9]*" "[0-9]*|error:*) return 0 ;;
+        esac
+    fi
+    return "$rc"
+}
+
 # node: from PATH, else the wrapper the installer puts in ~/.openclaw-android/bin (a shell
 # without the oa PATH, e.g. non-interactive SSH, does not see it). The real binary in
 # node/bin is not tried: it cannot run without the wrapper's glibc loader.
+# Returns 0 with the path, 1 when there is none, 75 when the wrapper is there and does not answer.
 _oa_find_node() {
-    local c
+    local c rc=0
     if c=$(command -v node 2>/dev/null) && [ -n "$c" ]; then
         printf '%s' "$c"
         return 0
     fi
     c="$HOME/.openclaw-android/bin/node"
-    if [ -x "$c" ] && "$c" --version &>/dev/null; then
-        printf '%s' "$c"
-        return 0
+    if [ -x "$c" ]; then
+        _backup_node_call probe '^v?[0-9]+\.[0-9]+' 2 "$c" --version >/dev/null || rc=$?
+        if [ "$rc" -eq 124 ]; then
+            return 75
+        fi
+        if [ "$rc" -eq 0 ]; then
+            printf '%s' "$c"
+            return 0
+        fi
     fi
     return 1
 }
@@ -81,9 +182,12 @@ _oa_find_node() {
 # command, and starting node just to look for it would slow all of them down.
 OA_NODE=""
 OA_NODE_RESOLVED=false
+OA_NODE_STUCK=false
 _oa_resolve_node() {
     if [ "$OA_NODE_RESOLVED" = false ]; then
-        OA_NODE="$(_oa_find_node || true)"
+        local rc=0
+        OA_NODE="$(_oa_find_node)" || rc=$?
+        [ "$rc" -ne 75 ] || OA_NODE_STUCK=true
         OA_NODE_RESOLVED=true
     fi
 }
@@ -93,9 +197,14 @@ _have_gnu_tar() {
     tar --version 2>/dev/null | head -1 | grep -q "GNU tar"
 }
 
-# True if node can load node:sqlite (SQLite snapshots need it).
+# 0 if node can load node:sqlite (SQLite snapshots need it), 1 if it cannot (or there is no node),
+# 75 if node did not answer within the limit.
 _have_node_sqlite() {
-    [ -n "$OA_NODE" ] && "$OA_NODE" -e 'require("node:sqlite")' &>/dev/null
+    [ -n "$OA_NODE" ] || return 1
+    local out rc=0
+    out=$(_backup_node_call probe '^OK$' 2 "$OA_NODE" -e 'require("node:sqlite");console.log("OK")') || rc=$?
+    [ "$rc" -ne 124 ] || return 75
+    [ "$rc" -eq 0 ] && [ "$(printf '%s\n' "$out" | tail -1)" = OK ]
 }
 
 # True if the OpenClaw gateway looks like it is running.
@@ -111,10 +220,36 @@ _gateway_running() {
 
 # Installed OpenClaw version, read from the package (no CLI start-up).
 _backup_runtime_version() {
-    local pkg
-    pkg="$(npm root -g 2>/dev/null || true)/openclaw/package.json"
-    if [ -f "$pkg" ] && [ -n "$OA_NODE" ]; then
-        "$OA_NODE" -p "require('$pkg').version" 2>/dev/null && return 0
+    local direct="" pkg="" root="" tmp v
+    [ -z "${PREFIX:-}" ] || direct="$PREFIX/lib/node_modules/openclaw/package.json"
+    # Where the installers put it. `npm root -g` (it starts node, so under the limit) when it is not there, or when
+    # the environment or an npmrc says npm uses another prefix. Its answer goes through a file: the npm wrapper runs node as
+    # a child, and a stopped wrapper would leave that child holding a pipe (and this call waiting for it).
+    local f own_prefix=false
+    [ -z "${npm_config_prefix:-}${NPM_CONFIG_PREFIX:-}" ] || own_prefix=true
+    for f in "$HOME/.npmrc" "${PREFIX:-/nonexistent}/etc/npmrc"; do
+        if [ -f "$f" ] && grep -q '^[[:space:]]*prefix[[:space:]]*=' "$f" 2>/dev/null; then own_prefix=true; fi
+    done
+    if [ -n "$direct" ] && [ "$own_prefix" = false ] && [ -f "$direct" ]; then
+        pkg="$direct"
+    else
+        if command -v npm >/dev/null 2>&1 && tmp=$(mktemp "${TMPDIR:-/tmp}/oa-npmroot.XXXXXX" 2>/dev/null); then
+            _backup_limited probe npm root -g >"$tmp" 2>/dev/null </dev/null || true
+            root=$(head -1 "$tmp" 2>/dev/null) || root=""
+            rm -f "$tmp"
+        fi
+        if [ -n "$root" ] && [ -f "$root/openclaw/package.json" ]; then
+            pkg="$root/openclaw/package.json"
+        elif [ -n "$direct" ] && [ -f "$direct" ]; then
+            pkg="$direct"
+        fi
+    fi
+    if [ -n "$pkg" ]; then
+        v=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$pkg" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/') || v=""
+        if [ -n "$v" ]; then
+            printf '%s\n' "$v"
+            return 0
+        fi
     fi
     echo "unknown"
 }
@@ -125,7 +260,15 @@ _backup_external_workspace() {
     local data_dir="$1"
     local ws
     command -v openclaw &>/dev/null || return 0
-    ws=$(timeout 30 openclaw config get agents.defaults.workspace 2>/dev/null) || return 0
+    # (through a file: openclaw restarts itself as a detached child that holds a pipe; see cmd_backup)
+    local wsf
+    wsf=$(mktemp "${TMPDIR:-/tmp}/oa-ws.XXXXXX" 2>/dev/null) || return 0
+    if ! timeout 30 openclaw config get agents.defaults.workspace >"$wsf" 2>/dev/null </dev/null; then
+        rm -f "$wsf"
+        return 0
+    fi
+    ws=$(head -1 "$wsf" 2>/dev/null) || ws=""
+    rm -f "$wsf"
     ws="${ws%$'\r'}"
     case "$ws" in
         "$data_dir"|"$data_dir"/*) return 0 ;;
@@ -187,6 +330,8 @@ _restore_rewrite_paths() {
         return 0
     fi
     [ -d "$root/agents" ] || return 0
+    # (Every file is written to a temporary file next to it and renamed, so a run that is stopped leaves each
+    # file either as it was or finished; the run can simply be done again.)
     # Replace the old path as a literal (escaped), only where it is not the start of a
     # longer name. The file list goes through stdin (NUL separated), not the command
     # line, so any number of session files works.
@@ -205,13 +350,35 @@ _restore_rewrite_paths() {
             for (const f of buf.split("\0").filter(Boolean)) {
                 const t = fs.readFileSync(f, "utf8");
                 const u = t.replace(re, () => toJson);
-                if (u !== t) { fs.writeFileSync(f, u); n++; }
+                if (u !== t) {
+                    const real = fs.realpathSync(f);
+                    const mode = fs.statSync(real).mode & 0o777;
+                    const tmp = real + ".oa-tmp." + process.pid;
+                    try {
+                        fs.writeFileSync(tmp, u);
+                        fs.chmodSync(tmp, mode);
+                        fs.renameSync(tmp, real);
+                    } catch (e) {
+                        try { fs.unlinkSync(tmp); } catch (e2) { /* not made */ }
+                        throw e;
+                    }
+                    n++;
+                }
             }
             console.log(n);
         });'
-    local changed
+    local changed rewrite_ok=true
+    # (the count on the last line is the marker of a finished run; standard input is read once: 1 try)
     if ! changed=$({ find "$root/agents" -type f \( -name 'sessions.json' -o -name '*.trajectory-path.json' \) -print0 2>/dev/null || true; } \
-            | "$OA_NODE" -e "$js" "$from" "$to" 2>/dev/null); then
+            | _backup_node_call work '^[0-9]+$' 1 "$OA_NODE" -e "$js" "$from" "$to") \
+        || ! [[ "$changed" =~ ^[0-9]+$ ]]; then
+        rewrite_ok=false
+    fi
+    # A run that was stopped (the limit, the system) can leave the temporary file of the file it was writing;
+    # it is not a session file and must not be archived later.
+    find "$root/agents" -type f \( -name 'sessions.json.oa-tmp.*' -o -name '*.trajectory-path.json.oa-tmp.*' \) \
+        -exec rm -f {} + 2>/dev/null || true
+    if [ "$rewrite_ok" = false ]; then
         echo -e "${YELLOW}[WARN]${NC} Could not update the session paths from $from — restored sessions may point to the other device."
         return 0
     fi
@@ -232,17 +399,31 @@ _backup_manifest_info() {
     [ -n "$manifest" ] || return 1
 
     if [ -n "$OA_NODE" ]; then
-        printf '%s' "$manifest" | "$OA_NODE" -e '
-            let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
-                let m; try { m = JSON.parse(s); } catch (e) { process.exit(1); }
-                const assets = Array.isArray(m.assets) ? m.assets : [];
-                const posix = assets.some(a => String(a.archivePath || "").includes("/payload/posix/"));
-                console.log("LAYOUT " + (posix ? "posix" : "legacy"));
-                console.log("ROOT " + (m.archiveRoot || ""));
-                console.log("RUNTIME " + (m.runtimeVersion || ""));
-                for (const a of assets) console.log("ASSET " + [a.kind, a.sourcePath, a.archivePath].join("\t"));
-            });' 2>/dev/null
-        return $?
+        # (END is printed last: the marker of a finished run. The manifest comes from a variable, so a run
+        # that the limit stopped can be done once more.)
+        local out rc try=0
+        while [ "$try" -lt 2 ]; do
+            try=$((try + 1))
+            rc=0
+            out=$(printf '%s' "$manifest" | _backup_node_call probe '^END$' 1 "$OA_NODE" -e '
+                let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+                    let m; try { m = JSON.parse(s); } catch (e) { process.exit(1); }
+                    const assets = Array.isArray(m.assets) ? m.assets : [];
+                    const posix = assets.some(a => String(a.archivePath || "").includes("/payload/posix/"));
+                    console.log("LAYOUT " + (posix ? "posix" : "legacy"));
+                    console.log("ROOT " + (m.archiveRoot || ""));
+                    console.log("RUNTIME " + (m.runtimeVersion || ""));
+                    for (const a of assets) console.log("ASSET " + [a.kind, a.sourcePath, a.archivePath].join("\t"));
+                    console.log("END");
+                });') || rc=$?
+            [ "$rc" -eq 124 ] || break
+            [ "$try" -ge 2 ] || echo "Note: Node.js did not answer within the limit; trying once more." >&2
+        done
+        [ "$rc" -ne 124 ] || return 75
+        [ "$rc" -eq 0 ] || return 1
+        [ "$(printf '%s\n' "$out" | tail -1)" = END ] || return 1
+        printf '%s\n' "$out" | grep -vx END
+        return 0
     fi
 
     # No node: only the old layout can be recognised without a JSON parser
@@ -301,7 +482,14 @@ _backup_create() (
 
     # ── SQLite: consistent snapshots instead of copying live files ──
     sqlite_excludes=()
-    if _have_node_sqlite; then
+    sqlite_rc=0
+    _have_node_sqlite || sqlite_rc=$?
+    if [ "$sqlite_rc" -eq 75 ]; then
+        echo "  Node.js did not answer within ${BACKUP_NODE_PROBE_LIMIT}s, twice."
+        echo "  A Node.js start that stalls usually works on the next try."
+        exit 75
+    fi
+    if [ "$sqlite_rc" -eq 0 ]; then
         pairs=()
         while IFS= read -r db; do
             rel="${db#"$real_dir"/}"
@@ -309,27 +497,59 @@ _backup_create() (
             pairs+=("$db" "$snap/$base/$rel.oa-snap")
         done < <(find "$real_dir" -path "$real_dir/extensions/*/node_modules" -prune -o -type f -name '*.sqlite' -print)
 
+        # One node run per database. The copy counts only when node printed OK as its last line: a run that
+        # was stopped half way (the limit, the system out of memory) leaves a database file that is not whole,
+        # and that must never go into the archive. A database that node reports as failed, or that a run
+        # ended without OK, is copied as it is below; a run that the limit stopped (twice) ends the backup,
+        # so a stuck node does not turn into a quietly weaker backup.
+        snap_js='
+            const { DatabaseSync } = require("node:sqlite");
+            const fs = require("node:fs");
+            const [src, dst] = process.argv.slice(1);
+            try {
+                const db = new DatabaseSync(src, { readOnly: true });
+                db.exec("PRAGMA busy_timeout = 30000;");
+                db.prepare("VACUUM INTO ?").run(dst);
+                db.close();
+                const snap = new DatabaseSync(dst);
+                const q = snap.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = ? AND name = ?")
+                    .get("table", "delivery_queue_entries");
+                if (q && q.ok === 1) { snap.exec("DELETE FROM delivery_queue_entries; VACUUM;"); }
+                snap.close();
+                fs.chmodSync(dst, 0o600);
+                console.log("OK");
+            } catch (e) { console.log("FAIL"); }'
+        # (busy_timeout: a database that another process holds locked is waited for up to 30 s, which comes on top
+        # of the time the copy itself takes, and both count against OA_NODE_WORK_TIMEOUT.)
+        export NODE_NO_WARNINGS=1
         failed=""
-        if [ ${#pairs[@]} -gt 0 ]; then
-            failed=$(NODE_NO_WARNINGS=1 "$OA_NODE" -e '
-                const { DatabaseSync } = require("node:sqlite");
-                const fs = require("node:fs");
-                const a = process.argv.slice(1);
-                for (let i = 0; i < a.length; i += 2) {
-                    try {
-                        const db = new DatabaseSync(a[i], { readOnly: true });
-                        db.exec("PRAGMA busy_timeout = 30000;");
-                        db.prepare("VACUUM INTO ?").run(a[i + 1]);
-                        db.close();
-                        const snap = new DatabaseSync(a[i + 1]);
-                        const q = snap.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = ? AND name = ?")
-                            .get("table", "delivery_queue_entries");
-                        if (q && q.ok === 1) { snap.exec("DELETE FROM delivery_queue_entries; VACUUM;"); }
-                        snap.close();
-                        fs.chmodSync(a[i + 1], 0o600);
-                    } catch (e) { console.log(a[i]); }
-                }' "${pairs[@]}" 2>/dev/null) || true
-        fi
+        k=0
+        while [ "$k" -lt "${#pairs[@]}" ]; do
+            db="${pairs[$k]}"
+            snap_file="${pairs[$((k + 1))]}"
+            k=$((k + 2))
+            echo "  Snapshotting ${db#"$real_dir"/} …"
+            snap_try=0
+            while :; do
+                snap_try=$((snap_try + 1))
+                # (VACUUM INTO refuses a target that exists; a stopped run leaves it, and its journal, behind)
+                rm -f "$snap_file" "$snap_file-journal" "$snap_file-wal" "$snap_file-shm"
+                snap_rc=0
+                snap_out=$(_backup_node_call work '^OK$' 1 "$OA_NODE" -e "$snap_js" "$db" "$snap_file") || snap_rc=$?
+                { [ "$snap_rc" -eq 124 ] && [ "$snap_try" -lt 2 ]; } || break
+                echo "Note: Node.js did not finish the snapshot within the limit; trying once more." >&2
+            done
+            if [ "$snap_rc" -eq 124 ]; then
+                rm -f "$snap_file" "$snap_file-journal" "$snap_file-wal" "$snap_file-shm"
+                echo "  Node.js did not finish the snapshot of ${db#"$real_dir"/} within ${BACKUP_NODE_WORK_LIMIT}s, twice — the database itself was not changed."
+                echo "  Try again; if it repeats, the database may be very large for this device (OA_NODE_WORK_TIMEOUT)."
+                exit 75
+            fi
+            if [ "$snap_rc" -ne 0 ] || [ "$(printf '%s\n' "$snap_out" | tail -1)" != OK ]; then
+                rm -f "$snap_file" "$snap_file-journal" "$snap_file-wal" "$snap_file-shm"
+                failed="${failed}${db}"$'\n'
+            fi
+        done
         # A database that could not be snapshotted is copied as it is (with its
         # write-ahead log) so it is still in the archive.
         while IFS= read -r db; do
@@ -348,6 +568,9 @@ _backup_create() (
         echo -e "${YELLOW}[WARN]${NC} node:sqlite is not available — SQLite files are copied as they are."
         echo "       Stop the OpenClaw gateway before backing up, or conversation data may be inconsistent."
     fi
+    # (what a stopped run left beside a snapshot is not part of the backup)
+    find "$snap" -type f \( -name '*.oa-snap-journal' -o -name '*.oa-snap-wal' -o -name '*.oa-snap-shm' \) \
+        -exec rm -f {} + 2>/dev/null || true
     (cd "$snap" && find "$base" -type f) > "$tmpdir/snaplist"
 
     # ── Workspace outside the state directory ──
@@ -376,7 +599,11 @@ _backup_create() (
 
     # ── Manifest ──
     runtime_version="$(_backup_runtime_version)"
-    node_version="$("$OA_NODE" --version 2>/dev/null || echo unknown)"
+    node_version=""
+    if [ -n "$OA_NODE" ]; then
+        node_version="$(_backup_node_call probe '^v?[0-9]+\.[0-9]+' 2 "$OA_NODE" --version | head -1)" || node_version=""
+    fi
+    case "$node_version" in v[0-9]*|[0-9]*) ;; *) node_version="unknown" ;; esac
     assets_json="    {
       \"kind\": \"state\",
       \"sourcePath\": \"$(_json_escape "$data_dir")\",
@@ -432,7 +659,7 @@ MANIFEST_EOF
     echo -e "Packing archive…"
     tar -cf - "${transforms[@]}" \
         --exclude="$base/logs" --exclude="$base/delivery-queue" --exclude="$base/session-delivery-queue" \
-        --exclude='*.pid' --exclude='*.sock' --exclude='*.tmp' \
+        --exclude='*.pid' --exclude='*.sock' --exclude='*.tmp' --exclude='*.oa-tmp.*' \
         --exclude="$base/extensions/*/node_modules" "${sqlite_excludes[@]}" \
         -C "$parent" "$base" \
         "${ws_args[@]}" \
@@ -448,10 +675,32 @@ MANIFEST_EOF
     chmod 600 "$archive_path" 2>/dev/null || true
 )
 
+# 0 when the archive is whole: gzip's check of the stream passes, and tar lists it to the end with exit status 0
+# and at least one entry (a truncated archive can still list a few entries before tar fails).
+# Sets BACKUP_VERIFY_COUNT.
+BACKUP_VERIFY_COUNT=0
+_backup_verify_archive() {
+    local archive="$1" list st
+    BACKUP_VERIFY_COUNT=0
+    gzip -t "$archive" >/dev/null 2>&1 || return 1
+    list=$(mktemp "${TMPDIR:-/tmp}/oa-verify.XXXXXX") || return 1
+    # (called from an `if`, where set -e does not apply; the stream is whole by now, so what tar says counts)
+    gzip -dc "$archive" 2>/dev/null | tar -tf - >"$list" 2>/dev/null
+    st=("${PIPESTATUS[@]}")
+    BACKUP_VERIFY_COUNT=$(wc -l <"$list" | tr -d ' ')
+    rm -f "$list"
+    [ "${st[1]:-1}" -eq 0 ] && [ "${BACKUP_VERIFY_COUNT:-0}" -gt 0 ]
+}
+
 # ── cmd_backup ──────────────────────────────────────────────────────────────
 
 cmd_backup() {
     _oa_resolve_node
+    if [ "$OA_NODE_STUCK" = true ]; then
+        echo -e "${RED}[FAIL]${NC} Node.js did not answer within ${BACKUP_NODE_PROBE_LIMIT}s, twice — no backup was made."
+        echo "       Nothing was changed. A Node.js start that stalls usually works on the next try."
+        exit 75
+    fi
     if ! command -v gzip &>/dev/null; then
         echo "  Installing gzip..."
         pkg install -y gzip 2>/dev/null || { echo -e "${RED}[FAIL]${NC} gzip not found and could not be installed"; exit 1; }
@@ -515,7 +764,15 @@ cmd_backup() {
     basename="${ts}-openclaw-backup"
     archive_path="$output_dir/${basename}.tar.gz"
 
-    _backup_create "$data_dir" "$archive_path" "$basename" || exit 1
+    # (75: node did not answer — passed on as it is, so a caller can tell it from any other failure)
+    local create_rc=0
+    _backup_create "$data_dir" "$archive_path" "$basename" || create_rc=$?
+    if [ "$create_rc" -eq 75 ]; then
+        echo -e "${RED}[FAIL]${NC} No backup was made."
+        echo "       Nothing was changed."
+        exit 75
+    fi
+    [ "$create_rc" -eq 0 ] || exit "$create_rc"
 
     echo -e "${GREEN}[OK]${NC}   Archive created: $archive_path"
     echo ""
@@ -524,16 +781,58 @@ cmd_backup() {
     echo -e "Verifying integrity…"
 
     # Try openclaw backup verify first (preferred — full manifest check)
-    if command -v openclaw &>/dev/null && timeout 300 openclaw backup verify "$archive_path" &>/dev/null 2>&1; then
+    local verify_out="" verify_rc=1 verify_reason="" verify_known=false
+    if command -v openclaw &>/dev/null; then
+        # (the output goes to a file, not a pipe: openclaw restarts itself as a detached child that holds its
+        # standard output, and a pipe would keep this call waiting for it after the limit stopped the parent)
+        local verify_file
+        verify_rc=0
+        if verify_file=$(mktemp "${TMPDIR:-/tmp}/oa-verify-out.XXXXXX" 2>/dev/null); then
+            # (the redirection is made by a shell that execs openclaw, so the shell's own "Killed" notice, which
+            # goes to standard error, stays out of the file)
+            { _backup_limited work sh -c 'exec "$@" >"$0" 2>&1 </dev/null' "$verify_file" \
+                openclaw backup verify "$archive_path"; } 2>/dev/null || verify_rc=$?
+            verify_out=$(head -c 65536 "$verify_file" 2>/dev/null) || verify_out=""
+            rm -f "$verify_file"
+        else
+            { _backup_limited work openclaw backup verify "$archive_path" >/dev/null 2>&1 </dev/null; } 2>/dev/null || verify_rc=$?
+        fi
+    fi
+    if [ "$verify_rc" -eq 0 ] && command -v openclaw &>/dev/null; then
         echo -e "${GREEN}[OK]${NC}   Integrity check passed (openclaw backup verify)"
     else
-        # Fallback: tar -tzf structural check
-        local file_count
-        file_count=$(gzip -dc "$archive_path" 2>/dev/null | tar -tf - 2>/dev/null | wc -l)
-        if [ "$file_count" -gt 0 ]; then
-            echo -e "${GREEN}[OK]${NC}   Integrity check passed (tar structural, $file_count entries)"
+        if command -v openclaw &>/dev/null; then
+            # (openclaw's own verify has been seen to refuse archives that are whole; say why, once)
+            if [ "$verify_rc" -eq 124 ]; then
+                verify_reason="no answer within ${BACKUP_NODE_WORK_LIMIT} s"
+            else
+                # (the archive path is taken out first: OpenClaw's message starts with it, "Backup archive
+                # verification failed: <path>. <reason>", and a long path would use up the length of the line.
+                # grep finds nothing in an empty output: that must not end the script under set -e / pipefail)
+                verify_out="${verify_out//"$archive_path"/<archive>}"
+                verify_reason=$(printf '%s\n' "$verify_out" | sed "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" \
+                    | { grep -v '^[[:space:]]*$' || true; } | tail -1) || verify_reason=""
+                verify_reason="${verify_reason#*verification failed: <archive>. }"
+                verify_reason="${verify_reason#"${verify_reason%%[![:space:]]*}"}"
+                # (only OpenClaw's own absolute plugin-skills links are named as such, and only when that is the
+                # reason itself; any other reason is shown as it is)
+                case "$verify_reason" in
+                    *"symbolic link target must be relative"*) verify_known=true ;;
+                esac
+                verify_reason="${verify_reason:0:200}"
+                [ -n "$verify_reason" ] || verify_reason="exit code $verify_rc"
+            fi
+            if [ "$verify_known" = true ]; then
+                echo "Note: openclaw backup verify does not accept the absolute plugin-skills links that OpenClaw creates itself; the archive was checked with gzip and tar instead."
+            else
+                echo "Note: openclaw backup verify could not be used for this archive ($verify_reason); it was checked with gzip and tar instead."
+            fi
+        fi
+        # Fallback: the compressed stream (gzip -t) and the tar listing, each with its own exit status
+        if _backup_verify_archive "$archive_path"; then
+            echo -e "${GREEN}[OK]${NC}   Integrity check passed (gzip and tar, $BACKUP_VERIFY_COUNT entries)"
         else
-            echo -e "${RED}[FAIL]${NC} Integrity check failed — archive may be corrupt"
+            echo -e "${RED}[FAIL]${NC} Integrity check failed — the archive is not whole: $archive_path"
             exit 1
         fi
     fi
@@ -551,6 +850,11 @@ cmd_backup() {
 
 cmd_restore() {
     _oa_resolve_node
+    if [ "$OA_NODE_STUCK" = true ]; then
+        echo -e "${RED}[FAIL]${NC} Node.js did not answer within ${BACKUP_NODE_PROBE_LIMIT}s, twice — nothing was restored."
+        echo "       Run: oa --restore   (again; a Node.js start that stalls usually works on the next try)"
+        exit 75
+    fi
     local force_no_safety=false
     case "${1:-}" in
         --force-no-safety) force_no_safety=true ;;
@@ -644,10 +948,16 @@ cmd_restore() {
     # Read the manifest: archive layout, archive root and assets
     local info layout="" archive_root="" backup_runtime=""
     local -a asset_kinds=() asset_sources=() asset_paths=()
-    info=$(_backup_manifest_info "$selected") || {
+    local info_rc=0
+    info=$(_backup_manifest_info "$selected") || info_rc=$?
+    if [ "$info_rc" -eq 75 ]; then
+        echo -e "${RED}[FAIL]${NC} Node.js did not answer within ${BACKUP_NODE_PROBE_LIMIT}s, twice — nothing was restored."
+        echo "       Run: oa --restore   (again; a Node.js start that stalls usually works on the next try)"
+        exit 75
+    elif [ "$info_rc" -ne 0 ]; then
         echo -e "${RED}[FAIL]${NC} Could not read the backup manifest (this backup needs node to be read)."
         exit 1
-    }
+    fi
     while IFS= read -r line; do
         case "$line" in
             "LAYOUT "*) layout="${line#LAYOUT }" ;;
@@ -720,16 +1030,26 @@ cmd_restore() {
         pre_dir="$BACKUP_DIR/pre-restore"
         pre_root="$(_backup_timestamp)-openclaw-backup"
         pre_archive="$pre_dir/${pre_root}.tar.gz"
-        local pre_ready=true
+        local pre_ready=true pre_rc=1
         mkdir -p "$pre_dir" 2>/dev/null || pre_ready=false
         echo ""
         echo -e "Saving a safety backup of the current data…"
-        if [ "$pre_ready" = true ] && _backup_create "$restore_root" "$pre_archive" "$pre_root"; then
+        pre_rc=1
+        if [ "$pre_ready" = true ]; then
+            pre_rc=0
+            _backup_create "$restore_root" "$pre_archive" "$pre_root" || pre_rc=$?
+        fi
+        if [ "$pre_rc" -eq 0 ]; then
             echo -e "${GREEN}[OK]${NC}   Safety backup: $pre_archive"
             echo "       To undo this restore, run oa --restore again and pick it (it is listed as pre-restore/…)."
 
         elif [ "$force_no_safety" = true ]; then
             echo -e "${YELLOW}[WARN]${NC} Could not save a safety backup of the current data — continuing because you asked for --force-no-safety."
+        elif [ "$pre_rc" -eq 75 ]; then
+            echo -e "${RED}[FAIL]${NC} Node.js did not answer, so no safety backup of the current data was made and nothing was restored."
+            echo "       Run: oa --restore   (again)"
+            echo "       To restore without a safety backup (the current data cannot be recovered afterwards): oa --restore --force-no-safety"
+            exit 75
         else
             echo -e "${RED}[FAIL]${NC} Could not save a safety backup of the current data, so nothing was restored."
             echo "       Free some space or check that the temporary folder and the backup folder can be written, then run oa --restore again."
@@ -804,7 +1124,8 @@ cmd_restore() {
             # environment too, so this does not depend on where the backup came from): OpenClaw 9.x stops
             # on them with EACCES
             for repair_fn in oa_repair_state_paths oa_repair_config_paths; do
-                read -r repaired repair_left _ <<< "$("$repair_fn" "$restore_root" "$OA_NODE")"
+                # (_backup_node_repair is the "node" of these functions: node under the limit of the work class)
+                read -r repaired repair_left _ <<< "$("$repair_fn" "$restore_root" _backup_node_repair)"
                 case "$repaired" in
                     error:*)
                         if [ "$repair_fn" = oa_repair_config_paths ]; then

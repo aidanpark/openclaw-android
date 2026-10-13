@@ -246,7 +246,7 @@ Set `OA_SKIP_AUTO_DOCTOR=1` to turn off the automatic migration, or `OA_SKIP_PRE
 
 ## Backup & Restore
 
-OpenClaw's built-in backup command (`openclaw backup create`) relies on hardlinks, which Android blocks in app-private storage; the hard-link patch that OpenClaw on Android applies lets it copy instead (see the hard-link patch paragraph below). The `oa --backup` command archives your whole OpenClaw data folder (`~/.openclaw`) with `tar` and takes consistent snapshots of the SQLite databases. It then checks the archive with `openclaw backup verify` when OpenClaw accepts it, and otherwise with a structural `tar` check (OpenClaw 2026.9 rejects archives that contain its absolute `plugin-skills` link; restoring them works normally).
+OpenClaw's built-in backup command (`openclaw backup create`) relies on hardlinks, which Android blocks in app-private storage; the hard-link patch that OpenClaw on Android applies lets it copy instead (see the hard-link patch paragraph below). The `oa --backup` command archives your whole OpenClaw data folder (`~/.openclaw`) with `tar` and takes consistent snapshots of the SQLite databases. It then checks the archive with `openclaw backup verify` when OpenClaw accepts it, and otherwise with a `gzip` and `tar` check (OpenClaw 2026.9 and later reject archives that contain its absolute `plugin-skills` link; restoring them works normally). If Node.js does not answer within the time limit (`OA_NODE_PROBE_TIMEOUT`, 30 s for quick calls; `OA_NODE_WORK_TIMEOUT`, 300 s for each database snapshot), the command stops with exit code 75 and creates no archive, instead of saving a copy that may be incomplete.
 
 To create a backup:
 ```bash

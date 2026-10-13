@@ -246,7 +246,7 @@ oa --update && source ~/.bashrc
 
 ## 백업 및 복구
 
-OpenClaw의 내장 백업 명령어(`openclaw backup create`)는 Android의 앱 전용 저장소에서 막히는 하드링크에 의존합니다. OpenClaw on Android 가 적용하는 하드링크 패치로 복사로 대체할 수 있습니다(아래의 하드링크 패치 문단 참고). `oa --backup` 명령어는 OpenClaw 데이터 폴더(`~/.openclaw`) 전체를 `tar`로 묶고, SQLite 데이터베이스는 일관된 스냅샷으로 담습니다. 이어서 OpenClaw 가 받아들이면 `openclaw backup verify`로, 그렇지 않으면 `tar` 구조 검사로 아카이브를 확인합니다(OpenClaw 2026.9 는 절대 경로 `plugin-skills` 링크가 든 아카이브를 거부하지만 복원은 정상입니다).
+OpenClaw의 내장 백업 명령어(`openclaw backup create`)는 Android의 앱 전용 저장소에서 막히는 하드링크에 의존합니다. OpenClaw on Android 가 적용하는 하드링크 패치로 복사로 대체할 수 있습니다(아래의 하드링크 패치 문단 참고). `oa --backup` 명령어는 OpenClaw 데이터 폴더(`~/.openclaw`) 전체를 `tar`로 묶고, SQLite 데이터베이스는 일관된 스냅샷으로 담습니다. 이어서 OpenClaw 가 받아들이면 `openclaw backup verify`로, 그렇지 않으면 `gzip`과 `tar` 검사로 아카이브를 확인합니다(OpenClaw 2026.9 이후는 절대 경로 `plugin-skills` 링크가 든 아카이브를 거부하지만 복원은 정상입니다). Node.js 가 제한 시간(빠른 호출 `OA_NODE_PROBE_TIMEOUT` 30초, 데이터베이스 스냅샷 한 건당 `OA_NODE_WORK_TIMEOUT` 300초) 안에 응답하지 않으면, 불완전할 수 있는 사본을 저장하지 않고 종료 코드 75 로 중단하며 아카이브를 만들지 않습니다.
 
 백업 생성:
 ```bash

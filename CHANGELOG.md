@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.3.2] - 2026-10-13
+
+### Fixed
+
+- `oa --backup` could put a damaged copy of a database into the archive. When Node.js was stopped in the middle of the copy (for example by Android for lack of memory), the unfinished file was counted as a success, and restoring that backup would have used it as the database. A database copy is now accepted only when it was finished; otherwise the plain file is copied instead, or the backup stops.
+- `oa --backup` now also detects an archive that was cut short. The check used to pass such an archive; it now runs `gzip` and `tar` over the whole file and shows why `openclaw backup verify` did not accept it.
+- If Node.js does not answer, `oa --backup` no longer waits without end: it stops after the time limit (`OA_NODE_PROBE_TIMEOUT`, 30 s for quick calls; `OA_NODE_WORK_TIMEOUT`, 300 s for each database snapshot) with exit code 75 and creates no archive. Rewriting the session paths during a backup can no longer leave a file cut off, and the version in the backup manifest is read without starting Node.js.
+
 ## [Script v1.3.1] - 2026-10-13
 
 ### Changed

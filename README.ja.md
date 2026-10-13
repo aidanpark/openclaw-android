@@ -246,7 +246,7 @@ oa --update && source ~/.bashrc
 
 ## バックアップとリストア
 
-OpenClaw標準のバックアップコマンド（`openclaw backup create`）は、Androidのアプリ専用ストレージでブロックされるハードリンクに依存しています。OpenClaw on Androidが適用するハードリンクパッチにより、コピーで代替できます（下記のハードリンクパッチの段落を参照）。`oa --backup`コマンドはOpenClawのデータフォルダ（`~/.openclaw`）全体を`tar`でまとめ、SQLiteデータベースは整合性のあるスナップショットとして保存します。その後、OpenClawが受け付ける場合は`openclaw backup verify`で、受け付けない場合は`tar`の構造チェックでアーカイブを確認します（OpenClaw 2026.9は絶対パスの`plugin-skills`リンクを含むアーカイブを拒否しますが、復元は正常に動作します）。
+OpenClaw標準のバックアップコマンド（`openclaw backup create`）は、Androidのアプリ専用ストレージでブロックされるハードリンクに依存しています。OpenClaw on Androidが適用するハードリンクパッチにより、コピーで代替できます（下記のハードリンクパッチの段落を参照）。`oa --backup`コマンドはOpenClawのデータフォルダ（`~/.openclaw`）全体を`tar`でまとめ、SQLiteデータベースは整合性のあるスナップショットとして保存します。その後、OpenClawが受け付ける場合は`openclaw backup verify`で、受け付けない場合は`gzip`と`tar`のチェックでアーカイブを確認します（OpenClaw 2026.9以降は絶対パスの`plugin-skills`リンクを含むアーカイブを拒否しますが、復元は正常に動作します）。Node.jsが制限時間内（短い呼び出しは`OA_NODE_PROBE_TIMEOUT`で30秒、データベースのスナップショット1件ごとに`OA_NODE_WORK_TIMEOUT`で300秒）に応答しない場合は、不完全かもしれないコピーを保存せず、終了コード75で中止し、アーカイブを作成しません。
 
 バックアップを作成するには:
 ```bash

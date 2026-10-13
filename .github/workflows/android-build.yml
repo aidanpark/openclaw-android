@@ -12,6 +12,11 @@ on:
       - 'android/**'
       - '.github/workflows/android-build.yml'
 
+# A newer push to the same ref cancels the run still in progress (the private repository is billed per minute).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-www:
     name: Build WebView UI

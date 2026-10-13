@@ -1,0 +1,113 @@
+name: OpenClaw Watch
+
+# Once a day: does the newest OpenClaw release (and the beta channel) fit our patches and checks?
+# Stage 0 only (tests/verify-openclaw-fit.sh): it downloads the npm tarballs, installs nothing and runs no code of
+# the package. A PASS is not a go-ahead for a pin bump: it only recognizes shapes we already know (see the header
+# of the script). Stage 1 (gateway, doctor, backup under the Android trap) and the QA device runs decide.
+#
+# - `latest` failing fails the run (GitHub then sends its usual failed-run notification); `beta` is shown in the
+#   summary only, so that a beta that does not fit does not turn the run red every day.
+# - No secrets, no token beyond the read-only default.
+# - Scheduled runs only in the public repository (the private one would use its own minutes for the same result).
+# - GitHub may delay a scheduled run, and disables the schedule of a public repository after 60 days without
+#   repository activity (GitHub docs, "Disabling and enabling a workflow", read 2026-10-13); enabling it again is
+#   one click, and a manual run (workflow_dispatch) works in any case.
+
+on:
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versions or tags to judge, separated by spaces (default: latest beta)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-watch
+  cancel-in-progress: false
+
+jobs:
+  fit:
+    name: Fit of the newest OpenClaw
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'AidanPark/openclaw-android'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Judge the candidates
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -u -f
+          PIN=$(sed -n 's/^PLATFORM_NPM_PACKAGE_VERSION="\(.*\)"/\1/p' platforms/openclaw/config.env | head -1)
+          # whitespace of any kind separates the words; nothing given: the two channels, `beta` as information only
+          TARGETS=$(printf '%s' "${INPUT_VERSION:-}" | tr -s '[:space:]' ' ')
+          INFO_BETA=0
+          if [ -z "${TARGETS// /}" ]; then
+            TARGETS="latest beta"
+            INFO_BETA=1
+          fi
+          FAIL=0
+          {
+            echo "## OpenClaw fit (stage 0)"
+            echo ""
+            echo "Pin in this repository: \`$PIN\`"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          for target in $TARGETS; do
+            case "$target" in
+              -*|*[!0-9A-Za-z._-]*)
+                echo "::error title=OpenClaw watch::not a version or tag: ignored word"
+                FAIL=1
+                continue
+                ;;
+            esac
+            rc=0
+            out=$(bash tests/verify-openclaw-fit.sh "$target" 2>&1) || rc=$?
+            if [ "$rc" -eq 2 ]; then
+              # could not judge (registry or network hiccup): once more
+              sleep 30
+              rc=0
+              out=$(bash tests/verify-openclaw-fit.sh "$target" 2>&1) || rc=$?
+            fi
+            case "$rc" in
+              0) verdict="fits" ;;
+              1) verdict="DOES NOT FIT" ;;
+              *) verdict="could not be judged" ;;
+            esac
+            # package data is in the output: no workflow command in it is to be taken (a random token ends it)
+            token=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+            echo "::stop-commands::$token"
+            printf '%s\n' "$out"
+            echo "::$token::"
+            {
+              echo "### \`$target\`: $verdict"
+              echo ""
+              echo '```text'
+              printf '%s\n' "$out" | tr '\r' ' '
+              echo '```'
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=OpenClaw $target::$verdict (exit $rc)"
+            # `beta` of a scheduled run is information; every other target (latest, a version named by hand,
+            # also `beta` when it was asked for by hand) decides the run
+            if [ "$rc" -ne 0 ]; then
+              if [ "$target" = "beta" ] && [ "$INFO_BETA" -eq 1 ]; then
+                echo "::warning title=OpenClaw beta::$verdict (information only)"
+              else
+                FAIL=1
+              fi
+            fi
+          done
+          exit "$FAIL"

@@ -3,8 +3,21 @@ name: Code Quality
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '.agent/**'
+      - '.claude/**'
+      - 'CLAUDE.md'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '.agent/**'
+      - '.claude/**'
+      - 'CLAUDE.md'
+
+# A newer push to the same ref cancels the run still in progress (the private repository is billed per minute).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   shellcheck:

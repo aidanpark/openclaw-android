@@ -235,7 +235,7 @@ oa --update && source ~/.bashrc
 
 - 需要 2000MB 可用空间。空间不足时，会在更改任何内容之前停止，并显示所需空间和剩余空间。
 - 如果 OpenClaw 网关正在运行，会在不做任何更改的情况下停止。请先停止网关（Ctrl+C），再重新运行 `oa --update`。在 Claw 应用中，可以通过“设置 → 安装与更新 → 停止网关”停止在应用终端中启动的网关；应用的“更新”按钮也会先停止这样的网关再继续。如果应用为更新而停止了网关，请在更新结束后从仪表盘重新启动它。
-- 先在 `~/.openclaw-android/backup/pre-update/` 创建数据备份（只保留最新的 3 个）。
+- 先在 `~/.openclaw-android/backup/pre-update/` 创建数据备份（只保留最新的 3 个）。如果创建该备份时 Node.js 没有响应，更新会在更改 Node.js 和 OpenClaw 之前停止；请重新运行，或设置 `OA_SKIP_PRE_UPDATE_BACKUP=1` 在没有备份的情况下更新（此时数据不会自动迁移）。
 - 安装后检查 OpenClaw 的配置和数据状态。仅当需要数据迁移，且本次运行创建了备份时，才会自动运行一次 `openclaw doctor --fix`（最长 2 分钟）。如果失败，会显示备份位置和手动方法（停止网关后运行 `openclaw doctor --fix`），并以失败结束。
 
 要关闭自动迁移，请设置 `OA_SKIP_AUTO_DOCTOR=1`；要跳过自动备份，请设置 `OA_SKIP_PRE_UPDATE_BACKUP=1`。

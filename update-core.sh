@@ -9,7 +9,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.3.2"
+OA_VERSION="1.3.3"
 # Marks this updater as the current protocol for the scripts it runs from the downloaded copy
 # (install-nodejs.sh and platforms/*/update.sh refuse a version change without it: a cached older
 # update-core.sh must not combine with a newer download).
@@ -542,7 +542,10 @@ step 3 "Update Core Infrastructure"
 
 # A new OpenClaw/Node.js pin may change the OpenClaw data format, and going back is only
 # possible from a backup: make one first (with the previous Node.js and OpenClaw still in
-# place). It never blocks the update: no room or a failed backup only gives a warning.
+# place). No room or a failed backup only gives a warning and the update goes on. One failure stops it:
+# Node.js not answering (exit code 75). The rest of the update needs the same Node.js, and without a
+# backup platforms/*/update.sh does not migrate the data by itself, so going on could leave a new OpenClaw
+# that cannot use the old data and no copy to go back to. Nothing but the update scripts is changed then.
 # (Set OA_SKIP_PRE_UPDATE_BACKUP=1 to skip it.)
 if [ "$OA_PIN_CHANGES" = true ] && [ "$PLATFORM" = "openclaw" ] && [ -f "$PROJECT_DIR/scripts/backup.sh" ] \
     && [ "${OA_SKIP_PRE_UPDATE_BACKUP:-0}" != 1 ] \
@@ -570,6 +573,17 @@ if [ "$OA_PIN_CHANGES" = true ] && [ "$PLATFORM" = "openclaw" ] && [ -f "$PROJEC
         echo "       If the update damaged your data, 'oa --restore' puts it back (it is listed as pre-update/…);"
         echo "       if the gateway then asks for a state migration, run: openclaw doctor --fix"
     else
+        _oa_bk_rc=$?    # (the exit status of the backup run in the condition above)
+        if [ "$_oa_bk_rc" -eq 75 ]; then
+            # (one block, whichever call did not answer: the app card keeps only the last [FAIL] block)
+            echo -e "${RED}[FAIL]${NC} No backup could be made because Node.js did not answer — update stopped before Node.js and OpenClaw were changed."
+            echo "       Your OpenClaw data was not touched; only the update scripts were replaced."
+            echo "       Run 'oa --update' again: a Node.js start that stalls usually works on the next try."
+            echo "       If it keeps stalling, a very large database may need more time; to give it more, run: OA_NODE_WORK_TIMEOUT=900 oa --update"
+            echo "       To update without a backup (the data is then not migrated automatically), run: OA_SKIP_PRE_UPDATE_BACKUP=1 oa --update"
+            OA_UPD_REASON=backup_node
+            exit 1
+        fi
         echo -e "${YELLOW}[WARN]${NC} The backup did not finish — continuing the update without it."
     fi
 fi

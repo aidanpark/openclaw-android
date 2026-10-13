@@ -230,7 +230,7 @@ Only one setup, update or tools run happens at a time (a new install, `oa --upda
 
 - It needs 2000 MB of free space. If there is not enough, it stops before changing anything and shows the space needed and the space left.
 - If the OpenClaw gateway is running, it stops without changing anything. Stop the gateway (Ctrl+C) and run `oa --update` again. In the Claw app, you can stop a gateway started in the app's terminal with Settings → Install & Update → Stop gateway; the app's Update button also stops such a gateway first. If the app stopped the gateway for the update, start it again from the Dashboard afterwards.
-- It first creates a data backup in `~/.openclaw-android/backup/pre-update/` (only the latest 3 are kept).
+- It first creates a data backup in `~/.openclaw-android/backup/pre-update/` (only the latest 3 are kept). If Node.js does not answer while this backup is made, the update stops before Node.js and OpenClaw are changed; run it again, or set `OA_SKIP_PRE_UPDATE_BACKUP=1` to update without the backup (your data is then not migrated automatically).
 - After the install, it checks the OpenClaw configuration and data. If a data migration is needed and this run made the backup, it runs `openclaw doctor --fix` once automatically (up to 2 minutes). If that fails, it shows the backup location and the manual steps (stop the gateway, then run `openclaw doctor --fix`) and ends as a failure.
 
 Set `OA_SKIP_AUTO_DOCTOR=1` to turn off the automatic migration, or `OA_SKIP_PRE_UPDATE_BACKUP=1` to skip the automatic backup.

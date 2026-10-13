@@ -57,6 +57,13 @@ internal class UpdateFailPhraseContractTest {
                 "Your OpenClaw has saved chat history, and §{_oa_sg_why}.",
                 UpdateReason.SESSION_GUARD,
             ),
+            // Before Node.js and OpenClaw are touched; the app has no reason of its own for it yet
+            Quote(
+                "update-core.sh",
+                "No backup could be made because Node.js did not answer — " +
+                    "update stopped before Node.js and OpenClaw were changed.",
+                UpdateReason.UNKNOWN,
+            ),
             Quote(
                 "update-core.sh",
                 "Node.js v§{PLATFORM_NODE_VERSION} is required (found: §{CURRENT_NODE_VER:-none}) " +
@@ -135,7 +142,7 @@ internal class UpdateFailPhraseContractTest {
             ),
             Quote(
                 "scripts/install-nodejs.sh",
-                "The updater downloaded an older copy of itself (cache). Nothing was changed.",
+                "The updater downloaded an older copy of itself (cache).",
                 UpdateReason.CACHE_STALE,
             ),
             Quote("scripts/install-nodejs.sh", "Failed to create temp directory", UpdateReason.UNKNOWN),

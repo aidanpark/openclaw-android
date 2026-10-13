@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.3.3] - 2026-10-13
+
+### Fixed
+
+- If Node.js does not answer while `oa --update` makes the backup before an update, the update now stops before it changes Node.js or OpenClaw (exit code 1, `reason=backup_node`). Before, it continued without the backup, which skips the automatic data migration and could leave a new OpenClaw installed but not working. Running `oa --update` again continues normally; the message also shows how to give a very large database more time (`OA_NODE_WORK_TIMEOUT`) or to update without the backup (`OA_SKIP_PRE_UPDATE_BACKUP=1`).
+- Messages that said "Nothing was changed." although the update scripts had already been replaced now say what is true (for example "No Node.js or OpenClaw version was changed.").
+- `oa --backup` and `oa --restore` read the OpenClaw configuration, the workspace folders and the version with a time limit and without a hidden pipe, so a stalled `openclaw` call can no longer hold a backup or a restore for good; leftover temporary files of an interrupted backup are removed at the next start.
+
 ## [Script v1.3.2] - 2026-10-13
 
 ### Fixed

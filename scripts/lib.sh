@@ -83,7 +83,7 @@ REPO_BASE="$REPO_BASE_ORIGIN"
 
 BASHRC_MARKER_START="# >>> OpenClaw on Android >>>"
 BASHRC_MARKER_END="# <<< OpenClaw on Android <<<"
-OA_VERSION="1.3.2"
+OA_VERSION="1.3.3"
 
 # ── Platform detection ──
 # 1. Explicit marker file (new install and after first update)
@@ -171,7 +171,7 @@ oa_check_free_space() {
     [[ "$have" =~ ^[0-9]+$ ]] || return 0
     [ "$have" -ge "$need" ] && return 0
     echo -e "${RED}[FAIL]${NC} Not enough free storage to ${what}: ${need} MB needed, ${have} MB available."
-    echo "       Nothing was changed. Free some space (clear other apps' caches, delete unused files, or remove ~/.npm/_cacache) and run it again."
+    echo "       Free some space (clear other apps' caches, delete unused files, or remove ~/.npm/_cacache) and run it again."
     return 1
 }
 

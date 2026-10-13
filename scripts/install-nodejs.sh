@@ -191,7 +191,8 @@ refuse_unmarked_node_change() {
     [ "${OA_ALLOW_UNMARKED_NODE_CHANGE:-}" != "1" ] || return 0
     case "${OA_UPDATE_CORE_PROTOCOL:-}" in ''|*[!0-9]*) proto=0 ;; *) proto="$OA_UPDATE_CORE_PROTOCOL" ;; esac
     if [ "$proto" -lt 3 ]; then
-        echo -e "${RED}[FAIL]${NC} The updater downloaded an older copy of itself (cache). Nothing was changed."
+        echo -e "${RED}[FAIL]${NC} The updater downloaded an older copy of itself (cache)."
+        echo "       No Node.js or OpenClaw version was changed."
         echo "       Run 'oa --update' again in a few minutes."
         oa_note "reason=cache_old_updater"; oa_note "changed=false"
         exit 1

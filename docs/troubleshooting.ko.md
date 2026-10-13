@@ -502,10 +502,33 @@ openclaw doctor --fix
 - `~/.openclaw/state/openclaw.sqlite.oa-before-repair-<날짜시각>`
 - `~/.openclaw/openclaw.json.oa-before-repair-<날짜시각>`
 
+## `No backup could be made because Node.js did not answer`
+
+```
+[FAIL] No backup could be made because Node.js did not answer — update stopped before Node.js and OpenClaw were changed.
+       Your OpenClaw data was not touched; only the update scripts were replaced.
+       Run 'oa --update' again: a Node.js start that stalls usually works on the next try.
+       If it keeps stalling, a very large database may need more time; to give it more, run: OA_NODE_WORK_TIMEOUT=900 oa --update
+       To update without a backup (the data is then not migrated automatically), run: OA_SKIP_PRE_UPDATE_BACKUP=1 oa --update
+```
+
+### 원인
+
+고정 버전이 바뀌는 업데이트 전에 `oa --update` 는 Node.js 로 백업을 만듭니다. Node.js 가 제한 시간(시작은 30초, 데이터베이스 하나당 300초) 안에 응답하지 않으면 백업 없이 계속하지 않고 업데이트를 멈춥니다. 백업이 없으면 자동 데이터 이전이 건너뛰어져 OpenClaw 가 설치되었지만 동작하지 않는 상태가 될 수 있기 때문입니다.
+
+### 영향
+
+Node.js, OpenClaw, 데이터는 그대로입니다. 업데이트 스크립트만 교체되었으므로 `oa --update` 를 다시 실행하면 정상적으로 이어집니다.
+
+### 해결 방법
+
+`oa --update` 를 다시 실행하세요. 멈춘 Node.js 시작은 대체로 다음 시도에서 동작합니다. 매우 큰 데이터베이스가 더 많은 시간을 필요로 하면 `OA_NODE_WORK_TIMEOUT=900 oa --update` 를 실행하세요. 백업 없이 업데이트하려면 `OA_SKIP_PRE_UPDATE_BACKUP=1 oa --update` 를 실행합니다. 이 경우 데이터가 자동으로 이전되지 않으므로, 업데이트 뒤 OpenClaw 가 요구하면 `openclaw doctor --fix` 를 직접 실행하세요. Claw 앱에서는 앱의 터미널에서 이 변수를 지정합니다.
+
 ## `The updater downloaded an older copy of itself (cache)`
 
 ```
-[FAIL] The updater downloaded an older copy of itself (cache). Nothing was changed.
+[FAIL] The updater downloaded an older copy of itself (cache).
+       No Node.js or OpenClaw version was changed.
        Run 'oa --update' again in a few minutes.
 ```
 
@@ -515,7 +538,7 @@ openclaw doctor --fix
 
 ### 영향
 
-아무것도 바뀌지 않았습니다. Node.js, OpenClaw, 데이터는 그대로입니다.
+Node.js 와 OpenClaw 의 버전은 바뀌지 않았고 데이터도 그대로입니다.
 
 ### 해결 방법
 
@@ -531,7 +554,7 @@ oa --update && source ~/.bashrc
 
 ```
 [FAIL] Not enough free storage to ...: 2000 MB needed, ... MB available.
-       Nothing was changed.
+       Free some space (clear other apps' caches, delete unused files, or remove ~/.npm/_cacache) and run it again.
 ```
 
 ### 원인
@@ -540,7 +563,7 @@ oa --update && source ~/.bashrc
 
 ### 해결 방법
 
-공간을 확보한 뒤(예: 다른 앱의 캐시 삭제, 사용하지 않는 파일 삭제, `~/.npm/_cacache` 제거) 명령을 다시 실행하세요. 아무것도 바뀌지 않았으므로 안전하게 다시 시도할 수 있습니다.
+공간을 확보한 뒤(예: 다른 앱의 캐시 삭제, 사용하지 않는 파일 삭제, `~/.npm/_cacache` 제거) 명령을 다시 실행하세요. 안전하게 다시 시도할 수 있습니다.
 
 저장 공간이 완전히 찼으면 `oa --update` 가 그보다 먼저 `[FAIL] Could not create the run lock in … (is the storage full?)` 를 출력하고 멈출 수 있습니다. 원인과 해결 방법은 같습니다.
 

@@ -502,10 +502,33 @@ Before changing anything, the repair saves copies of the files it edits (the lat
 - `~/.openclaw/state/openclaw.sqlite.oa-before-repair-<timestamp>`
 - `~/.openclaw/openclaw.json.oa-before-repair-<timestamp>`
 
+## `No backup could be made because Node.js did not answer`
+
+```
+[FAIL] No backup could be made because Node.js did not answer — update stopped before Node.js and OpenClaw were changed.
+       Your OpenClaw data was not touched; only the update scripts were replaced.
+       Run 'oa --update' again: a Node.js start that stalls usually works on the next try.
+       If it keeps stalling, a very large database may need more time; to give it more, run: OA_NODE_WORK_TIMEOUT=900 oa --update
+       To update without a backup (the data is then not migrated automatically), run: OA_SKIP_PRE_UPDATE_BACKUP=1 oa --update
+```
+
+### Cause
+
+Before an update that changes the pinned versions, `oa --update` makes a backup with Node.js. When Node.js does not answer within the time limit (30 seconds for a start, 300 seconds for each database), the update stops instead of continuing without a backup: without the backup, the automatic data migration would be skipped and OpenClaw could end up installed but not working.
+
+### Impact
+
+Node.js, OpenClaw and your data stay as they were. Only the update scripts were replaced, so running `oa --update` again continues normally.
+
+### Solution
+
+Run `oa --update` again. A stalled Node.js start usually works on the next try. If a very large database needs more time, run `OA_NODE_WORK_TIMEOUT=900 oa --update`. To update without a backup, run `OA_SKIP_PRE_UPDATE_BACKUP=1 oa --update`; the data is then not migrated automatically, so run `openclaw doctor --fix` yourself after the update if OpenClaw asks for it. In the Claw app, set these variables in the app's terminal.
+
 ## `The updater downloaded an older copy of itself (cache)`
 
 ```
-[FAIL] The updater downloaded an older copy of itself (cache). Nothing was changed.
+[FAIL] The updater downloaded an older copy of itself (cache).
+       No Node.js or OpenClaw version was changed.
        Run 'oa --update' again in a few minutes.
 ```
 
@@ -515,7 +538,7 @@ For a few minutes after a new release, a cache can still serve an old copy of th
 
 ### Impact
 
-Nothing was changed. Node.js, OpenClaw, and your data stay as they were.
+No Node.js or OpenClaw version was changed, and your data stays as it was.
 
 ### Solution
 
@@ -531,7 +554,7 @@ The environment variables `OA_ALLOW_UNMARKED_NODE_CHANGE=1` and `OA_ALLOW_UNMARK
 
 ```
 [FAIL] Not enough free storage to ...: 2000 MB needed, ... MB available.
-       Nothing was changed.
+       Free some space (clear other apps' caches, delete unused files, or remove ~/.npm/_cacache) and run it again.
 ```
 
 ### Cause
@@ -540,7 +563,7 @@ A new install, and an update that changes the pinned versions, both need 2000 MB
 
 ### Solution
 
-Free some space (for example, clear other apps' caches, delete unused files, or remove `~/.npm/_cacache`) and run the command again. Nothing was changed, so it is safe to retry.
+Free some space (for example, clear other apps' caches, delete unused files, or remove `~/.npm/_cacache`) and run the command again. It is safe to retry.
 
 When the storage is completely full, `oa --update` can stop earlier with `[FAIL] Could not create the run lock in … (is the storage full?)`. The cause and the solution are the same.
 

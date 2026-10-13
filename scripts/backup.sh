@@ -227,8 +227,8 @@ _backup_runtime_version() {
     # a child, and a stopped wrapper would leave that child holding a pipe (and this call waiting for it).
     local f own_prefix=false
     [ -z "${npm_config_prefix:-}${NPM_CONFIG_PREFIX:-}" ] || own_prefix=true
-    for f in "$HOME/.npmrc" "${PREFIX:-/nonexistent}/etc/npmrc"; do
-        if [ -f "$f" ] && grep -q '^[[:space:]]*prefix[[:space:]]*=' "$f" 2>/dev/null; then own_prefix=true; fi
+    for f in "$HOME/.npmrc" "${PREFIX:-/nonexistent}/etc/npmrc" "${npm_config_userconfig:-}" "${NPM_CONFIG_USERCONFIG:-}"; do
+        if [ -n "$f" ] && [ -f "$f" ] && grep -q '^[[:space:]]*prefix[[:space:]]*=' "$f" 2>/dev/null; then own_prefix=true; fi
     done
     if [ -n "$direct" ] && [ "$own_prefix" = false ] && [ -f "$direct" ]; then
         pkg="$direct"
@@ -254,22 +254,33 @@ _backup_runtime_version() {
     echo "unknown"
 }
 
+# Small temporary files of an earlier run that was cut off (Ctrl-C, killed): older than an hour. There is no trap for
+# them here (this file is sourced by oa.sh and update-core.sh, whose own traps a trap in a function would replace).
+_backup_sweep_temp() {
+    find "${TMPDIR:-/tmp}" -maxdepth 1 -type f \( -name 'oa-ws.*' -o -name 'oa-verify.*' -o -name 'oa-verify-out.*' \
+        -o -name 'oa-npmroot.*' \) -mmin +60 -exec rm -f {} + 2>/dev/null || true
+}
+
+# The first line of `openclaw config get <key>`; nothing when openclaw is not there, fails or does not answer.
+# (Through a file, under the probe limit with -k: openclaw restarts itself as a detached child that holds a pipe,
+# and a plain `timeout` without -k leaves an openclaw that ignores TERM running; see cmd_backup.)
+_backup_openclaw_get() {
+    local key="$1" f val=""
+    command -v openclaw &>/dev/null || return 0
+    f=$(mktemp "${TMPDIR:-/tmp}/oa-ws.XXXXXX" 2>/dev/null) || return 0
+    if { _backup_limited probe sh -c 'exec "$@" >"$0" 2>/dev/null </dev/null' "$f" openclaw config get "$key"; } 2>/dev/null; then
+        val=$(head -1 "$f" 2>/dev/null) || val=""
+    fi
+    rm -f "$f"
+    printf '%s' "${val%$'\r'}"
+}
+
 # Workspace directory when it lives outside the state directory (default setups
 # keep it inside, where it is already covered). Prints nothing otherwise.
 _backup_external_workspace() {
     local data_dir="$1"
     local ws
-    command -v openclaw &>/dev/null || return 0
-    # (through a file: openclaw restarts itself as a detached child that holds a pipe; see cmd_backup)
-    local wsf
-    wsf=$(mktemp "${TMPDIR:-/tmp}/oa-ws.XXXXXX" 2>/dev/null) || return 0
-    if ! timeout 30 openclaw config get agents.defaults.workspace >"$wsf" 2>/dev/null </dev/null; then
-        rm -f "$wsf"
-        return 0
-    fi
-    ws=$(head -1 "$wsf" 2>/dev/null) || ws=""
-    rm -f "$wsf"
-    ws="${ws%$'\r'}"
+    ws=$(_backup_openclaw_get agents.defaults.workspace)
     case "$ws" in
         "$data_dir"|"$data_dir"/*) return 0 ;;
         /*) [ -d "$ws" ] && printf '%s' "$ws" ;;
@@ -695,10 +706,11 @@ _backup_verify_archive() {
 # ── cmd_backup ──────────────────────────────────────────────────────────────
 
 cmd_backup() {
+    _backup_sweep_temp
     _oa_resolve_node
     if [ "$OA_NODE_STUCK" = true ]; then
         echo -e "${RED}[FAIL]${NC} Node.js did not answer within ${BACKUP_NODE_PROBE_LIMIT}s, twice — no backup was made."
-        echo "       Nothing was changed. A Node.js start that stalls usually works on the next try."
+        echo "       Your OpenClaw data was not touched. A Node.js start that stalls usually works on the next try."
         exit 75
     fi
     if ! command -v gzip &>/dev/null; then
@@ -769,7 +781,7 @@ cmd_backup() {
     _backup_create "$data_dir" "$archive_path" "$basename" || create_rc=$?
     if [ "$create_rc" -eq 75 ]; then
         echo -e "${RED}[FAIL]${NC} No backup was made."
-        echo "       Nothing was changed."
+        echo "       Your OpenClaw data was not touched."
         exit 75
     fi
     [ "$create_rc" -eq 0 ] || exit "$create_rc"
@@ -849,6 +861,7 @@ cmd_backup() {
 # ── cmd_restore ─────────────────────────────────────────────────────────────
 
 cmd_restore() {
+    _backup_sweep_temp
     _oa_resolve_node
     if [ "$OA_NODE_STUCK" = true ]; then
         echo -e "${RED}[FAIL]${NC} Node.js did not answer within ${BACKUP_NODE_PROBE_LIMIT}s, twice — nothing was restored."
@@ -1172,8 +1185,7 @@ cmd_restore() {
         # A workspace path that points to another device's directory
         if command -v openclaw &>/dev/null; then
             local ws_cfg
-            ws_cfg=$(timeout 30 openclaw config get agents.defaults.workspace 2>/dev/null || true)
-            ws_cfg="${ws_cfg%$'\r'}"
+            ws_cfg=$(_backup_openclaw_get agents.defaults.workspace)
             if [ -n "$ws_cfg" ] && [ ! -d "$ws_cfg" ] && [ -d "$restore_root/workspace" ]; then
                 if timeout 30 openclaw config set agents.defaults.workspace "$restore_root/workspace" &>/dev/null; then
                     echo -e "${GREEN}[OK]${NC}   Workspace path updated to $restore_root/workspace"

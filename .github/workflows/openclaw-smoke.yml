@@ -1,0 +1,100 @@
+name: OpenClaw Smoke
+
+# Stage 1 of the new-version check (tests/verify-openclaw-smoke.sh): a new install of one OpenClaw version under the
+# Android system-call trap in a container, gateway starts / restarts with the PID namespace file denied, doctor,
+# backup, one agent turn through the mock model, and controls. Run by hand when a candidate for the pin has been
+# chosen (stage 0 is the daily openclaw-watch workflow). A PASS is not a go-ahead for a pin bump: QA devices decide.
+#
+# - Manual only (workflow_dispatch): a run pulls a 1.6 GB image and installs about 600 MB twice.
+# - Public repository only (a private run would use its own minutes), arm64 runner (the trap filters aarch64
+#   system call numbers; standard runners are free for public repositories).
+# - No secrets, read-only token. The package's code runs only in the second container (no network), which sees
+#   two directories of this checkout read-only, one output directory and a volume. The first container (npm
+#   install --ignore-scripts, with network) runs no package code.
+# - Output of the container contains package data: it is printed between ::stop-commands:: and its resume token so
+#   that no workflow command in it is taken.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version or tag to judge (default: latest)'
+        required: false
+        default: ''
+      baseline:
+        description: 'Version to compare the rows with (default: the pin of this repository; none = no comparison)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: New install of OpenClaw under the Android trap
+    if: github.repository == 'AidanPark/openclaw-android'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Judge the candidate
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_BASELINE: ${{ github.event.inputs.baseline }}
+        run: |
+          set -u -f
+          PIN=$(sed -n 's/^PLATFORM_NPM_PACKAGE_VERSION="\(.*\)"/\1/p' platforms/openclaw/config.env | head -1)
+          VERSION=${INPUT_VERSION:-latest}
+          BASELINE=${INPUT_BASELINE:-$PIN}
+          for word in "$VERSION" "$BASELINE"; do
+            case "$word" in
+              -*|*[!0-9A-Za-z._-]*|'')
+                echo "::error title=OpenClaw smoke::not a version or tag: ignored word"
+                exit 2
+                ;;
+            esac
+          done
+          args=("$VERSION")
+          if [ "$BASELINE" != none ] && [ "$BASELINE" != "$VERSION" ]; then
+            args+=(--baseline "$BASELINE")
+          fi
+          # package data is in the output: no workflow command in it is to be taken (a random token ends it);
+          # the output is streamed (a run that is cut off still leaves its log) and kept for the summary
+          token=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          log="$RUNNER_TEMP/openclaw-smoke.log"
+          echo "::stop-commands::$token"
+          set +e
+          bash tests/verify-openclaw-smoke.sh "${args[@]}" 2>&1 | tee "$log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "::$token::"
+          out=$(cat "$log")
+          case "$rc" in
+            0) verdict="PASS" ;;
+            1) verdict="FAIL" ;;
+            *) verdict="could not be judged" ;;
+          esac
+          {
+            echo "## OpenClaw smoke (stage 1)"
+            echo ""
+            echo "Pin in this repository: \`$PIN\` · candidate: \`$VERSION\` · baseline: \`${args[2]:-none}\`"
+            echo ""
+            echo "### $verdict"
+            echo ""
+            echo '```text'
+            printf '%s\n' "$out" | tr '\r' ' '
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=OpenClaw smoke $VERSION::$verdict (exit $rc)"
+          exit "$rc"

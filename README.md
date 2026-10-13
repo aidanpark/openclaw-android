@@ -130,7 +130,7 @@ pkg upgrade -y && pkg install -y curl
 Paste the following command in Termux.
 
 ```bash
-curl -sL myopenclawhub.com/install | bash && source ~/.bashrc
+curl -sL https://myopenclawhub.com/install | bash && source ~/.bashrc
 ```
 
 Everything is installed automatically with a single command. This takes 3–10 minutes depending on network speed and device. Wi-Fi is recommended.
@@ -241,7 +241,7 @@ Set `OA_SKIP_AUTO_DOCTOR=1` to turn off the automatic migration, or `OA_SKIP_PRE
 
 > If the `oa` command is not available (older installations), run it with curl:
 > ```bash
-> curl -sL myopenclawhub.com/update | bash && source ~/.bashrc
+> curl -sL https://myopenclawhub.com/update | bash && source ~/.bashrc
 > ```
 
 ## Backup & Restore

@@ -130,7 +130,7 @@ pkg upgrade -y && pkg install -y curl
 Termuxで以下のコマンドを貼り付けてください。
 
 ```bash
-curl -sL myopenclawhub.com/install | bash && source ~/.bashrc
+curl -sL https://myopenclawhub.com/install | bash && source ~/.bashrc
 ```
 
 すべて1つのコマンドで自動的にインストールされます。所要時間はネットワーク速度や端末によって3〜10分です。Wi-Fi環境を推奨します。
@@ -241,7 +241,7 @@ oa --update && source ~/.bashrc
 
 > `oa`コマンドが利用できない場合（古いインストール環境）は、curl経由で実行してください。
 > ```bash
-> curl -sL myopenclawhub.com/update | bash && source ~/.bashrc
+> curl -sL https://myopenclawhub.com/update | bash && source ~/.bashrc
 > ```
 
 ## バックアップとリストア

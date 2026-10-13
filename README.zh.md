@@ -133,7 +133,7 @@ pkg upgrade -y && pkg install -y curl
 在 Termux 中粘贴以下命令。
 
 ```bash
-curl -sL myopenclawhub.com/install | bash && source ~/.bashrc
+curl -sL https://myopenclawhub.com/install | bash && source ~/.bashrc
 ```
 
 一条命令自动完成所有安装。根据网络速度和设备性能，大约需要 3-10 分钟。建议使用 Wi-Fi。
@@ -246,7 +246,7 @@ oa --update && source ~/.bashrc
 
 > 如果 `oa` 命令不可用（旧版安装），请使用 curl 运行：
 > ```bash
-> curl -sL myopenclawhub.com/update | bash && source ~/.bashrc
+> curl -sL https://myopenclawhub.com/update | bash && source ~/.bashrc
 > ```
 
 ## 备份与恢复

@@ -246,13 +246,13 @@ oa --update && source ~/.bashrc
 
 ## 백업 및 복구
 
-OpenClaw의 내장 백업 명령어(`openclaw backup create`)는 Android의 앱 전용 저장소에서 막히는 하드링크에 의존합니다. OpenClaw on Android 가 적용하는 하드링크 패치로 복사로 대체할 수 있습니다(아래의 하드링크 패치 문단 참고). `oa --backup` 명령어는 OpenClaw 데이터 폴더(`~/.openclaw`) 전체를 `tar`로 묶고, SQLite 데이터베이스는 일관된 스냅샷으로 담습니다. 이어서 OpenClaw 가 받아들이면 `openclaw backup verify`로, 그렇지 않으면 `gzip`과 `tar` 검사로 아카이브를 확인합니다(OpenClaw 2026.9 이후는 절대 경로 `plugin-skills` 링크가 든 아카이브를 거부하지만 복원은 정상입니다). Node.js 가 제한 시간(빠른 호출 `OA_NODE_PROBE_TIMEOUT` 30초, 데이터베이스 스냅샷 한 건당 `OA_NODE_WORK_TIMEOUT` 300초) 안에 응답하지 않으면, 불완전할 수 있는 사본을 저장하지 않고 종료 코드 75 로 중단하며 아카이브를 만들지 않습니다.
+OpenClaw의 내장 백업 명령어(`openclaw backup create`)는 Android의 앱 전용 저장소에서 막히는 하드링크에 의존합니다. OpenClaw on Android 가 적용하는 하드링크 패치로 복사로 대체할 수 있습니다(아래의 하드링크 패치 문단 참고). `oa --backup` 명령어는 OpenClaw 데이터 폴더(`~/.openclaw`) 전체를 `tar`로 묶고, SQLite 데이터베이스는 일관된 스냅샷으로 담습니다. 이어서 OpenClaw 가 받아들이면 `openclaw backup verify`로, 그렇지 않으면 `gzip`과 `tar` 검사로 아카이브를 확인합니다(OpenClaw 2026.9 이후는 절대 경로 `plugin-skills` 링크가 든 아카이브를 거부합니다. 스크립트 v1.3.4 부터 만든 백업에는 그 링크가 빠지며, 이전 백업의 복원은 정상입니다). Node.js 가 제한 시간(빠른 호출 `OA_NODE_PROBE_TIMEOUT` 30초, 데이터베이스 스냅샷 한 건당 `OA_NODE_WORK_TIMEOUT` 300초) 안에 응답하지 않으면, 불완전할 수 있는 사본을 저장하지 않고 종료 코드 75 로 중단하며 아카이브를 만들지 않습니다.
 
 백업 생성:
 ```bash
 oa --backup
 ```
-백업은 `~/.openclaw-android/backup/` 폴더에 타임스탬프가 포함된 파일명(예: `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`)으로 저장됩니다. `oa --backup ~/my-backups/`와 같이 사용자 지정 경로를 지정할 수도 있습니다. 백업에는 설정, 상태, 대화 기록, 워크스페이스, 에이전트 데이터가 포함됩니다(로그, 임시 파일, 플러그인 의존성 폴더는 제외).
+백업은 `~/.openclaw-android/backup/` 폴더에 타임스탬프가 포함된 파일명(예: `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`)으로 저장됩니다. `oa --backup ~/my-backups/`와 같이 사용자 지정 경로를 지정할 수도 있습니다. 백업에는 설정, 상태, 대화 기록, 워크스페이스, 에이전트 데이터가 포함됩니다(로그, 임시 파일, 플러그인 의존성 폴더, 생성된 `plugin-skills` 링크는 제외).
 
 > **백업 파일은 비공개로 보관하세요.** 백업에는 API 키와 로그인 자격 증명이 들어 있습니다. 파일은 본인만 읽을 수 있게 만들어지지만(`/sdcard` 같은 공유 저장소에서는 적용되지 않을 수 있음), 공개된 곳에 공유하거나 올리지 마세요.
 >
@@ -391,6 +391,7 @@ openclaw-android/
 │   │   ├── update.sh           # 플랫폼 패키지 업데이트
 │   │   ├── openclaw-shim.sh    # `openclaw update` 버전 고정 가드 생성
 │   │   ├── uninstall.sh        # 플랫폼 패키지 제거
+│   │   ├── limits.sh           # node/npm 호출의 시간 제한 (update · verify · status)
 │   │   ├── status.sh           # 플랫폼 상태 표시
 │   │   ├── verify.sh           # 플랫폼 검증 체크
 │   │   └── patches/            # 플랫폼 전용 패치

@@ -3,6 +3,9 @@ set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$BASE_DIR/scripts/lib.sh"
+# node and npm calls with a time limit
+# shellcheck source=limits.sh
+source "$BASE_DIR/platforms/openclaw/limits.sh"
 
 PASS=0
 FAIL=0
@@ -27,8 +30,13 @@ echo "=== OpenClaw Platform Verification ==="
 echo ""
 
 if command -v openclaw &>/dev/null; then
-    CLAW_VER=$(openclaw --version 2>/dev/null || true)
-    if [ -n "$CLAW_VER" ]; then
+    # (with a time limit: a start that does not answer is a warning here, not a stop of the whole check)
+    CLAW_VER_RC=0
+    CLAW_VER="$(oc_capture probe openclaw --version)" || CLAW_VER_RC=$?
+    CLAW_VER="${CLAW_VER%%$'\n'*}"
+    if [ "$CLAW_VER_RC" = 75 ] && [ -z "$CLAW_VER" ]; then
+        check_warn "openclaw --version did not answer within $(oc_limit_seconds probe)s"
+    elif [ -n "$CLAW_VER" ]; then
         check_pass "openclaw $CLAW_VER"
     else
         check_fail "openclaw found but --version failed"
@@ -44,11 +52,16 @@ if load_platform_config openclaw "$BASE_DIR" >/dev/null; then
     PIN_VER="${PLATFORM_NPM_PACKAGE_VERSION:-}"
 fi
 INSTALLED_VER=""
-OPENCLAW_PKG="$(npm root -g 2>/dev/null)/openclaw/package.json"
+# (the version is read from the file first, then through node with a limit: a node that does not answer is
+# "unknown", not "not found")
+OPENCLAW_PKG="$(oc_npm_root)/openclaw/package.json"
+VER_RC=0
 if [ -f "$OPENCLAW_PKG" ]; then
-    INSTALLED_VER=$(node -p "require('$OPENCLAW_PKG').version" 2>/dev/null || echo "")
+    INSTALLED_VER="$(oc_installed_version "$OPENCLAW_PKG")" || VER_RC=$?
 fi
-if [ -z "$PIN_VER" ]; then
+if [ "$VER_RC" = 75 ]; then
+    check_warn "the installed openclaw version could not be read (node did not answer in time)"
+elif [ -z "$PIN_VER" ]; then
     check_warn "OpenClaw version pin not found in config.env — skipping pin check"
 elif [ "$INSTALLED_VER" = "$PIN_VER" ]; then
     check_pass "openclaw package $INSTALLED_VER matches the pinned version"

@@ -38,12 +38,28 @@ else
 fi
 
 if command -v node &>/dev/null; then
-    NODE_VER=$(node -v 2>/dev/null || echo "unknown")
-    echo -e "${GREEN}[OK]${NC}   Node.js found: $NODE_VER"
-    NODE_MAJOR="${NODE_VER%%.*}"
-    NODE_MAJOR="${NODE_MAJOR#v}"
-    if [ "$NODE_MAJOR" -lt 24 ] 2>/dev/null; then
-        echo -e "${YELLOW}[WARN]${NC} Node.js >= 24 required. Will be upgraded to the pinned version during install."
+    # (the probe limit: a Node.js start that stalls must not stall the check)
+    NODE_RC=0
+    if declare -f oa_node_limited >/dev/null; then
+        NODE_VER=$(oa_node_limited probe node -v 2>/dev/null) || NODE_RC=$?
+    else
+        NODE_VER=$(node -v 2>/dev/null) || NODE_RC=$?   # an older lib.sh (a copy that was not updated with this file)
+    fi
+    if declare -f oa_end_on_signal >/dev/null; then oa_end_on_signal "$NODE_RC"; fi
+    if [ "$NODE_RC" -eq 75 ] && printf '%s\n' "$NODE_VER" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        NODE_RC=0     # it printed its version and then did not end: answered
+    fi
+    if [ "$NODE_RC" -eq 75 ]; then
+        _limit="$(declare -f oa_node_limit_seconds >/dev/null && oa_node_limit_seconds probe || echo 30)"
+        echo -e "${YELLOW}[WARN]${NC} Node.js found, but it did not answer within ${_limit}s (a start that stalls usually works on the next try)."
+    else
+        [ "$NODE_RC" -eq 0 ] || NODE_VER="unknown"
+        echo -e "${GREEN}[OK]${NC}   Node.js found: $NODE_VER"
+        NODE_MAJOR="${NODE_VER%%.*}"
+        NODE_MAJOR="${NODE_MAJOR#v}"
+        if [ "$NODE_MAJOR" -lt 24 ] 2>/dev/null; then
+            echo -e "${YELLOW}[WARN]${NC} Node.js >= 24 required. Will be upgraded to the pinned version during install."
+        fi
     fi
 else
     echo -e "${YELLOW}[INFO]${NC} Node.js not found. Will be installed via glibc environment."

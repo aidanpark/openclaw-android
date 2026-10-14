@@ -667,11 +667,16 @@ MANIFEST_EOF
         ws_args=(-C "$(dirname "$ws_dir")" "$ws_base")
     fi
 
+    # (plugin-skills is left out: OpenClaw classifies it as regenerable — "plugin skills" in dist/backup-shared of
+    # 2026.10.1 and 2026.10.2 — and keeps absolute symbolic links there, which its own `backup verify` refuses.
+    # Archives made before this are restored as they are. --anchored: only the folder directly in the state
+    # folder, not a copy of it inside a workspace.)
     echo -e "Packing archive…"
     tar -cf - "${transforms[@]}" \
         --exclude="$base/logs" --exclude="$base/delivery-queue" --exclude="$base/session-delivery-queue" \
         --exclude='*.pid' --exclude='*.sock' --exclude='*.tmp' --exclude='*.oa-tmp.*' \
         --exclude="$base/extensions/*/node_modules" "${sqlite_excludes[@]}" \
+        --anchored --exclude="$base/plugin-skills" \
         -C "$parent" "$base" \
         "${ws_args[@]}" \
         -C "$snap" -T "$tmpdir/snaplist" \
@@ -826,8 +831,9 @@ cmd_backup() {
                     | { grep -v '^[[:space:]]*$' || true; } | tail -1) || verify_reason=""
                 verify_reason="${verify_reason#*verification failed: <archive>. }"
                 verify_reason="${verify_reason#"${verify_reason%%[![:space:]]*}"}"
-                # (only OpenClaw's own absolute plugin-skills links are named as such, and only when that is the
-                # reason itself; any other reason is shown as it is)
+                # (an absolute link is named as such only when that is the reason itself; the plugin-skills links
+                # OpenClaw makes are left out of the archive, so the link is another one; any other reason is shown
+                # as it is)
                 case "$verify_reason" in
                     *"symbolic link target must be relative"*) verify_known=true ;;
                 esac
@@ -835,7 +841,7 @@ cmd_backup() {
                 [ -n "$verify_reason" ] || verify_reason="exit code $verify_rc"
             fi
             if [ "$verify_known" = true ]; then
-                echo "Note: openclaw backup verify does not accept the absolute plugin-skills links that OpenClaw creates itself; the archive was checked with gzip and tar instead."
+                echo "Note: openclaw backup verify does not accept an absolute symbolic link that the archive contains; the archive was checked with gzip and tar instead."
             else
                 echo "Note: openclaw backup verify could not be used for this archive ($verify_reason); it was checked with gzip and tar instead."
             fi

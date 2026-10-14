@@ -246,13 +246,13 @@ oa --update && source ~/.bashrc
 
 ## バックアップとリストア
 
-OpenClaw標準のバックアップコマンド（`openclaw backup create`）は、Androidのアプリ専用ストレージでブロックされるハードリンクに依存しています。OpenClaw on Androidが適用するハードリンクパッチにより、コピーで代替できます（下記のハードリンクパッチの段落を参照）。`oa --backup`コマンドはOpenClawのデータフォルダ（`~/.openclaw`）全体を`tar`でまとめ、SQLiteデータベースは整合性のあるスナップショットとして保存します。その後、OpenClawが受け付ける場合は`openclaw backup verify`で、受け付けない場合は`gzip`と`tar`のチェックでアーカイブを確認します（OpenClaw 2026.9以降は絶対パスの`plugin-skills`リンクを含むアーカイブを拒否しますが、復元は正常に動作します）。Node.jsが制限時間内（短い呼び出しは`OA_NODE_PROBE_TIMEOUT`で30秒、データベースのスナップショット1件ごとに`OA_NODE_WORK_TIMEOUT`で300秒）に応答しない場合は、不完全かもしれないコピーを保存せず、終了コード75で中止し、アーカイブを作成しません。
+OpenClaw標準のバックアップコマンド（`openclaw backup create`）は、Androidのアプリ専用ストレージでブロックされるハードリンクに依存しています。OpenClaw on Androidが適用するハードリンクパッチにより、コピーで代替できます（下記のハードリンクパッチの段落を参照）。`oa --backup`コマンドはOpenClawのデータフォルダ（`~/.openclaw`）全体を`tar`でまとめ、SQLiteデータベースは整合性のあるスナップショットとして保存します。その後、OpenClawが受け付ける場合は`openclaw backup verify`で、受け付けない場合は`gzip`と`tar`のチェックでアーカイブを確認します（OpenClaw 2026.9以降は絶対パスの`plugin-skills`リンクを含むアーカイブを拒否します。スクリプトv1.3.4以降のバックアップにはそのリンクが含まれず、以前のバックアップの復元は正常に動作します）。Node.jsが制限時間内（短い呼び出しは`OA_NODE_PROBE_TIMEOUT`で30秒、データベースのスナップショット1件ごとに`OA_NODE_WORK_TIMEOUT`で300秒）に応答しない場合は、不完全かもしれないコピーを保存せず、終了コード75で中止し、アーカイブを作成しません。
 
 バックアップを作成するには:
 ```bash
 oa --backup
 ```
-バックアップは `~/.openclaw-android/backup/` にタイムスタンプ付きのファイル名（例: `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`）で保存されます。`oa --backup ~/my-backups/` のように保存先を指定することもできます。各バックアップには設定、状態、会話履歴、ワークスペース、エージェントが含まれます（ログ、一時ファイル、プラグインの依存フォルダは除く）。
+バックアップは `~/.openclaw-android/backup/` にタイムスタンプ付きのファイル名（例: `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`）で保存されます。`oa --backup ~/my-backups/` のように保存先を指定することもできます。各バックアップには設定、状態、会話履歴、ワークスペース、エージェントが含まれます（ログ、一時ファイル、プラグインの依存フォルダ、自動生成される`plugin-skills`リンクは除く）。
 
 > **バックアップは非公開で保管してください。** バックアップにはAPIキーとログイン認証情報が含まれます。ファイルは本人だけが読めるように作成されます（`/sdcard` などの共有ストレージでは無効になる場合があります）。公開の場所で共有・アップロードしないでください。
 >
@@ -391,6 +391,7 @@ openclaw-android/
 │   │   ├── update.sh           # プラットフォームパッケージの更新
 │   │   ├── openclaw-shim.sh    # `openclaw update` のバージョン固定ガードを書き込む
 │   │   ├── uninstall.sh        # プラットフォームパッケージの削除
+│   │   ├── limits.sh           # node/npm 呼び出しの時間制限（update・verify・status）
 │   │   ├── status.sh           # プラットフォーム状態表示
 │   │   ├── verify.sh           # プラットフォーム検証チェック
 │   │   └── patches/            # プラットフォーム固有のパッチ

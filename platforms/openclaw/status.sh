@@ -3,12 +3,37 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../scripts/lib.sh"
+# node with a time limit (this file is also installed alone by the installer: limits.sh may not be next to it)
+if [ -f "$SCRIPT_DIR/limits.sh" ]; then
+    # shellcheck source=limits.sh
+    source "$SCRIPT_DIR/limits.sh"
+fi
+
+# st_ver <text when it fails> <command...>: the first line of the command's output, with a time limit (a command
+# that does not answer must not stop the whole status screen; the screen says "unknown" for it)
+st_ver() {
+    local fallback="$1" out="" rc=0
+    shift
+    if declare -f oc_capture >/dev/null 2>&1; then
+        out="$(oc_capture probe "$@")" || rc=$?
+    else
+        out="$("$@" 2>/dev/null)" || rc=$?
+    fi
+    out="${out%%$'\n'*}"
+    if [ -n "$out" ] && { [ "$rc" = 0 ] || [ "$rc" = 75 ]; }; then
+        printf '%s' "$out"
+    elif [ "$rc" = 75 ]; then
+        printf 'unknown (no answer within %ss)' "$(oc_limit_seconds probe)"
+    else
+        printf '%s' "$fallback"
+    fi
+}
 
 echo ""
 echo -e "${BOLD}Platform Components${NC}"
 
 if command -v openclaw &>/dev/null; then
-    echo "  OpenClaw:    $(openclaw --version 2>/dev/null || echo 'error')"
+    echo "  OpenClaw:    $(st_ver error openclaw --version)"
 else
     echo -e "  OpenClaw:    ${RED}not installed${NC}"
 fi
@@ -16,7 +41,12 @@ fi
 # The hard-link patches (OpenClaw copies/renames instead of linking): look at the files themselves
 HL_SCRIPT="$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh"
 if [ -f "$HL_SCRIPT" ] && command -v openclaw &>/dev/null; then
-    hl_out=$(bash "$HL_SCRIPT" --check 2>&1 | sed 's/\x1b\[[0-9;]*m//g') || true
+    # (the package folder is given: the script would ask `npm root -g` itself, without a limit)
+    hl_dir=""
+    if declare -f oc_npm_root >/dev/null 2>&1; then
+        hl_dir="$(oc_npm_root)/openclaw"
+    fi
+    hl_out=$(bash "$HL_SCRIPT" --check ${hl_dir:+"$hl_dir"} 2>&1 | sed 's/\x1b\[[0-9;]*m//g') || true
     hl_sum=$(printf '%s\n' "$hl_out" | grep -E 'todo=|patched=' | tail -1 | sed 's/.*: //')
     if printf '%s' "$hl_sum" | grep -q 'todo=0 already=[0-9]* problems=0'; then
         echo "  Hard-link patch: applied (${hl_sum})"
@@ -28,26 +58,29 @@ else
 fi
 
 if command -v node &>/dev/null; then
-    echo "  Node.js:     $(node -v 2>/dev/null)"
+    if declare -f oc_node_version >/dev/null 2>&1; then
+        echo "  Node.js:     $(oc_node_version)"
+    else
+        echo "  Node.js:     $(st_ver unknown node -v)"
+    fi
 else
     echo -e "  Node.js:     ${RED}not installed${NC}"
 fi
 
 if command -v npm &>/dev/null; then
-    echo "  npm:         $(npm -v 2>/dev/null)"
+    echo "  npm:         $(st_ver unknown npm -v)"
 else
     echo -e "  npm:         ${RED}not installed${NC}"
 fi
 
 if command -v clawdhub &>/dev/null; then
-    echo "  clawdhub:    $(clawdhub --version 2>/dev/null || echo 'installed')"
+    echo "  clawdhub:    $(st_ver installed clawdhub --version)"
 else
     echo -e "  clawdhub:    ${YELLOW}not installed${NC}"
 fi
 
 if command -v code-server &>/dev/null; then
-    cs_ver=$(code-server --version 2>/dev/null || true)
-    cs_ver="${cs_ver%%$'\n'*}"
+    cs_ver="$(st_ver "" code-server --version)"
     cs_status="stopped"
     if pgrep -f "code-server" &>/dev/null; then
         cs_status="running"
@@ -62,14 +95,14 @@ if command -v opencode &>/dev/null; then
     if pgrep -f "ld.so.opencode" &>/dev/null; then
         oc_status="running"
     fi
-    echo "  OpenCode:    $(opencode --version 2>/dev/null || echo 'installed') ($oc_status)"
+    echo "  OpenCode:    $(st_ver installed opencode --version) ($oc_status)"
 else
     echo -e "  OpenCode:    ${YELLOW}not installed${NC}"
 fi
 
 if command -v chromium-browser &>/dev/null || command -v chromium &>/dev/null; then
     cr_bin=$(command -v chromium-browser 2>/dev/null || command -v chromium 2>/dev/null)
-    cr_ver=$($cr_bin --version 2>/dev/null | head -1 || echo 'installed')
+    cr_ver="$(st_ver installed "$cr_bin" --version)"
     echo "  Chromium:    $cr_ver"
 else
     echo -e "  Chromium:    ${YELLOW}not installed${NC}"
@@ -131,8 +164,7 @@ for tool in "claude:Claude Code" "gemini:Gemini CLI" "codex:Codex CLI (Termux)";
     cmd="${tool%%:*}"
     label="${tool##*:}"
     if command -v "$cmd" &>/dev/null; then
-        version=$($cmd --version 2>/dev/null || echo "installed")
-        version="${version%%$'\n'*}"
+        version="$(st_ver installed "$cmd" --version)"
         echo -e "  ${GREEN}[OK]${NC}   $label: $version"
     else
         echo "  [--] $label: not installed"

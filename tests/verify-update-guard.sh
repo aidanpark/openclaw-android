@@ -115,7 +115,8 @@ new_sandbox() {   # prints a new sandbox directory: Node.js installed, OpenClaw 
     # the installed Node.js wrapper that install-nodejs.sh reads the version from
     printf '#!/bin/sh\n[ "$1" = "--version" ] && echo "v%s"\nexit 0\n' "$NODE_OLD" > "$sb/home/.openclaw-android/bin/node"
     chmod +x "$sb/home/.openclaw-android/bin/node"
-    printf '{ "name": "openclaw", "version": "%s" }\n' "$OC_OLD" > "$sb/prefix/lib/node_modules/openclaw/package.json"
+    # (one key per line, as npm writes it: update.sh and update-core.sh read the version with sed, not node)
+    printf '{\n  "name": "openclaw",\n  "version": "%s"\n}\n' "$OC_OLD" > "$sb/prefix/lib/node_modules/openclaw/package.json"
     echo "$sb"
 }
 

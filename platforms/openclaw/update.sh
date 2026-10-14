@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../scripts/lib.sh"
+# node and npm calls with a time limit (a stalled node must not stop the update or look like "another version")
+# shellcheck source=limits.sh
+source "$SCRIPT_DIR/limits.sh"
 
 export CPATH="$PREFIX/include/glib-2.0:$PREFIX/lib/glib-2.0/include"
 
@@ -34,14 +37,24 @@ PIN_VER="$PLATFORM_NPM_PACKAGE_VERSION"
 # Node gate (defense in depth): update-core.sh stops before this step when Node
 # is not pinned, but a cached older update-core.sh without that gate can run
 # this newer script. Never install the pinned OpenClaw on the wrong Node.
-NODE_FOUND="$(node --version 2>/dev/null || echo none)"
-if [ "$NODE_FOUND" != "v${PLATFORM_NODE_VERSION:-}" ]; then
+# (one place that says it: the app's contract test knows this sentence; a node that does not answer is
+# reported in the same frame as "found: no answer within <N>s")
+oc_gate_fail() {
+    NODE_FOUND="$1"
     echo -e "${RED}[FAIL]${NC} Node.js v${PLATFORM_NODE_VERSION:-?} is required (found: $NODE_FOUND) — OpenClaw was not changed"
     echo "       Run 'oa --update' again."
     oa_note reason=node_gate changed=false
     exit 1
+}
+NODE_FOUND="$(oc_node_version)"
+if [ "$NODE_FOUND" != "v${PLATFORM_NODE_VERSION:-}" ]; then
+    oc_gate_fail "$NODE_FOUND"
 fi
-OPENCLAW_DIR="$(npm root -g)/openclaw"
+# npm's global folder, read once (a limit and a fixed folder when npm does not answer)
+NPM_ROOT_DIR="$(oc_npm_root)"
+OPENCLAW_DIR="$NPM_ROOT_DIR/openclaw"
+# the patch scripts find the package folder from here instead of each asking npm again
+export OA_OPENCLAW_DIR="$OPENCLAW_DIR"
 
 # Converge to the pinned version: install it whenever the installed version
 # differs, in either direction. Read package.json rather than running
@@ -49,7 +62,15 @@ OPENCLAW_DIR="$(npm root -g)/openclaw"
 # newer Node.js than ours.
 CURRENT_VER=""
 if [ -f "$OPENCLAW_DIR/package.json" ]; then
-    CURRENT_VER=$(node -p "require('$OPENCLAW_DIR/package.json').version" 2>/dev/null || echo "")
+    # (read from the file first, not through node: a node that does not answer would give an empty version here,
+    # and an empty version means "reinstall" below, also when the right OpenClaw is already there. A version that
+    # cannot be read at all is "unknown", not "not installed": then nothing is changed)
+    CUR_RC=0
+    CURRENT_VER="$(oc_installed_version "$OPENCLAW_DIR/package.json")" || CUR_RC=$?
+    if [ "$CUR_RC" = 75 ]; then
+        # (the installed version is UNKNOWN: not the same as "not installed", so nothing is reinstalled)
+        oc_gate_fail "no answer within $(oc_limit_seconds probe)s"
+    fi
 fi
 OPENCLAW_UPDATED=false
 OC_REINSTALL=false
@@ -83,7 +104,7 @@ fi
 if [ -n "$CURRENT_VER" ] && [ "$CURRENT_VER" != "$PIN_VER" ] && [ "${OA_ALLOW_UNMARKED_OPENCLAW_CHANGE:-}" != "1" ]; then
     case "${OA_UPDATE_CORE_PROTOCOL:-}" in ''|*[!0-9]*) OC_PROTO=0 ;; *) OC_PROTO="$OA_UPDATE_CORE_PROTOCOL" ;; esac
     if [ "$OC_PROTO" -lt 3 ]; then
-        echo -e "${RED}[FAIL]${NC} The updater downloaded an older copy of itself (cache). Nothing was changed."
+        echo -e "${RED}[FAIL]${NC} The updater downloaded an older copy of itself (cache). OpenClaw was not changed; only the update scripts were replaced."
         echo "       Run 'oa --update' again in a few minutes."
         oa_note reason=cache_old_updater changed=false
         exit 1
@@ -155,7 +176,7 @@ fi
 # builds that fail on Termux.
 if [ "$OPENCLAW_UPDATED" = true ] && [ -d "$OPENCLAW_DIR" ]; then
     echo "Running OpenClaw postinstall..."
-    (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
+    oc_postinstall "$OPENCLAW_DIR"
 fi
 
 # Installed in this run, yet incomplete (files missing, or OpenClaw does not start): that is no finished update.
@@ -213,7 +234,7 @@ oc_reinstall() {
     echo -e "${GREEN}[OK]${NC}   openclaw $PIN_VER installed"
     OPENCLAW_UPDATED=true
     echo "Running OpenClaw postinstall..."
-    (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
+    oc_postinstall "$OPENCLAW_DIR"
     if oa_openclaw_incomplete "$OPENCLAW_DIR" fresh; then
         oc_install_failed
     fi
@@ -305,7 +326,8 @@ oc_brief() {
 # is touched, and a copy of what is changed is kept next to it.
 if declare -f oa_repair_state_paths >/dev/null && declare -f oa_repair_config_paths >/dev/null && command -v node &>/dev/null; then
     for OC_REPAIR_FN in oa_repair_state_paths oa_repair_config_paths; do
-        OC_REPAIR=$("$OC_REPAIR_FN" "${PLATFORM_DATA_DIR:-$HOME/.openclaw}" node)
+        # (node with the work limit: the repair functions take the node command as an argument)
+        OC_REPAIR=$("$OC_REPAIR_FN" "${PLATFORM_DATA_DIR:-$HOME/.openclaw}" oc_node_work)
         read -r OC_REPAIRED OC_REPAIR_LEFT OC_REPAIR_COPY <<< "$OC_REPAIR"
         case "$OC_REPAIRED" in
             error:*)
@@ -371,13 +393,13 @@ elif [ "$OC_HEALTH_RC" -ne 0 ]; then
     # migration fails half way and OpenClaw cannot start. Do not even try then.
     OC_SESSION_PATCH_OK=true
     if oa_has_indexed_sessions "${PLATFORM_DATA_DIR:-$HOME/.openclaw}" \
-        && ! bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check >/dev/null 2>&1; then
+        && ! bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check "$OPENCLAW_DIR" >/dev/null 2>&1; then
         OC_SESSION_PATCH_OK=false
     fi
     if [ "$OC_SESSION_PATCH_OK" = false ]; then
         echo -e "${RED}[FAIL]${NC} OpenClaw ${PIN_VER} is installed, but the patch that moves your chat history is not in place:"
         # (|| true: the check exits non-zero by design, and a pipeline failure must not end this script)
-        { bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check 2>&1 || true; } | sed 's/\x1b\[[0-9;]*m//g' | { grep -E 'TODO|NOMATCH|NOTARGET|WARN' || true; } | head -4 | sed 's/^/         /'
+        { bash "$SCRIPT_DIR/patches/openclaw-patch-hardlink.sh" --check "$OPENCLAW_DIR" 2>&1 || true; } | sed 's/\x1b\[[0-9;]*m//g' | { grep -E 'TODO|NOMATCH|NOTARGET|WARN' || true; } | head -4 | sed 's/^/         /'
         echo "       Nothing was migrated and your data is untouched. Run 'oa --update' again; if it keeps failing, report it."
         oa_note reason=patch_missing changed=true healthy=false
         if [ -n "${OA_PRE_UPDATE_BACKUP:-}" ]; then
@@ -439,8 +461,17 @@ elif [ "$OC_HEALTH_RC" -ne 0 ]; then
     fi
 fi
 
+# (`npm list -g` reads the local global tree, but it is an npm start like any other: one that does not answer
+# must not stop the update here, after OpenClaw is done. Then clawdhub is left as it is, and nothing of it
+# goes to the network: a version that cannot be read is not "not the latest")
+CLAWDHUB_LIST_RC=0
 if command -v clawdhub &>/dev/null; then
-    CLAWDHUB_CURRENT_VER=$(npm list -g clawdhub 2>/dev/null | grep 'clawdhub@' | sed 's/.*clawdhub@//' | tr -d '[:space:]' || true)
+    CLAWDHUB_LIST="$(oc_capture probe npm list -g clawdhub)" || CLAWDHUB_LIST_RC=$?
+fi
+if command -v clawdhub &>/dev/null && [ "$CLAWDHUB_LIST_RC" = 75 ]; then
+    echo -e "${YELLOW}[WARN]${NC} clawdhub check skipped (npm did not answer within $(oc_limit_seconds probe)s)"
+elif command -v clawdhub &>/dev/null; then
+    CLAWDHUB_CURRENT_VER=$(printf '%s\n' "$CLAWDHUB_LIST" | grep 'clawdhub@' | sed 's/.*clawdhub@//' | tr -d '[:space:]' || true)
     CLAWDHUB_LATEST_VER=$(npm view clawdhub version 2>/dev/null || echo "")
     if [ -n "$CLAWDHUB_CURRENT_VER" ] && [ -n "$CLAWDHUB_LATEST_VER" ] && [ "$CLAWDHUB_CURRENT_VER" = "$CLAWDHUB_LATEST_VER" ]; then
         echo -e "${GREEN}[OK]${NC}   clawdhub $CLAWDHUB_CURRENT_VER is already the latest"
@@ -467,8 +498,15 @@ else
     fi
 fi
 
-CLAWHUB_DIR="$(npm root -g)/clawdhub"
-if [ -d "$CLAWHUB_DIR" ] && ! (cd "$CLAWHUB_DIR" && node -e "require('undici')" 2>/dev/null); then
+CLAWHUB_DIR="$NPM_ROOT_DIR/clawdhub"
+# (a node that does not answer is not "undici is missing": that would start an install over the network)
+UNDICI_RC=0
+if [ -d "$CLAWHUB_DIR" ]; then
+    oc_node_runs_in "$CLAWHUB_DIR" "require('undici')" || UNDICI_RC=$?
+fi
+if [ -d "$CLAWHUB_DIR" ] && [ "$UNDICI_RC" = 75 ]; then
+    echo -e "${YELLOW}[WARN]${NC} undici check skipped (node did not answer within $(oc_limit_seconds probe)s)"
+elif [ -d "$CLAWHUB_DIR" ] && [ "$UNDICI_RC" != 0 ]; then
     echo "Installing undici dependency for clawdhub..."
     if (cd "$CLAWHUB_DIR" && npm install undici --no-fund --no-audit); then
         echo -e "${GREEN}[OK]${NC}   undici installed for clawdhub"
@@ -476,7 +514,7 @@ if [ -d "$CLAWHUB_DIR" ] && ! (cd "$CLAWHUB_DIR" && node -e "require('undici')" 
         echo -e "${YELLOW}[WARN]${NC} undici installation failed"
     fi
 else
-    UNDICI_VER=$(cd "$CLAWHUB_DIR" && node -e "console.log(require('undici/package.json').version)" 2>/dev/null || echo "")
+    UNDICI_VER="$(oc_pkg_version "$CLAWHUB_DIR/node_modules/undici/package.json")"
     echo -e "${GREEN}[OK]${NC}   undici ${UNDICI_VER:-available}"
 fi
 

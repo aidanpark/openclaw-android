@@ -29,6 +29,111 @@ NC='\033[0m'
 # (reason=<code>, changed=true|false); with no variable (install.sh, a manual run) they go nowhere.
 oa_note() { { printf '%s\n' "$1" >> "${OA_RESULT_NOTES:-/dev/null}"; } 2>/dev/null || true; }
 
+# ── Calls to Node.js with a time limit ──
+# A Node.js start that stalls (observed on the app environment) must not stall the update with it. This script does
+# not source lib.sh, so it carries the short form of oa_node_limited (scripts/lib.sh): the limit of
+# OA_NODE_PROBE_TIMEOUT (default 30 s; digits only, 5 to 999999), 75 when the limit stopped the command (timeout's
+# 124, or 137/143 only after the whole time — after less they came from somewhere else, e.g. the system out of
+# memory), otherwise the command's own exit code. Without a timeout program the command runs unlimited.
+_oa_limit="${OA_NODE_PROBE_TIMEOUT:-}"
+case "$_oa_limit" in
+    ''|*[!0-9]*) _oa_limit=30 ;;
+    *)
+        _oa_limit=${_oa_limit#"${_oa_limit%%[!0]*}"}
+        if [ -z "$_oa_limit" ] || [ "${#_oa_limit}" -gt 6 ] || [ "$_oa_limit" -lt 5 ]; then _oa_limit=30; fi ;;
+esac
+# (without --foreground timeout makes its own process group and stops all of it: npm's wrapper starts node as a
+# child, which would otherwise stay behind with the output pipe open and keep the caller waiting)
+_OA_TIMEOUT=()
+if command -v timeout >/dev/null 2>&1; then
+    if timeout -k 1 10 true >/dev/null 2>&1; then
+        _OA_TIMEOUT=(timeout -k 5)
+    elif timeout 10 true >/dev/null 2>&1; then
+        _OA_TIMEOUT=(timeout)
+    fi
+fi
+# One try of a command under the limit, in the background so that Ctrl-C and SIGTERM are not swallowed by the
+# wait (the group of timeout is not the group of the terminal): the command is stopped and this shell ends as the
+# signal would have ended it. Returns 75 when the limit stopped the command, otherwise its own exit status.
+_OA_SIG=""
+_oa_try() {
+    local pid rc=0 t0
+    if [ "${#_OA_TIMEOUT[@]}" -eq 0 ]; then
+        "$@" || rc=$?
+        return "$rc"
+    fi
+    _OA_SIG=""
+    trap '_OA_SIG=INT' INT
+    trap '_OA_SIG=TERM' TERM
+    t0=$SECONDS
+    "${_OA_TIMEOUT[@]}" "$_oa_limit" "$@" <&0 &
+    pid=$!
+    wait "$pid" || rc=$?
+    trap - INT TERM
+    if [ -n "$_OA_SIG" ]; then
+        kill -TERM "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        kill -s "$_OA_SIG" "${BASHPID:-$$}"
+        return 130
+    fi
+    if [ "$rc" -eq 124 ] || { { [ "$rc" -eq 137 ] || [ "$rc" -eq 143 ]; } && [ $((SECONDS - t0 + 1)) -ge "$_oa_limit" ]; }; then
+        return 75
+    fi
+    return "$rc"
+}
+# Usage: _oa_probe <command> [args…] — runs it under the limit, once more when the first run did not answer
+# (a Node.js start that stalls usually works on the next try). Returns 75 when neither run answered.
+# Only the output of one run is printed: a run that printed its version and then did not end is the answer
+# (the second run is not made, so the two outputs are never joined); otherwise the last run's output.
+_oa_probe() {
+    local rc n=0 out=""
+    while [ "$n" -lt 2 ]; do
+        n=$((n + 1))
+        rc=0
+        out=$(_oa_try "$@") || rc=$?
+        if [ "$rc" -eq 75 ] && ! printf '%s\n' "$out" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+$'; then
+            continue
+        fi
+        break
+    done
+    printf '%s\n' "$out"
+    return "$rc"
+}
+# The installed version of a Node.js command: sets _OA_VER (without the leading v) and returns 0; 1 when it
+# failed; 75 when it did not answer (a warning says so, and the same command is not asked again). Both cases
+# leave _OA_VER empty, which the callers read as "no usable Node.js there" — the same as a start that fails.
+# A run that printed its version and then did not end (the stall seen so far came after the work was done)
+# counts as answered.
+# A command's version answer: prints it when the command ended well, or printed it and then did not end (the
+# stall seen so far came after the work was done). Nothing when it failed or did not answer.
+_oa_version_of() {
+    local out="" rc=0
+    out=$(_oa_probe "$@" 2>/dev/null) || rc=$?
+    if [ "$rc" -eq 0 ] || { [ "$rc" -eq 75 ] && printf '%s\n' "$out" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+$'; }; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    return "$rc"
+}
+_OA_STALLED="|"
+_oa_read_node_version() {
+    local out="" rc=0
+    _OA_VER=""
+    case "$_OA_STALLED" in *"|$1|"*) return 75 ;; esac
+    out=$(_oa_probe "$1" --version 2>/dev/null) || rc=$?
+    if [ "$rc" -eq 75 ] && printf '%s\n' "$out" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        rc=0
+    fi
+    if [ "$rc" -eq 75 ]; then
+        _OA_STALLED="${_OA_STALLED}$1|"
+        echo -e "${YELLOW}[WARN]${NC} $1 did not answer within ${_oa_limit}s — it is taken as not working."
+        return 75
+    fi
+    [ "$rc" -eq 0 ] || return 1
+    _OA_VER=$(printf '%s\n' "$out" | sed 's/^v//')
+    return 0
+}
+
 OPENCLAW_DIR="$HOME/.openclaw-android"
 NODE_DIR="$OPENCLAW_DIR/node"
 NODE_NEW="$OPENCLAW_DIR/node.new"
@@ -461,8 +566,8 @@ NPXWRAP
 # without side effects; the check runs again below after an interrupted update was restored)
 _oa_early=""
 for _oa_c in "$BIN_DIR/node" "$NODE_DIR/bin/node"; do
-    if [ -x "$_oa_c" ] && "$_oa_c" --version &>/dev/null; then
-        _oa_early=$("$_oa_c" --version 2>/dev/null | sed 's/^v//')
+    if [ -x "$_oa_c" ] && _oa_read_node_version "$_oa_c"; then
+        _oa_early="$_OA_VER"
         break
     fi
 done
@@ -493,8 +598,8 @@ elif [ -x "$NODE_DIR/bin/node" ]; then
     _NODE_CMD="$NODE_DIR/bin/node"
 fi
 INSTALLED_VER=""
-if [ -n "$_NODE_CMD" ] && "$_NODE_CMD" --version &>/dev/null; then
-    INSTALLED_VER=$("$_NODE_CMD" --version 2>/dev/null | sed 's/^v//')
+if [ -n "$_NODE_CMD" ] && _oa_read_node_version "$_NODE_CMD"; then
+    INSTALLED_VER="$_OA_VER"
 fi
 
 refuse_unmarked_node_change "$INSTALLED_VER"
@@ -603,7 +708,7 @@ rm -f "$TMP_DIR/$NODE_TARBALL"
 # Move original node binary to node.real (the wrapper execs node.real)
 mv "$NODE_NEW/bin/node" "$NODE_NEW/bin/node.real"
 
-STAGED_VER=$(env -u LD_PRELOAD -u NODE_OPTIONS \
+STAGED_VER=$(_oa_version_of env -u LD_PRELOAD -u NODE_OPTIONS \
     "$GLIBC_LDSO" --library-path "$PREFIX/glibc/lib" "$NODE_NEW/bin/node.real" --version 2>/dev/null) || STAGED_VER=""
 if [ "$STAGED_VER" != "v$NODE_VERSION" ]; then
     echo -e "${RED}[FAIL]${NC} Extracted Node.js does not run (got: '${STAGED_VER}')"
@@ -652,8 +757,8 @@ write_npm_wrappers
 echo ""
 echo "Verifying glibc Node.js..."
 
-NODE_VER=$("$BIN_DIR/node" --version 2>/dev/null) || NODE_VER=""
-NPM_VER=$("$BIN_DIR/npm" --version 2>/dev/null) || NPM_VER=""
+NODE_VER=$(_oa_version_of "$BIN_DIR/node" --version) || NODE_VER=""
+NPM_VER=$(_oa_version_of "$BIN_DIR/npm" --version) || NPM_VER=""
 if [ "$NODE_VER" != "v$NODE_VERSION" ] || [ -z "$NPM_VER" ]; then
     echo -e "${RED}[FAIL]${NC} Node.js verification failed (node: '${NODE_VER}', npm: '${NPM_VER}') — wrapper script may be broken"
     exit 1
@@ -675,11 +780,11 @@ echo "Configuring npm..."
 # On Android 9+, /bin/sh exists. On 7-8 it doesn't.
 # Using $PREFIX/bin/sh is always safe.
 export PATH="$BIN_DIR:$NODE_DIR/bin:$PATH"
-"$BIN_DIR/npm" config set script-shell "$PREFIX/bin/sh" 2>/dev/null || true
+_oa_probe "$BIN_DIR/npm" config set script-shell "$PREFIX/bin/sh" 2>/dev/null || true
 echo -e "${GREEN}[OK]${NC}   npm script-shell set to $PREFIX/bin/sh"
 
 # Quick platform check
-PLATFORM=$("$BIN_DIR/node" -e "console.log(process.platform)" 2>/dev/null) || true
+PLATFORM=$(_oa_probe "$BIN_DIR/node" -e "console.log(process.platform)" 2>/dev/null) || true
 if [ "$PLATFORM" = "linux" ]; then
     echo -e "${GREEN}[OK]${NC}   platform: linux (correct)"
 else

@@ -83,7 +83,7 @@ REPO_BASE="$REPO_BASE_ORIGIN"
 
 BASHRC_MARKER_START="# >>> OpenClaw on Android >>>"
 BASHRC_MARKER_END="# <<< OpenClaw on Android <<<"
-OA_VERSION="1.3.3"
+OA_VERSION="1.3.4"
 
 # ── Platform detection ──
 # 1. Explicit marker file (new install and after first update)
@@ -173,6 +173,157 @@ oa_check_free_space() {
     echo -e "${RED}[FAIL]${NC} Not enough free storage to ${what}: ${need} MB needed, ${have} MB available."
     echo "       Free some space (clear other apps' caches, delete unused files, or remove ~/.npm/_cacache) and run it again."
     return 1
+}
+
+# ── Calls to Node.js under a time limit ──
+# A Node.js start that stalls (observed on the app environment) must not stall the update with it.
+# oa_node_limited <probe|work|seconds> <command> [args…]
+#   probe    the limit of OA_NODE_PROBE_TIMEOUT (default 30 s): a call that answers at once
+#   work     the limit of OA_NODE_WORK_TIMEOUT (default 300 s): a call that works through data
+#   seconds  that many seconds (at least 5: below that a kill from outside near the limit could not be told from
+#            the limit, because SECONDS counts whole seconds)
+# Returns 75 when the limit stopped the command (the command's own 124, or 137/143 only after the whole time —
+# after less they came from somewhere else, e.g. the system out of memory), 2 when the first argument is none of
+# the three or the command is a shell function (timeout starts programs, not functions: wrap the call in a
+# function that calls oa_node_limited with the program inside), and the command's own exit code otherwise.
+# Without a timeout program the command runs unlimited. Standard input and output pass through unchanged.
+# probe stops the whole process group of the command: a script that starts node as a child (npm's wrapper does)
+# leaves nothing behind that keeps a pipe open and the caller waiting. The call must not read the terminal
+# (a version, a listing). work keeps the group of the caller (--foreground, so that Ctrl-C reaches it): call a
+# program that execs node (the node wrapper) with it, not a script that starts node as a child.
+# The group of a probe is not the group of the terminal, so Ctrl-C does not reach it. The call therefore catches
+# SIGINT and SIGTERM of the caller while it waits, stops the command (its whole group, with the 5 s kill after),
+# gives the caller's own handlers back and returns 130 (SIGINT) or 143 (SIGTERM) at once. A caller that has no
+# handler of its own and is meant to end on Ctrl-C reads 130 as "interrupted" (it is not 75, and not an answer).
+# The environment values follow the rules of scripts/backup.sh (digits only, 5 to 999999, else the default), so
+# one OA_NODE_*_TIMEOUT means the same in every script. Callers on a cached older lib.sh check
+# `declare -f oa_node_limited` first.
+_OA_TIMEOUT_CMD=()
+_OA_TIMEOUT_GROUP=()
+_OA_TIMEOUT_READY=""
+_oa_limit_value() {
+    local v="$1" d="$2"
+    case "$v" in ''|*[!0-9]*) printf '%s' "$d"; return 0 ;; esac
+    v=${v#"${v%%[!0]*}"}
+    if [ -z "$v" ] || [ "${#v}" -gt 6 ] || [ "$v" -lt 5 ]; then
+        printf '%s' "$d"
+    else
+        printf '%s' "$v"
+    fi
+}
+# oa_node_limit_seconds <probe|work>: the limit in seconds that class has now (the environment value after the
+# rules above), for messages that name it. Prints nothing and returns 2 for another class.
+oa_node_limit_seconds() {
+    case "${1:-}" in
+        probe) _oa_limit_value "${OA_NODE_PROBE_TIMEOUT:-}" 30 ;;
+        work)  _oa_limit_value "${OA_NODE_WORK_TIMEOUT:-}" 300 ;;
+        *) return 2 ;;
+    esac
+}
+# oa_end_on_signal <status>: for a caller that runs oa_node_limited in a command substitution. When the status is
+# 130 or 143 (the call was ended by Ctrl-C / SIGTERM) the script ends as that signal would have ended it, with
+# its own handler if it has one; otherwise it returns 0 and nothing happens.
+oa_end_on_signal() {
+    case "${1:-}" in
+        130) kill -s INT "$$" ;;
+        143) kill -s TERM "$$" ;;
+    esac
+    return 0
+}
+# One command under the group-stopping timeout (the probe class), run in the background so that a signal to the
+# caller is not swallowed by the wait: see the comment above oa_node_limited. Standard input is the caller's.
+_OA_NL_SIG=0
+_oa_run_group() {
+    local limit="$1" pid wrc=0 old_int old_term
+    shift
+    _OA_NL_SIG=0
+    old_int=$(trap -p INT 2>/dev/null) || old_int=""
+    old_term=$(trap -p TERM 2>/dev/null) || old_term=""
+    # (in a command substitution the caller's handlers are not in effect, although `trap -p` reports them: only an
+    # ignore carries over into it, so only that is given back)
+    if [ "${BASHPID:-$$}" != "$$" ]; then
+        case "$old_int" in *"-- ''"*|*'-- ""'*) ;; *) old_int="" ;; esac
+        case "$old_term" in *"-- ''"*|*'-- ""'*) ;; *) old_term="" ;; esac
+    fi
+    # (a signal the caller ignores stays ignored: nothing is caught for it)
+    case "$old_int" in *"-- ''"*|*'-- ""'*) ;; *) trap '_OA_NL_SIG=130' INT ;; esac
+    case "$old_term" in *"-- ''"*|*'-- ""'*) ;; *) trap '_OA_NL_SIG=143' TERM ;; esac
+    "${_OA_TIMEOUT_GROUP[@]}" "$limit" "$@" <&0 &
+    pid=$!
+    wait "$pid" || wrc=$?
+    if [ "$_OA_NL_SIG" -ne 0 ]; then
+        kill -TERM "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        wrc=$_OA_NL_SIG
+    fi
+    trap - INT TERM
+    [ -z "$old_int" ] || eval "$old_int"
+    [ -z "$old_term" ] || eval "$old_term"
+    return "$wrc"
+}
+oa_node_limited() {
+    local class="${1:-}" limit t0 rc=0 group=false
+    case "$class" in
+        probe) limit=$(_oa_limit_value "${OA_NODE_PROBE_TIMEOUT:-}" 30); group=true ;;
+        work)  limit=$(_oa_limit_value "${OA_NODE_WORK_TIMEOUT:-}" 300) ;;
+        ''|*[!0-9]*)
+            echo "oa_node_limited: the first argument must be probe, work or a number of seconds (got '$class')." >&2
+            return 2 ;;
+        *)
+            limit=${class#"${class%%[!0]*}"}
+            if [ -z "$limit" ] || [ "${#limit}" -gt 6 ]; then
+                echo "oa_node_limited: the number of seconds must be 5 to 999999 (got '$class')." >&2
+                return 2
+            fi
+            [ "$limit" -ge 5 ] || limit=5 ;;
+    esac
+    shift
+    if [ "$#" -eq 0 ]; then
+        echo "oa_node_limited: no command." >&2
+        return 2
+    fi
+    if [ "$(type -t "$1" 2>/dev/null)" = function ]; then
+        echo "oa_node_limited: '$1' is a shell function; call oa_node_limited from inside it with the program." >&2
+        return 2
+    fi
+    if [ -z "$_OA_TIMEOUT_READY" ]; then
+        _OA_TIMEOUT_READY=1
+        if command -v timeout >/dev/null 2>&1; then
+            # --foreground keeps Ctrl-C working (work); without it timeout makes its own process group and stops
+            # all of it (probe). -k is used where timeout knows it.
+            if timeout --foreground -k 1 10 true >/dev/null 2>&1; then
+                _OA_TIMEOUT_CMD=(timeout --foreground -k 5)
+            elif timeout -k 1 10 true >/dev/null 2>&1; then
+                _OA_TIMEOUT_CMD=(timeout -k 5)
+            elif timeout 10 true >/dev/null 2>&1; then
+                _OA_TIMEOUT_CMD=(timeout)
+            fi
+            if timeout -k 1 10 true >/dev/null 2>&1; then
+                _OA_TIMEOUT_GROUP=(timeout -k 5)
+            elif timeout 10 true >/dev/null 2>&1; then
+                _OA_TIMEOUT_GROUP=(timeout)
+            fi
+        fi
+    fi
+    if [ "${#_OA_TIMEOUT_CMD[@]}" -eq 0 ]; then
+        "$@" || rc=$?
+        return "$rc"
+    fi
+    t0=$SECONDS
+    if [ "$group" = true ] && [ "${#_OA_TIMEOUT_GROUP[@]}" -gt 0 ]; then
+        _oa_run_group "$limit" "$@" || rc=$?
+        # (a signal of the caller: not a limit, whatever the elapsed time says)
+        [ "$_OA_NL_SIG" -eq 0 ] || return "$rc"
+    else
+        "${_OA_TIMEOUT_CMD[@]}" "$limit" "$@" || rc=$?
+    fi
+    if [ "$rc" -eq 124 ]; then
+        return 75
+    fi
+    if { [ "$rc" -eq 137 ] || [ "$rc" -eq 143 ]; } && [ $((SECONDS - t0 + 1)) -ge "$limit" ]; then
+        return 75
+    fi
+    return "$rc"
 }
 
 # ── Version comparison ──

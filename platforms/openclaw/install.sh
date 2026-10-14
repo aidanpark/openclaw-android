@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib.sh"
+# node and npm calls with a time limit
+# shellcheck source=limits.sh
+source "$SCRIPT_DIR/limits.sh"
 
 echo "=== Installing OpenClaw Platform Package ==="
 echo ""
@@ -59,10 +62,13 @@ echo -e "${GREEN}[OK]${NC}   OpenClaw installed"
 # Run the package postinstall that --ignore-scripts skipped (prunes stale dist
 # files, applies bundled hotfixes). npm_config_ignore_scripts=true keeps any
 # nested npm call from running native builds that fail on Termux.
-OPENCLAW_DIR="$(npm root -g)/openclaw"
+NPM_ROOT_DIR="$(oc_npm_root)"
+OPENCLAW_DIR="$NPM_ROOT_DIR/openclaw"
+# the patch scripts find the package folder from here instead of each asking npm again
+export OA_OPENCLAW_DIR="$OPENCLAW_DIR"
 if [ -d "$OPENCLAW_DIR" ]; then
     echo "Running OpenClaw postinstall..."
-    (cd "$OPENCLAW_DIR" && npm_config_ignore_scripts=true node scripts/postinstall-bundled-plugins.mjs 2>/dev/null) || true
+    oc_postinstall "$OPENCLAW_DIR"
 fi
 
 # npm exited 0, yet the package could be incomplete (a cut-off install): say so instead of finishing. Looked at
@@ -87,8 +93,15 @@ echo ""
 echo "Installing clawdhub (skill manager)..."
 if npm install -g clawdhub --no-fund --no-audit; then
     echo -e "${GREEN}[OK]${NC}   clawdhub installed"
-    CLAWHUB_DIR="$(npm root -g)/clawdhub"
-    if [ -d "$CLAWHUB_DIR" ] && ! (cd "$CLAWHUB_DIR" && node -e "require('undici')" 2>/dev/null); then
+    CLAWHUB_DIR="$NPM_ROOT_DIR/clawdhub"
+    # (a node that does not answer is not "undici is missing": that would start an install over the network)
+    UNDICI_RC=0
+    if [ -d "$CLAWHUB_DIR" ]; then
+        oc_node_runs_in "$CLAWHUB_DIR" "require('undici')" || UNDICI_RC=$?
+    fi
+    if [ -d "$CLAWHUB_DIR" ] && [ "$UNDICI_RC" = 75 ]; then
+        echo -e "${YELLOW}[WARN]${NC} undici check skipped (node did not answer within $(oc_limit_seconds probe)s)"
+    elif [ -d "$CLAWHUB_DIR" ] && [ "$UNDICI_RC" != 0 ]; then
         echo "Installing undici dependency for clawdhub..."
         if (cd "$CLAWHUB_DIR" && npm install undici --no-fund --no-audit); then
             echo -e "${GREEN}[OK]${NC}   undici installed for clawdhub"

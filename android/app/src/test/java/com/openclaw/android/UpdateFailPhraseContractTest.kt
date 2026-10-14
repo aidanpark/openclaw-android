@@ -88,7 +88,8 @@ internal class UpdateFailPhraseContractTest {
             ),
             Quote(
                 "platforms/openclaw/update.sh",
-                "The updater downloaded an older copy of itself (cache). Nothing was changed.",
+                "The updater downloaded an older copy of itself (cache). " +
+                    "OpenClaw was not changed; only the update scripts were replaced.",
                 UpdateReason.CACHE_STALE,
             ),
             Quote("platforms/openclaw/update.sh", "Could not install openclaw §PIN_VER", UpdateReason.INSTALL_FAILED),

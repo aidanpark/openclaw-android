@@ -14,8 +14,13 @@ echo ""
 export TMPDIR="${TMPDIR:-$PREFIX/tmp}"
 
 # Find OpenClaw installation directory
-NPM_ROOT=$(npm root -g 2>/dev/null)
-OPENCLAW_DIR="$NPM_ROOT/openclaw"
+# (update.sh and install.sh export OA_OPENCLAW_DIR: they already asked npm, with a limit)
+if [ -n "${OA_OPENCLAW_DIR:-}" ] && [ -f "$OA_OPENCLAW_DIR/package.json" ]; then
+    OPENCLAW_DIR="$OA_OPENCLAW_DIR"
+else
+    NPM_ROOT=$(npm root -g 2>/dev/null)
+    OPENCLAW_DIR="$NPM_ROOT/openclaw"
+fi
 
 if [ ! -d "$OPENCLAW_DIR" ]; then
     echo -e "${RED}[FAIL]${NC} OpenClaw not found at $OPENCLAW_DIR"

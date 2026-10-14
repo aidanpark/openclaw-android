@@ -246,13 +246,13 @@ Set `OA_SKIP_AUTO_DOCTOR=1` to turn off the automatic migration, or `OA_SKIP_PRE
 
 ## Backup & Restore
 
-OpenClaw's built-in backup command (`openclaw backup create`) relies on hardlinks, which Android blocks in app-private storage; the hard-link patch that OpenClaw on Android applies lets it copy instead (see the hard-link patch paragraph below). The `oa --backup` command archives your whole OpenClaw data folder (`~/.openclaw`) with `tar` and takes consistent snapshots of the SQLite databases. It then checks the archive with `openclaw backup verify` when OpenClaw accepts it, and otherwise with a `gzip` and `tar` check (OpenClaw 2026.9 and later reject archives that contain its absolute `plugin-skills` link; restoring them works normally). If Node.js does not answer within the time limit (`OA_NODE_PROBE_TIMEOUT`, 30 s for quick calls; `OA_NODE_WORK_TIMEOUT`, 300 s for each database snapshot), the command stops with exit code 75 and creates no archive, instead of saving a copy that may be incomplete.
+OpenClaw's built-in backup command (`openclaw backup create`) relies on hardlinks, which Android blocks in app-private storage; the hard-link patch that OpenClaw on Android applies lets it copy instead (see the hard-link patch paragraph below). The `oa --backup` command archives your whole OpenClaw data folder (`~/.openclaw`) with `tar` and takes consistent snapshots of the SQLite databases. It then checks the archive with `openclaw backup verify` when OpenClaw accepts it, and otherwise with a `gzip` and `tar` check (OpenClaw 2026.9 and later reject archives that contain its absolute `plugin-skills` link; backups made since script v1.3.4 leave that link out, and restoring older ones works normally). If Node.js does not answer within the time limit (`OA_NODE_PROBE_TIMEOUT`, 30 s for quick calls; `OA_NODE_WORK_TIMEOUT`, 300 s for each database snapshot), the command stops with exit code 75 and creates no archive, instead of saving a copy that may be incomplete.
 
 To create a backup:
 ```bash
 oa --backup
 ```
-Backups are stored in `~/.openclaw-android/backup/` with a timestamped filename (e.g., `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`). You can also specify a custom path: `oa --backup ~/my-backups/`. Each backup includes your configuration, state, conversation history, workspaces, and agents (logs, temporary files and plugin dependency folders are left out).
+Backups are stored in `~/.openclaw-android/backup/` with a timestamped filename (e.g., `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`). You can also specify a custom path: `oa --backup ~/my-backups/`. Each backup includes your configuration, state, conversation history, workspaces, and agents (logs, temporary files, plugin dependency folders and the generated `plugin-skills` links are left out).
 
 > **Keep backups private.** A backup contains your API keys and login credentials. The file is created so that only you can read it (shared storage such as `/sdcard` may ignore that); do not share it or upload it anywhere public.
 >
@@ -391,6 +391,7 @@ openclaw-android/
 │   │   ├── update.sh           # Platform package update
 │   │   ├── openclaw-shim.sh    # Writes the `openclaw update` version-pin guard
 │   │   ├── uninstall.sh        # Platform package removal
+│   │   ├── limits.sh           # Time limits for node/npm calls (update, verify, status)
 │   │   ├── status.sh           # Platform status display
 │   │   ├── verify.sh           # Platform verification checks
 │   │   └── patches/            # Platform-specific patches

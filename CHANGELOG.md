@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Script v1.3.4] - 2026-10-14
+
+### Fixed
+
+- A stalled Node.js or npm call can no longer hold `oa --update` for good, and it can no longer make the update install OpenClaw again when the pinned version is already in place. Quick calls (the Node.js version check, `npm root -g`, reading the installed version, the status screen) stop waiting after `OA_NODE_PROBE_TIMEOUT` (30 s, tried twice); longer work (package scripts, the repair of session paths) after `OA_NODE_WORK_TIMEOUT` (300 s). If Node.js does not answer at the version gate, the update stops with `found: no answer within …s` and "OpenClaw was not changed". A version that is printed before the call stalls counts as an answer.
+- The installed OpenClaw version is read from `package.json` without starting Node.js (a one-line file and a missing key are handled), so a stalled `node -p` no longer looks like "not installed".
+- Pressing Ctrl-C while one of these quick calls is waiting now ends the update at once (exit code 130) instead of being ignored until the time limit.
+- `oa --backup` leaves OpenClaw's generated `plugin-skills` links out of the archive, because OpenClaw 2026.9 and later reject an archive that contains their absolute paths; folders of the same name inside your workspaces are kept.
+- When the updater downloaded an older copy of itself from the cache, the message no longer says "Nothing was changed": it now says that OpenClaw was not changed and only the update scripts were replaced.
+- A release that lacks `platforms/openclaw/limits.sh` is refused with `Missing required file` before anything is changed.
+
 ## [Script v1.3.3] - 2026-10-13
 
 ### Fixed

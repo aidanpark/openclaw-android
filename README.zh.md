@@ -251,13 +251,13 @@ oa --update && source ~/.bashrc
 
 ## 备份与恢复
 
-OpenClaw 内置的备份命令（`openclaw backup create`）依赖硬链接，而 Android 的应用私有存储会阻止硬链接操作；OpenClaw on Android 应用的硬链接补丁让它可以改用复制（见下文的硬链接补丁段落）。`oa --backup` 命令用 `tar` 打包整个 OpenClaw 数据目录（`~/.openclaw`），并为 SQLite 数据库生成一致的快照。随后，如果 OpenClaw 接受该归档，则用 `openclaw backup verify` 校验，否则改用 `gzip` 与 `tar` 检查（OpenClaw 2026.9 及之后的版本会拒绝包含其绝对路径 `plugin-skills` 链接的归档，但恢复可以正常进行）。如果 Node.js 在时限内没有响应（快速调用的 `OA_NODE_PROBE_TIMEOUT` 为 30 秒，每个数据库快照的 `OA_NODE_WORK_TIMEOUT` 为 300 秒），命令会以退出码 75 中止，并且不会生成可能不完整的归档。
+OpenClaw 内置的备份命令（`openclaw backup create`）依赖硬链接，而 Android 的应用私有存储会阻止硬链接操作；OpenClaw on Android 应用的硬链接补丁让它可以改用复制（见下文的硬链接补丁段落）。`oa --backup` 命令用 `tar` 打包整个 OpenClaw 数据目录（`~/.openclaw`），并为 SQLite 数据库生成一致的快照。随后，如果 OpenClaw 接受该归档，则用 `openclaw backup verify` 校验，否则改用 `gzip` 与 `tar` 检查（OpenClaw 2026.9 及之后的版本会拒绝包含其绝对路径 `plugin-skills` 链接的归档；脚本 v1.3.4 起生成的备份不再包含该链接，恢复旧备份可以正常进行）。如果 Node.js 在时限内没有响应（快速调用的 `OA_NODE_PROBE_TIMEOUT` 为 30 秒，每个数据库快照的 `OA_NODE_WORK_TIMEOUT` 为 300 秒），命令会以退出码 75 中止，并且不会生成可能不完整的归档。
 
 创建备份：
 ```bash
 oa --backup
 ```
-备份存储在 `~/.openclaw-android/backup/` 目录下，文件名带有时间戳（例如 `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`）。你也可以指定自定义路径：`oa --backup ~/my-backups/`。每次备份包含你的配置、状态、对话记录、工作区和代理（不含日志、临时文件和插件依赖目录）。
+备份存储在 `~/.openclaw-android/backup/` 目录下，文件名带有时间戳（例如 `2026-03-14T00-00-00.000Z-openclaw-backup.tar.gz`）。你也可以指定自定义路径：`oa --backup ~/my-backups/`。每次备份包含你的配置、状态、对话记录、工作区和代理（不含日志、临时文件、插件依赖目录和自动生成的 `plugin-skills` 链接）。
 
 > **请妥善保管备份文件。** 备份中包含你的 API 密钥和登录凭据。文件创建时仅你自己可读（`/sdcard` 等共享存储可能不遵守此权限）；请勿分享或上传到公开的地方。
 >
@@ -396,6 +396,7 @@ openclaw-android/
 │   │   ├── update.sh           # 平台包更新
 │   │   ├── openclaw-shim.sh    # 生成 `openclaw update` 版本锁定守卫
 │   │   ├── uninstall.sh        # 平台包卸载
+│   │   ├── limits.sh           # node/npm 调用的时间限制（update、verify、status）
 │   │   ├── status.sh           # 平台状态显示
 │   │   ├── verify.sh           # 平台验证检查
 │   │   └── patches/            # 平台特定补丁

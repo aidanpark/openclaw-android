@@ -1,0 +1,59 @@
+name: Release manifest check
+
+# Public repository only: every push to main has to carry a manifest that matches its tree and a signature that
+# the key ring of the same tree verifies (release/release-verify.sh). A web edit or a merge that bypassed the
+# signed deploy shows up here as a failed run; the next signed deploy repairs it.
+# Until release/oa-release.gpg exists there is no signed release and the job only says so.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manifest:
+    name: Manifest matches the tree
+    if: github.repository == 'AidanPark/openclaw-android'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0      # the history is read: a manifest that existed and is gone now is a failure
+
+      - name: Verify the signed manifest
+        run: |
+          set -u
+          # a signed release existed in this history and the tip has lost its manifest: a hand edit or a bad merge
+          if [ ! -f RELEASE.manifest ] && [ -n "$(git log --format=%H -1 -- RELEASE.manifest)" ]; then
+            echo "::error title=Release manifest::RELEASE.manifest was in this repository and is missing from this commit"
+            exit 1
+          fi
+          if [ ! -f release/oa-release.gpg ]; then
+            if [ -f RELEASE.manifest ] || [ -f RELEASE.manifest.sig ]; then
+              echo "::error title=Release manifest::RELEASE.manifest exists but release/oa-release.gpg does not (a hand edit?)"
+              exit 1
+            fi
+            echo "::notice title=Release manifest::no release/oa-release.gpg yet: nothing is signed"
+            exit 0
+          fi
+          sudo apt-get install -y -qq gpgv >/dev/null
+          if [ ! -f RELEASE.manifest ] || [ ! -f RELEASE.manifest.sig ]; then
+            echo "::error title=Release manifest::RELEASE.manifest or RELEASE.manifest.sig is missing from this commit"
+            exit 1
+          fi
+          # the checkout has a .git directory: verify the exported tree, as a client does
+          mkdir "$RUNNER_TEMP/tree"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/tree"
+          rc=0
+          out=$(bash release/release-verify.sh --tree "$RUNNER_TEMP/tree" 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" != 0 ]; then
+            reason=$(printf '%s\n' "$out" | grep -E '^(FAIL|ERROR) ' | head -1 | tr -d '\r' | cut -c1-200)
+            echo "::error title=Release manifest::${reason:-the check ended with exit $rc}"
+            exit "$rc"
+          fi

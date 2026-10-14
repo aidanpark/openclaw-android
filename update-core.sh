@@ -9,7 +9,7 @@ NC='\033[0m'
 
 PROJECT_DIR="$HOME/.openclaw-android"
 PLATFORM_MARKER="$PROJECT_DIR/.platform"
-OA_VERSION="1.3.3"
+OA_VERSION="1.3.4"
 # Marks this updater as the current protocol for the scripts it runs from the downloaded copy
 # (install-nodejs.sh and platforms/*/update.sh refuse a version change without it: a cached older
 # update-core.sh must not combine with a newer download).
@@ -342,6 +342,7 @@ REQUIRED_FILES=(
     "scripts/install-nodejs.sh"
     "platforms/$PLATFORM/config.env"
     "platforms/$PLATFORM/update.sh"
+    "platforms/$PLATFORM/limits.sh"
     "platforms/$PLATFORM/openclaw-shim.sh"
 )
 for f in "${REQUIRED_FILES[@]}"; do
@@ -402,12 +403,50 @@ fi
 _oa_oc_pkg="$PREFIX/lib/node_modules/openclaw/package.json"
 _oa_oc_now=""
 [ -f "$_oa_oc_pkg" ] && _oa_oc_now=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_oa_oc_pkg" | head -1)
+# <node> --version under the probe limit, a second time when the first did not answer (a Node.js start that
+# stalls usually works on the next try). Prints the version (nothing when it failed) and returns 75 when neither
+# try answered. A run that printed its version and then did not end (the stall seen so far came after the work
+# was done) counts as answered. A cached older lib.sh has no oa_node_limited: then there is no limit, as before.
+_oa_node_version() {
+    local out="" rc=0 n=0
+    while [ "$n" -lt 2 ]; do
+        n=$((n + 1))
+        rc=0
+        if declare -f oa_node_limited >/dev/null; then
+            out=$(oa_node_limited probe "$1" --version 2>/dev/null) || rc=$?
+        else
+            out=$("$1" --version 2>/dev/null) || rc=$?
+        fi
+        if [ "$rc" -eq 75 ] && printf '%s\n' "$out" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            rc=0
+        fi
+        [ "$rc" -eq 75 ] || break
+    done
+    printf '%s' "$out"
+    return "$rc"
+}
+# The limit in seconds as oa_node_limited reads it, for messages (empty with a cached older lib.sh)
+_oa_probe_limit() {
+    if declare -f oa_node_limit_seconds >/dev/null; then oa_node_limit_seconds probe; fi
+}
+# A call that Ctrl-C or SIGTERM ended (oa_node_limited returns 130 / 143) ends this script as the signal would
+# have: the call ran in a command substitution, so the signal did not reach this shell by itself.
+_oa_end_on_signal() {
+    case "${1:-}" in
+        130) kill -s INT "$$" ;;
+        143) kill -s TERM "$$" ;;
+    esac
+    return 0
+}
+
 _oa_node_now=""
+_oa_now_rc=0
 if [ -x "$PROJECT_DIR/bin/node" ]; then
-    _oa_node_now=$("$PROJECT_DIR/bin/node" --version 2>/dev/null || true)
+    _oa_node_now=$(_oa_node_version "$PROJECT_DIR/bin/node") || _oa_now_rc=$?
 else
-    _oa_node_now=$(node --version 2>/dev/null || true)
+    _oa_node_now=$(_oa_node_version node) || _oa_now_rc=$?
 fi
+_oa_end_on_signal "$_oa_now_rc"
 unset OA_PRE_UPDATE_BACKUP     # set below only when this run saves a backup
 OA_UPD_FROM_OC="$_oa_oc_now"
 OA_UPD_FROM_NODE="${_oa_node_now#v}"
@@ -677,12 +716,20 @@ fi
 # Node gate: the pinned platform version is only verified with the pinned
 # Node.js. If Node.js did not converge, stop here and leave the platform as is
 # (installing the pinned platform on another Node.js could break a working setup).
-CURRENT_NODE_VER=$(node --version 2>/dev/null || echo "")
+# (a Node.js that does not answer is not "none": the message says so, and the advice is another try)
+_oa_gate_rc=0
+CURRENT_NODE_VER=$(_oa_node_version node) || _oa_gate_rc=$?
+_oa_end_on_signal "$_oa_gate_rc"
+if [ "$_oa_gate_rc" -eq 75 ]; then
+    CURRENT_NODE_VER="no answer within $(_oa_probe_limit)s"
+fi
 if [ "$CURRENT_NODE_VER" != "v$PLATFORM_NODE_VERSION" ]; then
     echo ""
     echo -e "${RED}[FAIL]${NC} Node.js v${PLATFORM_NODE_VERSION} is required (found: ${CURRENT_NODE_VER:-none}) — update stopped before $PLATFORM."
     echo "       $PLATFORM itself was not changed."
-    if [ "$IS_GLIBC" = false ]; then
+    if [ "$_oa_gate_rc" -eq 75 ]; then
+        echo "       Node.js did not answer: a start that stalls usually works on the next try."
+    elif [ "$IS_GLIBC" = false ]; then
         echo "       The glibc migration did not complete — see the messages above."
     else
         echo "       See the Node.js messages above for the cause (network, checksum, disk space)."
@@ -759,8 +806,19 @@ update_ai_tool() {
         return 1
     fi
 
-    local current_ver latest_ver
-    current_ver=$(npm list -g "$pkg" 2>/dev/null | grep "${pkg##*/}@" | sed 's/.*@//' | tr -d '[:space:]')
+    local current_ver latest_ver list_out="" list_rc=0
+    # (the probe limit: an npm that does not answer is not "not installed", and the install below would stall too)
+    if declare -f oa_node_limited >/dev/null; then
+        list_out=$(oa_node_limited probe npm list -g "$pkg" 2>/dev/null) || list_rc=$?
+    else
+        list_out=$(npm list -g "$pkg" 2>/dev/null) || list_rc=$?
+    fi
+    _oa_end_on_signal "$list_rc"
+    if [ "$list_rc" -eq 75 ]; then
+        echo -e "${YELLOW}[WARN]${NC} $label skipped (npm did not answer within $(_oa_probe_limit)s)"
+        return 0
+    fi
+    current_ver=$(printf '%s\n' "$list_out" | grep "${pkg##*/}@" | sed 's/.*@//' | tr -d '[:space:]' || true)
     latest_ver=$(npm view "$pkg" version 2>/dev/null || echo "")
 
     if [ -n "$current_ver" ] && [ -n "$latest_ver" ] && [ "$current_ver" = "$latest_ver" ]; then
@@ -811,9 +869,25 @@ update_ai_tool() {
 
 AI_FOUND=false
 # Migrate codex from upstream (static musl, broken DNS on Android) to Termux fork (dynamic Bionic)
-if npm list -g @openai/codex &>/dev/null 2>&1; then
+# (probe limit; an npm that does not answer skips the migration this time, and the next update repeats it)
+_oa_codex_rc=0
+if declare -f oa_node_limited >/dev/null; then
+    oa_node_limited probe npm list -g @openai/codex >/dev/null 2>&1 || _oa_codex_rc=$?
+else
+    npm list -g @openai/codex >/dev/null 2>&1 || _oa_codex_rc=$?
+fi
+_oa_end_on_signal "$_oa_codex_rc"
+if [ "$_oa_codex_rc" -eq 75 ]; then
+    echo -e "${YELLOW}[WARN]${NC} @openai/codex migration skipped (npm did not answer within $(_oa_probe_limit)s)"
+elif [ "$_oa_codex_rc" -eq 0 ]; then
     echo -e "  ${YELLOW}[MIGRATE]${NC} Replacing @openai/codex with Termux-optimized @mmmbuto/codex-cli-termux..."
-    npm uninstall -g @openai/codex 2>/dev/null || true
+    # (work limit; the node wrapper execs node, npm's wrapper starts it as a child that a stop would leave behind)
+    _oa_npm_cli="$PROJECT_DIR/node/lib/node_modules/npm/bin/npm-cli.js"
+    if declare -f oa_node_limited >/dev/null && [ -x "$PROJECT_DIR/bin/node" ] && [ -f "$_oa_npm_cli" ]; then
+        oa_node_limited work "$PROJECT_DIR/bin/node" "$_oa_npm_cli" uninstall -g @openai/codex 2>/dev/null || true
+    else
+        npm uninstall -g @openai/codex 2>/dev/null || true
+    fi
 fi
 update_ai_tool "claude" "@anthropic-ai/claude-code" "Claude Code" && AI_FOUND=true
 update_ai_tool "gemini" "@google/gemini-cli" "Gemini CLI" && AI_FOUND=true
